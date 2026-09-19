@@ -1,7 +1,10 @@
 # PROJECT STATUS
 
 Update this file continuously as work happens (not retroactively), per
-`CLAUDE.md` rule 10 and `MASTER_BUILD_DIRECTIVE.md` §137.
+`CLAUDE.md` rule 10 and `MASTER_BUILD_DIRECTIVE.md` §137. This file
+describes the CURRENT real repository state — when a rewrite happens,
+prior phrasing that no longer matches reality is replaced, not left
+alongside the update as a contradiction.
 
 Status tags used below, applied per component:
 
@@ -18,12 +21,14 @@ Adaptive Scalper Next
 
 ## Repository
 
-C:\AdaptiveScalperNext
+C:\AdaptiveScalperNext (GitHub: `hassananeesmm/AdaptiveScalperNext`, branch `main`)
 
 ## Current phase
 
-PHASE 1 — FOUNDATION (in progress). See directive §117 for phase
-definitions. Not yet started: Phases 2-13.
+Directive §117 PHASE 2 (HISTORY) is substantially complete and
+live-verified. PHASE 3 (CORE TRADING — features/regimes/strategies/cost/
+correlation/portfolio/risk/final permission) has not started. PHASE 1
+(FOUNDATION) is complete. Phases 4-13 have not started.
 
 ## Completed components
 
@@ -50,9 +55,8 @@ Hard safety constants (`ALLOWED_CANONICAL_SYMBOLS`, `RETIRED_STRATEGY_KEYS`,
 ### `adaptive_scalper/persistence/` (IMPLEMENTED, CONNECTED, TESTED (fake))
 
 SQLite connection helper (WAL, foreign_keys ON) and a transactional,
-idempotent migration runner. Schema at version 3:
-`schema_migrations`, `app_state`, `configuration_audit`, `symbol_mapping`
-(+ validation columns). `tests/test_persistence.py` (7 tests).
+idempotent migration runner. Schema at version 5 — see "Schema version"
+below for the migration list. `tests/test_persistence.py` (7 tests).
 
 **KNOWN DEFECT** (tracked, not yet fixed): `_split_statements()` is a
 naive `;`/`--`-comment-aware splitter, not a real SQL tokenizer. Fine for
@@ -70,7 +74,12 @@ string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
   `ROLLBACK` on any `sqlite3.Error`) — never observable out of sync.
   `engage()` has no role restriction (any safety component may trip it).
   `clear()`/`bootstrap()` require an `OperatorAuthority` instance, not a
-  bare role string.
+  bare role string. **This is the REAL runtime kill switch** — its state
+  in `data/adaptive_scalper.sqlite3` must never be auto-cleared by
+  startup, migration, restart, ML, or RAG. If it is ever found
+  `UNINITIALIZED`/`INVALID`/`ENGAGED` when preparing to run PAPER/DEMO,
+  the correct response is to show the operator the exact `kill-switch
+  bootstrap`/`clear` command and stop, not to call it automatically.
 - `operator_authority.py` (IMPLEMENTED) — typed capability object.
   **Honesty note**: this is NOT cryptographic access control — Python
   cannot stop arbitrary code from constructing one. The real boundary is
@@ -84,38 +93,58 @@ string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
   fail-closed state: blocks `NEW_ENTRY` with `BLOCK_KILL_SWITCH` for
   anything except `DISENGAGED`; always allows `POSITION_MANAGEMENT`/
   `RECONCILIATION`. **This is not the complete gate** — news, cost,
-  correlation, portfolio, risk, account/broker validation, the symbol
-  allow-list, and the retired-strategy firewall are not yet implemented
-  or composed into it. There is currently NO code path that submits an
-  order at all (see gateway section), so this gap has no live exposure
-  yet, but it must be closed before `order_send` is ever added.
+  correlation, portfolio, risk, symbol identity/direction, and the
+  retired-strategy firewall exist as independent modules (see below) but
+  are NOT YET COMPOSED into one final gate. There is currently NO code
+  path that submits an order at all (no `order_send` anywhere in the
+  codebase — see gateway section), so this gap has no live exposure yet,
+  but full composition (task: "Compose full final permission gate") must
+  land before `order_send` is ever added.
 
 ### `adaptive_scalper/gateway/` (IMPLEMENTED, CONNECTED where noted)
 
 - `types.py` / `protocol.py` — broker-independent dataclasses and the
-  `Gateway` Protocol. `SymbolSpec.trade_mode` preserves MT5's full
-  5-state `ENUM_SYMBOL_TRADE_MODE` (`DISABLED`/`LONGONLY`/`SHORTONLY`/
-  `CLOSEONLY`/`FULL`) rather than a flattened boolean, with
+  `Gateway` Protocol: `initialize`/`shutdown`/`account_info`/
+  `terminal_info`/`symbols_get`/`symbol_info`/`symbol_info_tick`/
+  `copy_rates_from_pos`/`copy_rates_range`/`copy_ticks_range`/
+  `history_orders_get`/`history_deals_get`/`last_error`. `SymbolSpec.
+  trade_mode` preserves MT5's full 5-state `ENUM_SYMBOL_TRADE_MODE`
+  (`DISABLED`/`LONGONLY`/`SHORTONLY`/`CLOSEONLY`/`FULL`) with
   `allows_new_long`/`allows_new_short`/`allows_any_new_exposure`/
-  `allows_close` helper properties. Protocol deliberately excludes
-  `order_send`/`order_check`/`positions_get`/`orders_get`/
-  `history_orders_get`/`history_deals_get`/close/modify — waiting on the
-  execution state machine, idempotency, and reconciliation to exist
-  first (directive §118 "no showpiece modules"). **UNVERIFIED**: this is
-  a real, tracked gap against the directive's full gateway interface
-  list (§B in the mission brief), not an oversight — adding it before
-  those consumers exist would be dead/untestable code.
+  `allows_close` helper properties. `Tick` carries `time_msc` (default 0)
+  for millisecond-resolution tick-history dedup. Protocol deliberately
+  excludes `order_send`/`order_check`/`positions_get`/`orders_get`/close/
+  modify — waiting on the execution state machine, idempotency, and
+  reconciliation to exist first (directive §118 "no showpiece modules").
 - `mt5_gateway.py` — TESTED (live) for `initialize`/`account_info`/
-  `terminal_info`/`symbols_get`/`symbol_info`/`symbol_info_tick` on IC
-  Markets Global. `copy_rates_from_pos` (bar history) is implemented but
-  UNVERIFIED (no test, live or fake, exercises it yet).
+  `terminal_info`/`symbols_get`/`symbol_info`/`symbol_info_tick`/
+  `copy_rates_range`/`copy_ticks_range`/`history_orders_get`/
+  `history_deals_get` on IC Markets Global. `copy_rates_from_pos` (the
+  original position-based bar fetch, superseded in practice by
+  `copy_rates_range` for the history bootstrap) is implemented but
+  UNVERIFIED — no test, live or fake, exercises it.
 - `fake_gateway.py` — deterministic in-memory implementation backing all
-  fake-based gateway tests.
+  fake-based gateway tests; records `rates_range_calls`/`ticks_range_calls`
+  for resumability assertions.
+- `synchronized_gateway.py` — NEW. `SynchronizedGateway` wraps any
+  `Gateway` and serializes every call through one `threading.RLock`,
+  fixing the MT5-concurrency gap an external review flagged: MetaTrader5's
+  underlying calls are not documented as safe for concurrent multi-thread
+  use, and multiple call sites (dashboard worker threads today; the
+  entry scanner/position manager/reconciliation/history jobs as they're
+  built) must never issue uncontrolled concurrent calls against one
+  terminal connection. `cli.py`'s `dashboard` command now wraps the real
+  `Mt5Gateway` in this before injecting it into the dashboard. TESTED
+  (fake, `tests/test_synchronized_gateway.py`, 3 tests) — including a
+  genuine multi-thread concurrency test (not just delegation) with a
+  companion unsynchronized-baseline test proving the probe can actually
+  detect a missing lock. Not yet consumed by anything beyond the
+  dashboard, since the other call sites don't exist yet.
 - `demo_gate.py` — `verify_demo_before_order()`. TESTED (fake, 12 tests)
   + TESTED (live, part of `test_mt5_gateway_live.py`). Re-fetches fresh
   state every call; fails closed to the directive §36 vocabulary.
 - `symbol_resolver.py` — exact + capped-affix alias matching. TESTED
-  (fake, 20 tests) + TESTED (live: XAUUSD/GBPJPY/BTCUSD all EXACT_MATCH
+  (fake, 18 tests) + TESTED (live: XAUUSD/GBPJPY/BTCUSD all EXACT_MATCH
   on IC Markets Global). **Fixed defect** (caught by external security
   review before this was ever pushed further): the alias regex
   previously alias-matched `XAUUSDT` (a genuinely different instrument —
@@ -124,24 +153,65 @@ string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
   and requiring a no-delimiter suffix to be lowercase-only (typical
   broker markers) rather than any case. Regression test:
   `test_currency_like_suffix_does_not_alias_match`.
-- `symbol_validation.py` — NEW. A name match alone does not mean a
-  symbol is safely executable. `validate_resolved_symbol()` re-checks,
-  fresh, against the live gateway: `trade_mode != DISABLED`, sane
-  contract spec (contract size/volume min·max·step/point/tick size·value
-  all positive, `volume_max >= volume_min`), a live quote exists with
-  `ask >= bid > 0`, and quote freshness within a configurable max age.
-  Any failure fails closed with a specific reason
-  (`NO_SYMBOL_INFO`/`TRADING_DISABLED`/`INVALID_CONTRACT_SPEC`/
-  `NO_QUOTE`/`INVALID_QUOTE`/`STALE_QUOTE`). Persisted alongside the
-  symbol_mapping row (migration `0003_symbol_validation`). TESTED (fake,
-  24 tests). **UNVERIFIED live** — not yet exercised by
-  `test_mt5_gateway_live.py`.
-- `tests/test_mt5_gateway_live.py` — self-skipping (skips cleanly, does
-  not fail, when no MT5 terminal is available). At last run: **skipped**
-  (terminal not currently connected on this machine — see "Live MT5
-  environment" below for when it last ran successfully).
+- `symbol_validation.py` — a name match alone does not mean a symbol is
+  safely executable. Four independent checks, each failing closed on any
+  doubt:
+  1. `validate_resolved_symbol()` — `trade_mode != DISABLED`, sane
+     contract spec, asset identity (see below), a live quote with
+     `ask >= bid > 0`, and quote freshness within a configurable max age
+     (default 30s — this is the lenient bootstrap/informational check,
+     see #2 for the strict execution-time one). Reasons:
+     `NO_SYMBOL_INFO`/`TRADING_DISABLED`/`INVALID_CONTRACT_SPEC`/
+     `ASSET_IDENTITY_MISMATCH`/`NO_QUOTE`/`INVALID_QUOTE`/`STALE_QUOTE`/
+     `VALID`. Persisted alongside the `symbol_mapping` row (migration
+     `0003`).
+     - **Asset identity** (`EXPECTED_IDENTITY`, external review fix #1):
+       positively confirms broker metadata matches the expected
+       instrument, not just the resolved name. Per-symbol spec, NOT a
+       uniform rule — `base_currency` is checked only for true FX/metal
+       pairs (XAUUSD, GBPJPY), where MT5's `currency_base` is reliable.
+       For BTCUSD it is deliberately skipped: **live-verified against
+       this project's real IC Markets DEMO terminal, BTCUSD reports
+       `currency_base=currency_profit=currency_margin="USD"`** — the
+       broker settles/margins the crypto CFD entirely in USD and doesn't
+       use `currency_base` to name the crypto asset. A first draft that
+       required `currency_base="BTC"` would have permanently failed
+       closed on the genuine, correctly-resolved BTCUSD instrument on
+       this real broker — caught and fixed before ever being committed
+       (see BUG_BACKLOG.md's "Fixed" section). BTCUSD identity instead
+       rests on `profit_currency="USD"` plus the broker's own
+       `description` containing "bitcoin"/"btc" — two independent
+       signals. All three canonical symbols live-verified as `VALID`
+       against the real broker after the fix.
+  2. `validate_execution_quote()` — NEW, external review fix #2.
+     Deliberately SEPARATE from and stricter than #1's tick check, for
+     use immediately before `order_send` once that exists: missing tick
+     → BLOCK, zero/unusable timestamp → BLOCK (not silently skipped, as
+     #1 does for bootstrap purposes), implausibly-future timestamp →
+     BLOCK, stale (default max age 5s, vs. #1's 30s) → BLOCK, invalid
+     bid/ask → BLOCK. Takes a `Tick`, not a gateway, so it stays a pure,
+     trivially-testable function — the caller fetches the freshest
+     possible tick immediately before calling it.
+  3. `validate_direction_for_new_exposure()` — NEW, external review
+     fix #3. For NEW exposure only: `DISABLED`/`CLOSEONLY` → BLOCK both
+     directions; `LONGONLY` → BUY only; `SHORTONLY` → SELL only;
+     `FULL` → either. Risk-reducing closes are unaffected — this function
+     is never consulted for a close.
+  4. Contract-spec sanity (part of #1): contract size/volume
+     min·max·step/point/tick size·value all positive, `volume_max >=
+     volume_min`.
 
-### `adaptive_scalper/history/` — five-year MT5 historical bootstrap (IMPLEMENTED, CONNECTED, TESTED (fake))
+  TESTED (fake, `tests/test_symbol_validation.py`, 48 tests: the original
+  24 plus 24 new for the identity/execution-quote/direction fixes).
+  **UNVERIFIED live** for `validate_execution_quote`/
+  `validate_direction_for_new_exposure` (pure functions, no gateway I/O
+  to live-test against) — the asset-identity portion of
+  `validate_resolved_symbol` IS live-verified (see above).
+- `tests/test_mt5_gateway_live.py` — self-skipping (skips cleanly, does
+  not fail, when no MT5 terminal is available). See "Live MT5
+  environment" below for its last real run.
+
+### `adaptive_scalper/history/` — five-year MT5 historical bootstrap (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
 
 Directive sections 46-50. Chunked, resumable, idempotent download of bar
 and tick history for whichever canonical symbols are currently
@@ -177,37 +247,40 @@ broker-resolved.
   each chunk advances the cursor only past the last bar/tick actually
   received (never blindly to the chunk boundary), so a broker response cap
   mid-chunk is handled correctly instead of silently skipping data.
-- Gateway support: `Gateway.copy_rates_range`/`copy_ticks_range` (protocol
-  + `Mt5Gateway` + `FakeGateway`). `Tick` gained a `time_msc` field
-  (default 0, backward compatible) since tick-history uniqueness needs
-  millisecond resolution that the existing `time` (whole seconds) field
-  can't provide.
-- CLI: `history bootstrap` (best-effort per symbol/resolution — one
-  symbol's broker-resolution failure or mid-download error is reported
-  and does not abort the others) and `history status` (coverage summary
-  per configured symbol; directive section 97's dashboard panel doesn't
-  exist yet, this is its data source as JSON for now).
-- `tests/test_history_bootstrap.py` (13 tests, fake-gateway only):
-  storage idempotency, single- and multi-chunk completion, coverage
-  correctness including a constructed gap, resumption after a simulated
-  mid-run failure (asserts the resumed run's first request starts exactly
-  at the persisted checkpoint, not back at the original start), a
-  same-process-restart variant using a fresh `sqlite3.Connection` to the
-  same file, completed-job rerun making zero further gateway calls,
-  `get_or_create_job`'s forward-extend/backward-reject behavior, and
-  `bootstrap_all` only touching symbols present in its
-  canonical-to-broker map.
+- `account_history.py` — imports the CONNECTED ACCOUNT's own order/deal
+  history (directive §51-52), distinct from bar/tick market data.
+  Deduplicated by `(login, server, ticket)`. Every imported row labeled
+  `origin='BROKER_ACCOUNT_HISTORY'`, `strategy_attribution='UNKNOWN'` —
+  never inferred from outcome, never anything more specific, since no
+  decision journal exists yet to prove real provenance. `type`/`state`/
+  `entry` store MT5's raw `ENUM_ORDER_TYPE`/`ENUM_ORDER_STATE`/
+  `ENUM_DEAL_ENTRY` integer codes, undecoded — thin import layer, not an
+  analysis layer. Migration `0005`: `broker_account_orders`,
+  `broker_account_deals`.
+- CLI: `history bootstrap`/`history status`, `broker-history
+  import`/`broker-history status`. `history bootstrap` is best-effort per
+  symbol/resolution — one symbol's broker-resolution failure or
+  mid-download error is reported in the JSON output and does not abort
+  the others.
+- `tests/test_history_bootstrap.py` (13 tests) + `tests/test_account_history.py`
+  (7 tests), fake-gateway only: storage idempotency (bars, ticks, orders,
+  deals), single- and multi-chunk completion, coverage correctness
+  including a constructed gap, resumption after a simulated mid-run
+  failure (asserts the resumed run's first request starts exactly at the
+  persisted checkpoint), a same-process-restart variant using a fresh
+  `sqlite3.Connection` to the same file, completed-job rerun making zero
+  further gateway calls, `get_or_create_job`'s forward-extend/
+  backward-reject behavior, `bootstrap_all` only touching symbols present
+  in its canonical-to-broker map, two different accounts' identical
+  ticket numbers not colliding.
 - **TESTED (live)**: `copy_rates_range`/`copy_ticks_range` verified
-  directly against the real IC Markets terminal (real bars/ticks
-  returned; zero-length weekend window correctly returned zero). A full
-  `history bootstrap --no-ticks` run against the live DEMO account
-  completed for all 3 symbols × 5 resolutions with zero errors. Actual
-  recorded coverage (directive section 50: never claim "5 years loaded"
-  unless true — this is the honest result, not the 5-year target):
-  M15 reached the furthest back (~4 years for GBPJPY/XAUUSD, ~3 months
-  for BTCUSD — BTCUSD's broker symbol appears newer/shorter-lived on this
-  server); M1/M2/M3/M5 landed far short of 5 years (as little as ~101
-  days for XAUUSD M1). Bar counts cluster near ~100,000 per
+  directly against the real IC Markets terminal. A full `history
+  bootstrap --no-ticks` run completed for all 3 symbols × 5 resolutions
+  with zero errors. Actual recorded coverage (directive section 50: never
+  claim "5 years loaded" unless true — this is the honest result, not the
+  5-year target): M15 reached the furthest back (~4 years for
+  GBPJPY/XAUUSD); M1/M2/M3/M5 landed far short of 5 years (as little as
+  ~101 days for XAUUSD M1). Bar counts cluster near ~100,000 per
   symbol/resolution for the finer timeframes, consistent with the broker
   retaining roughly a fixed NUMBER of bars per resolution rather than a
   fixed calendar window — a real broker-side retention policy, not a bug
@@ -216,68 +289,54 @@ broker-resolved.
   data). Tick bootstrap itself (not just its gateway calls) has NOT been
   run live yet — deferred given its much larger expected volume; the
   fake-tested code path is otherwise identical to the bar path.
-  `broker-history import` also ran live against the real DEMO account:
-  2234 orders / 2222 deals imported on first run, 0/0 on an immediate
-  re-run (idempotency verified live, not just fake-tested).
+  `broker-history import` also ran live: 2234 orders / 2222 deals
+  imported on first run, 0/0 on an immediate re-run (idempotency
+  confirmed live). Account login number deliberately not recorded in
+  this file (account-identifying info; see WORKLOG.md's pre-commit safety
+  audit for the precedent).
 
-### `adaptive_scalper/history/account_history.py` — broker account order/deal import (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+### `adaptive_scalper/dashboard/` (IMPLEMENTED, CONNECTED, TESTED (fake))
 
-Directive sections 51-52. Distinct from the bar/tick market-data bootstrap
-above: imports the CONNECTED ACCOUNT's own order/deal history (any
-origin), deduplicated by `(login, server, ticket)` so two different
-accounts' tickets can never collide. Every imported row is labeled
-`origin = 'BROKER_ACCOUNT_HISTORY'`, `strategy_attribution = 'UNKNOWN'` —
-never inferred from outcome, and never anything more specific, since no
-decision journal exists yet to prove real provenance (directive section
-52's core requirement). `type`/`state`/`entry` store MT5's raw
-`ENUM_ORDER_TYPE`/`ENUM_ORDER_STATE`/`ENUM_DEAL_ENTRY` integer codes,
-undecoded — this is a thin import layer, not an analysis layer.
+FastAPI app (`create_app(db_path, gateway=None)`) with one endpoint,
+`GET /api/health`, composing `health.compute_health()` — the directive
+§107 HEALTHY/DEGRADED/NEW_ENTRIES_BLOCKED/TRADING_BLOCKED/CRITICAL state
+from database integrity + kill-switch status + optional gateway
+connection state. `cli.py`'s `dashboard` command now constructs a real
+`Mt5Gateway`, wraps it in `SynchronizedGateway` (see gateway section), and
+injects it — so `mt5_connected` reflects real state when run for real,
+rather than always reading `null`. No panel beyond health exists yet; no
+WebSocket push. `tests/test_dashboard_health.py` (9 tests).
 
-- New types: `HistoricalOrder`, `HistoricalDeal`
-  (`adaptive_scalper/gateway/types.py`); new `Gateway.history_orders_get`/
-  `history_deals_get` (protocol + `Mt5Gateway` + `FakeGateway`).
-- Migration `0005_broker_account_history.sql`: `broker_account_orders`,
-  `broker_account_deals`.
-- CLI: `broker-history import --days N` (idempotent — safe to re-run as a
-  periodic refresh) and `broker-history status`.
-- `tests/test_account_history.py` (7 tests, fake-gateway only): import
-  idempotency for both orders and deals, default `UNKNOWN` attribution,
-  end-to-end import via a fake gateway including a zero-new-rows re-run,
-  two different accounts' identical ticket numbers not colliding, and
-  coverage reporting (including the zero-rows case).
-- **TESTED (live)**: ran against this machine's real DEMO account (see
-  "Live MT5 environment" below for server/account-type detail — the
-  specific account login number is deliberately not recorded in this
-  file, consistent with the account-identifying-info handling in
-  WORKLOG.md's pre-commit safety audit) — 2234 orders / 2222 deals
-  imported on first run, 0/0 on an immediate re-run, live-confirming
-  idempotency, not just the fake-gateway tests.
+**Fixed defect found by its own test before any commit**: `create_app()`
+originally took a live `sqlite3.Connection`, which crashed under
+FastAPI's worker-thread dispatch. Now takes a DB path and opens a
+per-request connection. See BUG_BACKLOG.md.
+
+### `adaptive_scalper/cli.py` (IMPLEMENTED, CONNECTED)
+
+Real subcommands only — no stub prints a placeholder (directive §118):
+`doctor`, `status`, `health`, `symbols`, `kill-switch status/engage/clear`,
+`history bootstrap/status`, `broker-history import/status`, `dashboard`.
+TESTED (fake: `status`/`health`/`kill-switch`/`history status`/
+config-error path via tmp config+DB). TESTED (live, manual smoke test,
+not yet automated pytest): `doctor`, `symbols`, `history bootstrap`,
+`broker-history import` all run successfully against the real IC Markets
+terminal/DEMO account this session. Not implemented: every command
+listed in the directive that depends on a subsystem that doesn't exist
+yet (`scan`, `analyse`, `paper`, `demo`, `strategies`, `models`,
+`learning *`, `rag *`, `news *`, `history sync` as a separate incremental
+command — `history bootstrap` already re-run is incremental via its job
+checkpoints, `journal recent`, `reconcile`, `why-no-trade`, `backtest`,
+`walk-forward`, `monte-carlo`).
 
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
 server `ICMarketsSC-Demo`, account `trade_mode=0`/DEMO) installed and
-logged in — connectivity fluctuated during this session (the terminal
-app itself, not a code defect) but `test_mt5_gateway_live.py` passed all
-7 tests on the most recent run, confirming: typed account/terminal
-snapshots, genuine DEMO status, `verify_demo_before_order()` allowing,
-all three canonical symbols EXACT_MATCH-resolving, and — new since the
-last check — `symbols_get()` successfully converting `SymbolTradeMode`
-for IC Markets' entire real symbol catalog (thousands of symbols) with
-no `ValueError`, live-verifying Fix #5's enum conversion. Do NOT assume
-a live terminal is present on any other machine or CI; re-run
-`test_mt5_gateway_live.py` to check current connectivity rather than
-trusting this note, which is a point-in-time snapshot.
-
-## Implementation status
-
-No market data ingestion, features, regime detection, strategies,
-journal, news, cost model, correlation, portfolio, risk governor, full
-final permission gate, execution state machine, reconciliation, position
-management, adaptive exit, re-entry, RAG, ML/learning, backtesting,
-dashboard (beyond a health endpoint in progress), CLI, or Windows
-packaging exist yet. Trading (even PAPER) cannot run — there is no
-code path that connects market data to a decision to an order attempt.
+logged in. `test_mt5_gateway_live.py` self-skips cleanly (does not fail)
+when no terminal is reachable — re-run it to check current connectivity
+rather than trusting this note, which is a point-in-time snapshot. Do
+NOT assume a live terminal is present on any other machine or CI.
 
 ## Operating modes
 
@@ -293,12 +352,15 @@ real-money execution path to disable — it has never been added, not
 - GBPJPY
 - BTCUSD
 
-Enforced at THREE independent layers today: config validation
+Enforced at multiple independent layers: config validation
 (`MarketConfig`), broker-name resolution (`symbol_resolver`, fails closed
-on no-match/ambiguous), and broker-state validation (`symbol_validation`,
-fails closed on disabled/invalid-contract/no-quote/stale-quote). The
+on no-match/ambiguous), broker-state validation (`symbol_validation`,
+fails closed on disabled/invalid-contract/asset-identity-mismatch/
+no-quote/stale-quote), and (for new exposure specifically) directional
+trade-mode validation (`validate_direction_for_new_exposure`). The
 directive §36 final-gate `BLOCK_SYMBOL_NOT_ALLOWED` check does not exist
-yet — there is no final permission gate beyond the kill-switch slice.
+yet as part of a composed gate — there is no final permission gate beyond
+the kill-switch slice (see `core/permission.py` above).
 
 ## Permanently retired strategies
 
@@ -309,80 +371,39 @@ Enforced at config-validation layer only (`StrategiesConfig` rejects a
 `retired` list missing either key). **No strategy registry exists yet**
 — there is nothing yet for these to be excluded FROM at runtime; the
 directive §121 retired-strategy tests (registry/signal/rank/train/
-promote/execute) cannot be written until strategies exist.
+promote/execute) cannot be written until strategies exist. This is the
+next major workstream (see "Current next task").
 
 ## Known environment/plugin issues (non-blocking)
 
 - The `security-guidance` plugin's LLM-powered reviewer depends on a
   machine-global venv at `~/.claude/security/agent-sdk-venv` (Python
-  3.14, outside this repo/git). Verified working earlier this session
-  after a transient stale-lock issue; state not guaranteed to persist
-  across machine/session boundaries — re-check
-  (`~/.claude/security/agent-sdk-venv/Scripts/python.exe -c "import claude_agent_sdk"`)
-  before relying on it. `scripts/setup_claude_hooks.ps1` includes this
-  check.
-
-### `adaptive_scalper/dashboard/` (IMPLEMENTED, CONNECTED, TESTED (fake))
-
-FastAPI app (`create_app(db_path, gateway=None)`) with one endpoint,
-`GET /api/health`, composing `health.compute_health()` — the directive
-§107 HEALTHY/DEGRADED/NEW_ENTRIES_BLOCKED/TRADING_BLOCKED/CRITICAL state
-from database integrity + kill-switch status (correctly reports
-TRADING_BLOCKED for a fresh UNINITIALIZED kill switch, not HEALTHY —
-consistent with the fail-closed design) + optional gateway connection
-state. Not yet started: WebSocket push, any panel beyond health, binding
-to 127.0.0.1 by an actual run script (the FastAPI app itself doesn't
-bind — that's `uvicorn.run(app, host=DEFAULT_HOST, ...)`, not yet wired
-into a CLI command). `tests/test_dashboard_health.py` (9 tests).
-
-**Fixed defect found by its own test before any commit**: `create_app()`
-originally took a live `sqlite3.Connection`, which crashed under
-FastAPI's worker-thread dispatch (`sqlite3.ProgrammingError`: connections
-are thread-affine). Now takes a DB path and opens a per-request
-connection. See BUG_BACKLOG.md.
-
-### `adaptive_scalper/cli.py` (IMPLEMENTED, CONNECTED)
-
-Real subcommands only — no stub prints a placeholder (directive §118).
-`doctor` (config+DB+MT5-reachability check), `status`, `health` (exits
-non-zero when not HEALTHY), `symbols` (live broker resolution),
-`kill-switch status/engage/clear`, `history bootstrap/status`, `dashboard`
-(runs uvicorn bound to 127.0.0.1 by default). TESTED (fake, 10 tests:
-`status`/`health`/`kill-switch`/`history status`/config-error path via
-tmp config+DB). TESTED (live, manual smoke test this session, not yet an
-automated pytest): `doctor` and `symbols` against the real IC Markets
-terminal — both succeeded (`mt5: reachable`; all three canonical symbols
-EXACT_MATCH). `history bootstrap` has NOT yet been run live (see the
-history section's "UNVERIFIED live" note) — only its `history status`
-half is CLI-tested, against fake-populated data. Not yet automated as a
-live pytest case alongside `test_mt5_gateway_live.py` — tracked as a
-small follow-up, not a defect. Not implemented: every command listed in
-the directive that depends on a subsystem that doesn't exist yet (`scan`,
-`analyse`, `paper`, `demo`, `strategies`, `models`, `learning *`,
-`rag *`, `news *`, `broker-history import`, `journal recent`,
-`reconcile`, `why-no-trade`, `backtest`, `walk-forward`, `monte-carlo`).
+  3.14, outside this repo/git) that can independently go stale/broken
+  without any change to this repository. `scripts/setup_claude_hooks.ps1`
+  checks it on every run and warns if broken. Not blocking because
+  `.claude/hooks/guardrails.py` (this project's own PreToolUse gate) does
+  not depend on it at all.
 
 ## Current next task
 
-Directive Phase 2 (HISTORY) is now substantially complete and live-verified:
-5-year bar bootstrap (actual coverage honestly recorded — see the history
-section above, most resolutions fell well short of 5 years due to real
-broker retention limits, which is the directive-compliant outcome, not a
-defect) and broker account order/deal import both ran live against the
-real DEMO account. Remaining before Phase 2 is fully closed: (1) an actual
-live tick-bootstrap run (gateway calls are live-verified individually,
-but a full `history bootstrap` run including ticks has not been executed
-— likely large volume, run and measure before assuming it's practical at
-the current 30-day default); (2) a historical dashboard panel (directive
-section 97) — only the CLI (`history status`, `broker-history status`)
-exists; no dashboard panel beyond the Phase-1 health endpoint. Then Phase
-3 (CORE TRADING): the feature engine, regime classification, and six
-strategies, building the composed final permission gate incrementally as
-each further dependency (news, cost, risk, etc.) lands. This is a
-genuinely large remaining scope — see BUG_BACKLOG.md and this file's
-per-component notes for exactly what is and isn't done; do not infer
-completion of anything not explicitly marked
-IMPLEMENTED/CONNECTED/TESTED above.
+Directive Phase 2 (HISTORY) is substantially complete (bar bootstrap and
+broker account history both live-verified). Immediately next, in
+directive dependency order:
+
+1. A live tick-bootstrap run (currently only fake-tested + individual
+   live gateway-call verification — a full run including ticks hasn't
+   been executed; likely large volume, measure before assuming the
+   current 30-day default is practical).
+2. Phase 3 (CORE TRADING) — this is the large remaining scope: the
+   feature engine (causal, no-lookahead), regime classification, the six
+   active strategies behind a common interface plus the retirement
+   firewall's structural regression tests, then building the composed
+   final permission gate incrementally as each further dependency (news,
+   cost, correlation, portfolio, risk) lands.
+
+See BUG_BACKLOG.md and this file's per-component notes for exactly what
+is and isn't done; do not infer completion of anything not explicitly
+marked IMPLEMENTED/CONNECTED/TESTED above.
 
 ## Current git commit
 
@@ -396,8 +417,8 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-4 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
-`0004_historical_data`).
+5 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+`0004_historical_data`, `0005_broker_account_history`).
 
 ## Model state
 
@@ -405,26 +426,23 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 ## Tests
 
-184 passed, 0 failed, 0 skipped (live MT5 terminal is currently connected
-— see "Live MT5 environment"; on a machine/moment without one,
-`test_mt5_gateway_live.py`'s 7 tests self-skip instead of failing):
-- `tests/test_environment.py` (1)
-- `tests/test_config.py` (24)
-- `tests/test_persistence.py` (7)
-- `tests/test_kill_switch.py` (36)
-- `tests/test_guardrails.py` (23)
-- `tests/test_demo_gate.py` (12)
-- `tests/test_symbol_resolver.py` (20)
-- `tests/test_symbol_validation.py` (24)
-- `tests/test_dashboard_health.py` (9)
-- `tests/test_cli.py` (10)
-- `tests/test_history_bootstrap.py` (13)
-- `tests/test_mt5_gateway_live.py` (7 — live-terminal-only, self-skipping)
+Run `pytest` for the exact current count — it changes every session and
+duplicating a specific number here goes stale immediately. As of this
+entry: 218 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+`test_config.py`, `test_persistence.py`, `test_kill_switch.py`,
+`test_guardrails.py`, `test_demo_gate.py`, `test_symbol_resolver.py`,
+`test_symbol_validation.py`, `test_synchronized_gateway.py`,
+`test_dashboard_health.py`, `test_cli.py`, `test_history_bootstrap.py`,
+`test_account_history.py`, and `test_mt5_gateway_live.py` (live-terminal-
+only, self-skipping — 7 tests, currently connected on this machine).
 
 ## Unverified components
 
-- `Mt5Gateway.copy_rates_from_pos` (bar history) — implemented, no test yet.
-- `Mt5Gateway.copy_rates_range`/`copy_ticks_range` — implemented, fake-tested
-  only; no live exercise yet (see the history section above).
-- `symbol_validation.py` against a real live broker (only fake-tested so far).
-- Everything listed in "Implementation status" as not yet existing.
+- `Mt5Gateway.copy_rates_from_pos` (position-based bar fetch, superseded
+  by `copy_rates_range` for the history bootstrap) — implemented, no
+  test, live or fake, exercises it.
+- `validate_execution_quote`/`validate_direction_for_new_exposure` — pure
+  functions, fake-tested only (no gateway I/O to live-test against; their
+  correctness doesn't depend on live broker behavior the way asset
+  identity did).
+- Everything listed under "Current next task" as not yet built.

@@ -392,3 +392,74 @@ Chronological, factual record of initialization events. Append only.
     session. That live run is the natural next step, not yet done.
 - Full suite: 184 passed (169 + 15 new), 0 failed, 0 skipped (live MT5
   terminal still connected on this machine this session).
+
+## 2026-09-19 (continued — new session)
+
+- Resumed from a fresh session per user instruction. Verified local
+  working tree had substantial uncommitted work beyond the last GitHub
+  push (`7e43483`): the entire historical-bootstrap + broker-account-
+  history implementation from the prior session. Ran the full suite
+  (191 passed), reviewed the diff for secrets, found and fixed one real
+  issue before committing — `PROJECT_STATUS.md` had picked up the real
+  DEMO account login number (`53044952`) in a "TESTED (live)" note,
+  account-identifying info not yet in git history. Replaced with a
+  pointer to the existing precedent instead of the raw number. Committed
+  as `16ff74c` ("Implement Phase 2 historical bootstrap and broker
+  account history import") and pushed to `origin/main`.
+- Fixed 5 points from a further external architecture review, all in
+  `adaptive_scalper/gateway/symbol_validation.py` and a new
+  `synchronized_gateway.py`:
+  1. **Canonical asset identity** — name resolution alone isn't proof of
+     identity. Added `EXPECTED_IDENTITY`, a per-symbol spec checked
+     against live broker metadata. First draft required exact
+     `currency_base` match for all three symbols (e.g. BTCUSD must report
+     `currency_base="BTC"`); live-verified against the real IC Markets
+     DEMO terminal BEFORE committing and found this would have
+     permanently failed closed on BTCUSD, which this broker reports as
+     `currency_base=currency_profit=currency_margin="USD"` (crypto CFDs
+     settled/margined entirely in USD, base currency field unused for the
+     asset name — a real, broker-specific convention, not a bug).
+     Redesigned: `base_currency` is checked only for true FX/metal pairs
+     (XAUUSD, GBPJPY) where it's reliable; BTCUSD's identity instead rests
+     on `profit_currency="USD"` plus the broker's `description` field
+     containing "bitcoin"/"btc". Re-verified live after the fix: all
+     three canonical symbols now validate `VALID`. This is exactly the
+     kind of thing that would have silently broken production had it not
+     been checked against real broker data before commit.
+  2. **Execution-grade quote freshness** — new `validate_execution_quote()`,
+     deliberately separate from and stricter than the existing bootstrap-
+     time tick check (which intentionally tolerates a missing/zero
+     timestamp). Missing quote, missing/zero/unusable timestamp,
+     implausibly-future timestamp, stale (5s default vs. 30s), or invalid
+     bid/ask all BLOCK. Not yet wired into a live order path (none exists
+     yet) — built as the pure, testable function the eventual final
+     permission gate will call immediately before `order_send`.
+  3. **Directional symbol trade mode** — new
+     `validate_direction_for_new_exposure()`: DISABLED/CLOSEONLY block
+     both directions for NEW exposure; LONGONLY/SHORTONLY restrict to one
+     direction; FULL allows either. Uses `SymbolTradeMode`'s existing
+     `allows_new_long`/`allows_new_short` helpers.
+  4. **MT5 concurrency** — new `gateway/synchronized_gateway.py`:
+     `SynchronizedGateway` wraps any `Gateway` and serializes every call
+     through one `threading.RLock`. `cli.py`'s `dashboard` command now
+     constructs a real `Mt5Gateway`, wraps it, and injects it into the
+     dashboard (previously the dashboard command passed no gateway at
+     all, so `mt5_connected` always read `null`). Tested with a genuine
+     multi-thread concurrency probe, not just delegation — plus a
+     companion "unsynchronized baseline" test proving the probe can
+     actually detect a missing lock (it showed real overlap when the
+     `SynchronizedGateway` wrapper was removed), so the passing case is
+     meaningful evidence rather than a probe that always reports success.
+  5. **PROJECT_STATUS.md staleness** — full rewrite. Removed a
+     contradictory "Implementation status" paragraph that still said "no
+     market data ingestion... exists yet" directly below a section
+     documenting the (already complete) historical bootstrap. Fixed two
+     more stale test counts caught while rewriting:
+     `test_symbol_resolver.py` was documented as "20 tests" (actually 18)
+     and a first-draft rewrite guessed "69 tests" for
+     `test_symbol_validation.py` before actually counting (it's 48) —
+     both corrected by running `pytest --collect-only` per file rather
+     than estimating.
+- Full suite: 218 passed, 0 failed, 0 skipped (24 new symbol_validation
+  tests + 3 new synchronized_gateway tests on top of the 191 from the
+  Phase 2 commit).

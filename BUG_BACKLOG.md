@@ -22,16 +22,23 @@ delete) once fixed, with the fixing commit/date noted.
    code; not actionable without a starlette/fastapi upgrade or switching
    test client libraries. Non-blocking; revisit at next dependency bump.
 
-2b. [SEVERITY: LOW, SUBSYSTEM: gateway/dashboard] `Mt5Gateway`'s
+2b. ~~[SEVERITY: LOW, SUBSYSTEM: gateway/dashboard] `Mt5Gateway`'s
    underlying `MetaTrader5` module calls are synchronous and not
-   documented by the vendor as safe for concurrent multi-thread use.
-   `adaptive_scalper/dashboard/app.py` currently accepts a `gateway`
-   object shared across FastAPI's per-request worker threads without a
-   lock. Not yet a problem (dashboard only issues one read-only call per
-   request, and the SQLite connection-per-request pattern was already
-   fixed for the analogous DB issue — see "Fixed" below), but revisit
-   with a lock or a gateway-call queue before the dashboard adds
-   concurrent panels that call the gateway.
+   documented by the vendor as safe for concurrent multi-thread use.~~
+   Fixed: `adaptive_scalper/gateway/synchronized_gateway.py`'s
+   `SynchronizedGateway` wraps any `Gateway` and serializes every call
+   through one `threading.RLock`. `cmd_dashboard` (cli.py) now wraps the
+   real `Mt5Gateway` in it before injecting into `create_app()`;
+   `dashboard/app.py`'s docstring documents this as a hard requirement
+   for any real gateway. Regression test:
+   `tests/test_synchronized_gateway.py::test_serializes_concurrent_calls_across_threads`
+   (with a companion unsynchronized-baseline test proving the probe can
+   actually detect a missing lock, not just trivially pass). Not yet
+   wired into anything beyond the dashboard, since the entry
+   scanner/position manager/history jobs that would also need it don't
+   exist yet — revisit as each of those lands to make sure they share one
+   `SynchronizedGateway` instance rather than each constructing their own
+   `Mt5Gateway`.
 
 3. [SEVERITY: LOW, SUBSYSTEM: history] `adaptive_scalper/history/jobs.py`'s
    `get_or_create_job()` supports extending an existing job's
@@ -62,6 +69,28 @@ delete) once fixed, with the fixing commit/date noted.
    such migration.
 
 ## Fixed
+
+- ~~[SEVERITY: HIGH, SUBSYSTEM: gateway/symbol_validation] First draft of
+  the external-review "canonical asset identity" fix required an EXACT
+  `currency_base` match (e.g. BTCUSD must report `currency_base="BTC"`)
+  for all three canonical symbols.~~ Live-verified against this project's
+  real IC Markets DEMO terminal before commit: BTCUSD actually reports
+  `currency_base=currency_profit=currency_margin="USD"` — this broker (and
+  plausibly others) settles/margins crypto CFDs entirely in USD and
+  doesn't use `currency_base` to name the crypto asset at all. The naive
+  exact-match design would have permanently failed closed on the genuine,
+  correctly-name-resolved BTCUSD instrument on this broker — defeating the
+  exact three-symbol universe rather than protecting it. Fixed before ever
+  reaching a committed state: `EXPECTED_IDENTITY` in
+  `gateway/symbol_validation.py` now uses a per-symbol spec —
+  `base_currency` is checked only for true FX/metal pairs (XAUUSD,
+  GBPJPY), where it's reliable; BTCUSD's identity instead rests on
+  `profit_currency="USD"` plus the broker's own `description` containing
+  "bitcoin"/"btc", two independent signals. Regression tests:
+  `tests/test_symbol_validation.py::test_btcusd_identity_does_not_require_btc_as_currency_base`
+  and `::test_btcusd_still_fails_closed_on_wrong_profit_currency_or_description`.
+  Re-verified live after the fix: all three canonical symbols now
+  correctly validate as `VALID` against the real broker.
 
 - ~~`migrate()` wrapped `executescript()` in a manual `BEGIN`/`COMMIT`,
   but `executescript()` issues its own implicit `COMMIT` first, breaking

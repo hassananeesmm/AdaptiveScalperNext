@@ -41,10 +41,14 @@ def create_app(db_path: str | Path, gateway: Gateway | None = None) -> FastAPI:
     `gateway` is injected (not constructed here) so tests can point the
     app at a FakeGateway. It's read-only from the dashboard's perspective
     and, like the connection, must itself be safe to call from a worker
-    thread — Mt5Gateway's underlying MetaTrader5 calls are synchronous
-    and not documented as thread-safe for concurrent use either, which is
-    a currently-accepted limitation until the dashboard needs true
-    concurrency (tracked informally; revisit if/when it does).
+    thread — FastAPI dispatches each request handler onto its own worker
+    thread, and MetaTrader5's underlying calls are not documented as safe
+    for concurrent multi-thread use. When `gateway` wraps a real
+    `Mt5Gateway`, callers MUST pass a `SynchronizedGateway`
+    (`adaptive_scalper/gateway/synchronized_gateway.py`), not the raw
+    `Mt5Gateway`, so concurrent dashboard requests serialize through one
+    lock instead of racing each other. A `FakeGateway` in tests needs no
+    such wrapping (it's already safe — pure in-memory reads).
     """
     app = FastAPI(title="Adaptive Scalper Next — Dashboard")
 

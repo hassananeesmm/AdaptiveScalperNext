@@ -25,6 +25,7 @@ from adaptive_scalper.dashboard.app import DEFAULT_HOST, DEFAULT_PORT, create_ap
 from adaptive_scalper.dashboard.health import compute_health
 from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway, Mt5NotAvailableError
 from adaptive_scalper.gateway.symbol_resolver import resolve_all
+from adaptive_scalper.gateway.synchronized_gateway import SynchronizedGateway
 from adaptive_scalper.history import account_history
 from adaptive_scalper.history import bootstrap as history_bootstrap
 from adaptive_scalper.history import jobs as history_jobs
@@ -319,7 +320,22 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     import uvicorn
 
     cfg = load_config(args.config)
-    app = create_app(cfg.database.path)
+
+    gateway = None
+    try:
+        raw_gateway = Mt5Gateway()
+        if raw_gateway.initialize():
+            # MUST wrap in SynchronizedGateway, never hand the raw
+            # Mt5Gateway to FastAPI's per-request worker threads directly
+            # — see synchronized_gateway.py / dashboard/app.py's docstring.
+            gateway = SynchronizedGateway(raw_gateway)
+            print("dashboard: MT5 terminal connected")
+        else:
+            print("dashboard: MT5 terminal not reachable, running without gateway (mt5_connected will read null)")
+    except Mt5NotAvailableError:
+        print("dashboard: MetaTrader5 package unavailable, running without gateway (mt5_connected will read null)")
+
+    app = create_app(cfg.database.path, gateway=gateway)
     print(f"Adaptive Scalper Next dashboard: http://{args.host}:{args.port}/api/health")
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
