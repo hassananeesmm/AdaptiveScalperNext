@@ -109,6 +109,12 @@ class Tick:
     ask: float
     last: float
     volume: float
+    # Millisecond-resolution timestamp (MT5's `time_msc`). Defaults to 0 for
+    # call sites that only ever need one "current" tick (symbol_info_tick),
+    # where second-resolution uniqueness is irrelevant. Historical tick
+    # storage (adaptive_scalper.history) relies on this for row uniqueness,
+    # since two genuinely distinct ticks commonly share the same second.
+    time_msc: int = 0
 
 
 @dataclass(frozen=True)
@@ -121,3 +127,56 @@ class Bar:
     tick_volume: int
     spread: int
     real_volume: int
+
+
+@dataclass(frozen=True)
+class HistoricalOrder:
+    """One row of the connected account's broker order history
+    (MetaTrader5.history_orders_get). `type`/`state` are the raw MT5
+    ENUM_ORDER_TYPE / ENUM_ORDER_STATE integer codes, deliberately not
+    decoded here — this is a thin import layer (directive section 51-52),
+    not a research/analysis layer; whoever eventually consumes this data
+    for cost/slippage research owns interpreting those codes.
+    """
+
+    ticket: int
+    time_setup: int   # epoch seconds
+    time_done: int | None
+    type: int
+    state: int
+    magic: int
+    position_id: int
+    volume_initial: float
+    volume_current: float
+    price_open: float
+    sl: float
+    tp: float
+    price_current: float
+    symbol: str
+    comment: str
+    external_id: str
+
+
+@dataclass(frozen=True)
+class HistoricalDeal:
+    """One row of the connected account's broker deal history
+    (MetaTrader5.history_deals_get). `type`/`entry` are raw MT5
+    ENUM_DEAL_TYPE / ENUM_DEAL_ENTRY integer codes — see HistoricalOrder's
+    docstring for why these aren't decoded at this layer."""
+
+    ticket: int
+    order: int
+    time: int   # epoch seconds
+    type: int
+    entry: int
+    magic: int
+    position_id: int
+    volume: float
+    price: float
+    commission: float
+    swap: float
+    profit: float
+    fee: float
+    symbol: str
+    comment: str
+    external_id: str

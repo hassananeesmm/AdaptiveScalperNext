@@ -320,3 +320,75 @@ Chronological, factual record of initialization events. Append only.
   small tracked follow-up, not a defect. Cleaned up the `data/` runtime
   DB the manual smoke test created (gitignored, never staged).
 - Full suite: 169 passed, 0 failed, 0 skipped.
+
+- Repaired (by the user, outside this repo) a Git Bash `python3` shim
+  issue that had been causing `.claude` plugin hooks to fail with
+  `/usr/bin/bash: line 1: python3: command not found`. Verified the fix
+  at the start of this session with a harmless Bash tool call and a
+  triggered PreToolUse hook (`run-guardrails.sh`) — no error surfaced.
+  Confirmed this project's own guardrails hook was never actually
+  dependent on the shim (it prefers `.venv/Scripts/python.exe` first);
+  the affected hook must have been a different plugin's (e.g.
+  security-guidance's `sg-python.sh`). No code change required here;
+  resumed the full build per the user's instruction.
+- Built the 5-year MT5 historical bootstrap
+  (`adaptive_scalper/history/`, directive sections 46-50) — the "Current
+  next task" carried over from the previous session:
+  - Extended the gateway layer: `Gateway.copy_rates_range`/
+    `copy_ticks_range` (protocol + `Mt5Gateway` + `FakeGateway`), and
+    added `Tick.time_msc` (default 0, backward compatible) since tick
+    history dedup needs millisecond resolution the existing whole-second
+    `time` field can't provide.
+  - `migrations/0004_historical_data.sql`: `bars`, `ticks` (both with
+    UNIQUE constraints that make re-import idempotent),
+    `historical_import_jobs` (resumable checkpoints — `resolution = ''`
+    rather than NULL for TICK jobs, since SQLite UNIQUE treats every NULL
+    as distinct and would have allowed duplicate TICK job rows),
+    `historical_bar_coverage`, `historical_tick_coverage`.
+  - `history/resolutions.py`, `store.py` (idempotent
+    `INSERT OR IGNORE`-based inserts), `jobs.py` (checkpoint CRUD;
+    `get_or_create_job` extends `requested_end_utc` forward for
+    incremental resync, re-opening a completed job, but rejects widening
+    `requested_start_utc` backward — tracked as BUG_BACKLOG.md #3 rather
+    than silently mishandled), `coverage.py` (earliest/latest/count +
+    deliberately naive gap counting — weekends/session closures are
+    expected to show up as "gaps" per directive section 46, not treated
+    as a defect), `bootstrap.py` (chunked resumable orchestration).
+  - Explicit, documented scope decision per directive section 48's
+    "document exact decision": bars target a full 5 years across
+    M1/M2/M3/M5/M15; ticks default to a 30-day rolling window, not 5
+    years — full 5-year raw tick history for XAUUSD/GBPJPY/BTCUSD would
+    plausibly reach hundreds of millions of rows, which the directive
+    explicitly permits scoping down rather than pretending was obtained.
+    Both bounds are caller-configurable (CLI flags), not hardcoded.
+  - Truncation safety: each chunk's cursor advances only past the last
+    bar/tick actually received, not blindly to the chunk's requested
+    end — so a broker response-size cap mid-chunk gets picked up on the
+    next iteration instead of silently dropping data. A zero-progress
+    chunk raises `RuntimeError` (persisted to the job's `last_error`)
+    rather than looping forever.
+  - CLI: `history bootstrap` (best-effort per symbol/resolution — one
+    symbol's broker-resolution failure or mid-download error is reported
+    in the JSON output and does not abort the others) and `history
+    status` (coverage summary per configured symbol).
+  - `tests/test_history_bootstrap.py` (13 tests, fake-gateway only):
+    storage idempotency; single- and multi-chunk completion; a
+    resumed-after-simulated-failure case that asserts the resume's first
+    gateway call starts exactly at the persisted checkpoint (via a
+    `_FlakyGateway` test wrapper that fails after N calls); a
+    same-process-restart variant using a genuinely fresh
+    `sqlite3.Connection` to the same database file; a completed job
+    rerun making zero further gateway calls; `get_or_create_job`'s
+    forward-extend/backward-reject behavior; a constructed-gap coverage
+    test; `bootstrap_all` only touching symbols present in its
+    canonical-to-broker map. Plus 2 new `tests/test_cli.py` cases for
+    `history status` (empty state, and after a fake-driven bootstrap).
+  - Added BUG_BACKLOG.md items #3 (backward-widening a job's start is
+    unsupported by design, not a defect) and #4 (tick dedup relies on
+    `time_msc`; flagged for re-check if a live run ever undercounts).
+  - **UNVERIFIED live**: `copy_rates_range`/`copy_ticks_range` and the
+    `history bootstrap` CLI command have not yet been run against the
+    real IC Markets DEMO terminal — only fake-gateway-tested this
+    session. That live run is the natural next step, not yet done.
+- Full suite: 184 passed (169 + 15 new), 0 failed, 0 skipped (live MT5
+  terminal still connected on this machine this session).

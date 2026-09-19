@@ -141,6 +141,118 @@ string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
   (terminal not currently connected on this machine — see "Live MT5
   environment" below for when it last ran successfully).
 
+### `adaptive_scalper/history/` — five-year MT5 historical bootstrap (IMPLEMENTED, CONNECTED, TESTED (fake))
+
+Directive sections 46-50. Chunked, resumable, idempotent download of bar
+and tick history for whichever canonical symbols are currently
+broker-resolved.
+
+- `resolutions.py` — `SUPPORTED_BAR_RESOLUTIONS` (M1/M2/M3/M5/M15) and
+  seconds-per-bar, the single source other history modules import rather
+  than re-declaring.
+- `store.py` — `insert_bars`/`insert_ticks`: `INSERT OR IGNORE` against
+  migration `0004`'s `UNIQUE(canonical_symbol, resolution, ts_utc)` (bars)
+  / `UNIQUE(canonical_symbol, ts_msc)` (ticks) constraints, so re-importing
+  an already-covered range is a verified no-op, not just an assumption.
+- `jobs.py` — `historical_import_jobs` checkpoint rows. A restart resumes
+  a `PENDING`/`IN_PROGRESS` job from its persisted `cursor_utc`, never
+  `requested_start_utc`. `get_or_create_job()` extends `requested_end_utc`
+  forward (incremental resync, re-opening a `COMPLETE` job) but rejects
+  widening `requested_start_utc` backward — tracked as BUG_BACKLOG.md #3,
+  not silently mishandled.
+- `coverage.py` — `historical_bar_coverage`/`historical_tick_coverage`:
+  earliest/latest/count recomputed from the authoritative `bars`/`ticks`
+  tables after each chunk. Gap counting is deliberately naive (actual vs.
+  a perfectly continuous series) — weekends/session closures show up as
+  "gaps" by design (directive section 46: preserve them, don't fill them),
+  reported as informational coverage, never treated as a defect to fix.
+- `bootstrap.py` — `bootstrap_bars`/`bootstrap_ticks`/`bootstrap_symbol`/
+  `bootstrap_all`. Documented, deliberate scope decision (directive
+  section 48's "document exact decision"): bars target a full
+  `DEFAULT_BAR_YEARS = 5`; ticks default to `DEFAULT_TICK_DAYS = 30`, not
+  5 years — full 5-year raw MT5 tick history for these three symbols would
+  plausibly run into hundreds of millions of rows, which directive section
+  48 explicitly permits scoping down rather than pretending was obtained.
+  Both are caller-configurable, not hardcoded policy. Truncation-safety:
+  each chunk advances the cursor only past the last bar/tick actually
+  received (never blindly to the chunk boundary), so a broker response cap
+  mid-chunk is handled correctly instead of silently skipping data.
+- Gateway support: `Gateway.copy_rates_range`/`copy_ticks_range` (protocol
+  + `Mt5Gateway` + `FakeGateway`). `Tick` gained a `time_msc` field
+  (default 0, backward compatible) since tick-history uniqueness needs
+  millisecond resolution that the existing `time` (whole seconds) field
+  can't provide.
+- CLI: `history bootstrap` (best-effort per symbol/resolution — one
+  symbol's broker-resolution failure or mid-download error is reported
+  and does not abort the others) and `history status` (coverage summary
+  per configured symbol; directive section 97's dashboard panel doesn't
+  exist yet, this is its data source as JSON for now).
+- `tests/test_history_bootstrap.py` (13 tests, fake-gateway only):
+  storage idempotency, single- and multi-chunk completion, coverage
+  correctness including a constructed gap, resumption after a simulated
+  mid-run failure (asserts the resumed run's first request starts exactly
+  at the persisted checkpoint, not back at the original start), a
+  same-process-restart variant using a fresh `sqlite3.Connection` to the
+  same file, completed-job rerun making zero further gateway calls,
+  `get_or_create_job`'s forward-extend/backward-reject behavior, and
+  `bootstrap_all` only touching symbols present in its
+  canonical-to-broker map.
+- **TESTED (live)**: `copy_rates_range`/`copy_ticks_range` verified
+  directly against the real IC Markets terminal (real bars/ticks
+  returned; zero-length weekend window correctly returned zero). A full
+  `history bootstrap --no-ticks` run against the live DEMO account
+  completed for all 3 symbols × 5 resolutions with zero errors. Actual
+  recorded coverage (directive section 50: never claim "5 years loaded"
+  unless true — this is the honest result, not the 5-year target):
+  M15 reached the furthest back (~4 years for GBPJPY/XAUUSD, ~3 months
+  for BTCUSD — BTCUSD's broker symbol appears newer/shorter-lived on this
+  server); M1/M2/M3/M5 landed far short of 5 years (as little as ~101
+  days for XAUUSD M1). Bar counts cluster near ~100,000 per
+  symbol/resolution for the finer timeframes, consistent with the broker
+  retaining roughly a fixed NUMBER of bars per resolution rather than a
+  fixed calendar window — a real broker-side retention policy, not a bug
+  in this codebase's chunking (gap-count math was independently verified
+  self-consistent against the recorded earliest/latest/count on this real
+  data). Tick bootstrap itself (not just its gateway calls) has NOT been
+  run live yet — deferred given its much larger expected volume; the
+  fake-tested code path is otherwise identical to the bar path.
+  `broker-history import` also ran live against the real DEMO account:
+  2234 orders / 2222 deals imported on first run, 0/0 on an immediate
+  re-run (idempotency verified live, not just fake-tested).
+
+### `adaptive_scalper/history/account_history.py` — broker account order/deal import (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive sections 51-52. Distinct from the bar/tick market-data bootstrap
+above: imports the CONNECTED ACCOUNT's own order/deal history (any
+origin), deduplicated by `(login, server, ticket)` so two different
+accounts' tickets can never collide. Every imported row is labeled
+`origin = 'BROKER_ACCOUNT_HISTORY'`, `strategy_attribution = 'UNKNOWN'` —
+never inferred from outcome, and never anything more specific, since no
+decision journal exists yet to prove real provenance (directive section
+52's core requirement). `type`/`state`/`entry` store MT5's raw
+`ENUM_ORDER_TYPE`/`ENUM_ORDER_STATE`/`ENUM_DEAL_ENTRY` integer codes,
+undecoded — this is a thin import layer, not an analysis layer.
+
+- New types: `HistoricalOrder`, `HistoricalDeal`
+  (`adaptive_scalper/gateway/types.py`); new `Gateway.history_orders_get`/
+  `history_deals_get` (protocol + `Mt5Gateway` + `FakeGateway`).
+- Migration `0005_broker_account_history.sql`: `broker_account_orders`,
+  `broker_account_deals`.
+- CLI: `broker-history import --days N` (idempotent — safe to re-run as a
+  periodic refresh) and `broker-history status`.
+- `tests/test_account_history.py` (7 tests, fake-gateway only): import
+  idempotency for both orders and deals, default `UNKNOWN` attribution,
+  end-to-end import via a fake gateway including a zero-new-rows re-run,
+  two different accounts' identical ticket numbers not colliding, and
+  coverage reporting (including the zero-rows case).
+- **TESTED (live)**: ran against this machine's real DEMO account (see
+  "Live MT5 environment" below for server/account-type detail — the
+  specific account login number is deliberately not recorded in this
+  file, consistent with the account-identifying-info handling in
+  WORKLOG.md's pre-commit safety audit) — 2234 orders / 2222 deals
+  imported on first run, 0/0 on an immediate re-run, live-confirming
+  idempotency, not just the fake-gateway tests.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -234,29 +346,43 @@ connection. See BUG_BACKLOG.md.
 Real subcommands only — no stub prints a placeholder (directive §118).
 `doctor` (config+DB+MT5-reachability check), `status`, `health` (exits
 non-zero when not HEALTHY), `symbols` (live broker resolution),
-`kill-switch status/engage/clear`, `dashboard` (runs uvicorn bound to
-127.0.0.1 by default). TESTED (fake, 8 tests: `status`/`health`/
-`kill-switch`/config-error path via tmp config+DB). TESTED (live, manual
-smoke test this session, not yet an automated pytest): `doctor` and
-`symbols` against the real IC Markets terminal — both succeeded (`mt5:
-reachable`; all three canonical symbols EXACT_MATCH). Not yet automated
-as a live pytest case alongside `test_mt5_gateway_live.py` — tracked as
-a small follow-up, not a defect. Not implemented: every command listed
-in the directive that depends on a subsystem that doesn't exist yet
-(`scan`, `analyse`, `paper`, `demo`, `strategies`, `models`, `learning
-*`, `rag *`, `news *`, `history *`, `broker-history import`, `journal
-recent`, `reconcile`, `why-no-trade`, `backtest`, `walk-forward`,
-`monte-carlo`).
+`kill-switch status/engage/clear`, `history bootstrap/status`, `dashboard`
+(runs uvicorn bound to 127.0.0.1 by default). TESTED (fake, 10 tests:
+`status`/`health`/`kill-switch`/`history status`/config-error path via
+tmp config+DB). TESTED (live, manual smoke test this session, not yet an
+automated pytest): `doctor` and `symbols` against the real IC Markets
+terminal — both succeeded (`mt5: reachable`; all three canonical symbols
+EXACT_MATCH). `history bootstrap` has NOT yet been run live (see the
+history section's "UNVERIFIED live" note) — only its `history status`
+half is CLI-tested, against fake-populated data. Not yet automated as a
+live pytest case alongside `test_mt5_gateway_live.py` — tracked as a
+small follow-up, not a defect. Not implemented: every command listed in
+the directive that depends on a subsystem that doesn't exist yet (`scan`,
+`analyse`, `paper`, `demo`, `strategies`, `models`, `learning *`,
+`rag *`, `news *`, `broker-history import`, `journal recent`,
+`reconcile`, `why-no-trade`, `backtest`, `walk-forward`, `monte-carlo`).
 
 ## Current next task
 
-Continue toward Phase 2/3 per directive dependency order: historical
-bootstrap, then features/regime/strategies, building the composed final
-permission gate incrementally as each dependency (news, cost, risk,
-etc.) lands. This is a genuinely large remaining scope — see
-BUG_BACKLOG.md and this file's per-component notes for exactly what is
-and isn't done; do not infer completion of anything not explicitly
-marked IMPLEMENTED/CONNECTED/TESTED above.
+Directive Phase 2 (HISTORY) is now substantially complete and live-verified:
+5-year bar bootstrap (actual coverage honestly recorded — see the history
+section above, most resolutions fell well short of 5 years due to real
+broker retention limits, which is the directive-compliant outcome, not a
+defect) and broker account order/deal import both ran live against the
+real DEMO account. Remaining before Phase 2 is fully closed: (1) an actual
+live tick-bootstrap run (gateway calls are live-verified individually,
+but a full `history bootstrap` run including ticks has not been executed
+— likely large volume, run and measure before assuming it's practical at
+the current 30-day default); (2) a historical dashboard panel (directive
+section 97) — only the CLI (`history status`, `broker-history status`)
+exists; no dashboard panel beyond the Phase-1 health endpoint. Then Phase
+3 (CORE TRADING): the feature engine, regime classification, and six
+strategies, building the composed final permission gate incrementally as
+each further dependency (news, cost, risk, etc.) lands. This is a
+genuinely large remaining scope — see BUG_BACKLOG.md and this file's
+per-component notes for exactly what is and isn't done; do not infer
+completion of anything not explicitly marked
+IMPLEMENTED/CONNECTED/TESTED above.
 
 ## Current git commit
 
@@ -270,7 +396,8 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-3 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`).
+4 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+`0004_historical_data`).
 
 ## Model state
 
@@ -278,7 +405,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 ## Tests
 
-169 passed, 0 failed, 0 skipped (live MT5 terminal is currently connected
+184 passed, 0 failed, 0 skipped (live MT5 terminal is currently connected
 — see "Live MT5 environment"; on a machine/moment without one,
 `test_mt5_gateway_live.py`'s 7 tests self-skip instead of failing):
 - `tests/test_environment.py` (1)
@@ -290,11 +417,14 @@ None yet — no ML models implemented (Stage 0, directive §61).
 - `tests/test_symbol_resolver.py` (20)
 - `tests/test_symbol_validation.py` (24)
 - `tests/test_dashboard_health.py` (9)
-- `tests/test_cli.py` (8)
+- `tests/test_cli.py` (10)
+- `tests/test_history_bootstrap.py` (13)
 - `tests/test_mt5_gateway_live.py` (7 — live-terminal-only, self-skipping)
 
 ## Unverified components
 
 - `Mt5Gateway.copy_rates_from_pos` (bar history) — implemented, no test yet.
+- `Mt5Gateway.copy_rates_range`/`copy_ticks_range` — implemented, fake-tested
+  only; no live exercise yet (see the history section above).
 - `symbol_validation.py` against a real live broker (only fake-tested so far).
 - Everything listed in "Implementation status" as not yet existing.

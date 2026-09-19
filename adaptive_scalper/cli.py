@@ -7,7 +7,7 @@ lands (news, strategies, RAG, ML, backtesting, ...) its commands are
 added here, not before.
 
 Currently implemented: doctor, status, health, symbols, kill-switch
-status/engage/clear, dashboard.
+status/engage/clear, dashboard, history bootstrap/status.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from adaptive_scalper.config.loader import ConfigError, load_config
@@ -24,6 +25,11 @@ from adaptive_scalper.dashboard.app import DEFAULT_HOST, DEFAULT_PORT, create_ap
 from adaptive_scalper.dashboard.health import compute_health
 from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway, Mt5NotAvailableError
 from adaptive_scalper.gateway.symbol_resolver import resolve_all
+from adaptive_scalper.history import account_history
+from adaptive_scalper.history import bootstrap as history_bootstrap
+from adaptive_scalper.history import jobs as history_jobs
+from adaptive_scalper.history.coverage import get_bar_coverage, get_tick_coverage
+from adaptive_scalper.history.resolutions import SUPPORTED_BAR_RESOLUTIONS
 from adaptive_scalper.persistence.database import connect, integrity_check, migrate
 
 DEFAULT_CONFIG_PATH = "config/default.toml"
@@ -164,6 +170,151 @@ def cmd_kill_switch_clear(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_history_bootstrap(args: argparse.Namespace) -> int:
+    """Chunked, resumable bar (+ optional tick) download for every
+    canonical symbol that resolves against the live broker right now.
+    An unresolved symbol is reported as an error for that symbol only —
+    it never aborts the run for the other, resolved symbols."""
+    cfg, conn = _open_db(args.config)
+    try:
+        gw = Mt5Gateway()
+        if not gw.initialize():
+            print("FAIL: could not initialize MT5 terminal")
+            return 1
+    except Mt5NotAvailableError as exc:
+        print(f"FAIL: {exc}")
+        return 1
+
+    broker_symbols = gw.symbols_get()
+    resolutions_result = resolve_all(broker_symbols)
+    now_utc = int(time.time())
+    resolutions = tuple(args.resolutions) if args.resolutions else SUPPORTED_BAR_RESOLUTIONS
+    bar_start = now_utc - args.years * 365 * 86400
+    tick_start = now_utc - args.tick_days * 86400
+
+    report: dict[str, dict] = {}
+    ok = True
+    for canonical, result in sorted(resolutions_result.items()):
+        if not result.resolved:
+            report[canonical] = {"error": f"unresolved: {result.reason}"}
+            ok = False
+            continue
+        symbol_report: dict[str, dict] = {}
+        for resolution in resolutions:
+            try:
+                job = history_bootstrap.bootstrap_bars(
+                    conn, gw, canonical, result.broker_symbol, resolution, bar_start, now_utc
+                )
+                symbol_report[resolution] = {"status": job.status, "cursor_utc": job.cursor_utc}
+            except Exception as exc:  # noqa: BLE001 - one symbol/resolution's failure must not abort the rest
+                symbol_report[resolution] = {"status": "ERROR", "error": str(exc)}
+                ok = False
+        if not args.no_ticks:
+            try:
+                job = history_bootstrap.bootstrap_ticks(conn, gw, canonical, result.broker_symbol, tick_start, now_utc)
+                symbol_report["TICK"] = {"status": job.status, "cursor_utc": job.cursor_utc}
+            except Exception as exc:  # noqa: BLE001
+                symbol_report["TICK"] = {"status": "ERROR", "error": str(exc)}
+                ok = False
+        report[canonical] = symbol_report
+
+    gw.shutdown()
+    conn.close()
+    _print_json(report)
+    return 0 if ok else 1
+
+
+def cmd_history_status(args: argparse.Namespace) -> int:
+    """Coverage summary per configured symbol/resolution (directive
+    section 97's dashboard historical-data panel, as text/JSON for now —
+    no dashboard panel exists yet)."""
+    cfg, conn = _open_db(args.config)
+    report: dict[str, dict] = {}
+    for canonical in sorted(cfg.market.symbols):
+        bar_report: dict[str, dict] = {}
+        for resolution in SUPPORTED_BAR_RESOLUTIONS:
+            cov = get_bar_coverage(conn, canonical, resolution)
+            job = history_jobs.get_job(conn, canonical, history_jobs.BAR, resolution)
+            bar_report[resolution] = {
+                "job_status": job.status if job else "NOT_STARTED",
+                "earliest_utc": cov.earliest_utc if cov else None,
+                "latest_utc": cov.latest_utc if cov else None,
+                "bar_count": cov.bar_count if cov else 0,
+                "gap_count": cov.gap_count if cov else 0,
+            }
+        tick_cov = get_tick_coverage(conn, canonical)
+        tick_job = history_jobs.get_job(conn, canonical, history_jobs.TICK, "")
+        report[canonical] = {
+            "bars": bar_report,
+            "ticks": {
+                "job_status": tick_job.status if tick_job else "NOT_STARTED",
+                "earliest_utc": tick_cov.earliest_utc if tick_cov else None,
+                "latest_utc": tick_cov.latest_utc if tick_cov else None,
+                "tick_count": tick_cov.tick_count if tick_cov else 0,
+            },
+        }
+    conn.close()
+    _print_json(report)
+    return 0
+
+
+def cmd_broker_history_import(args: argparse.Namespace) -> int:
+    """Import the connected account's order/deal history (directive
+    sections 51-52). Idempotent — safe to re-run as a periodic refresh."""
+    _, conn = _open_db(args.config)
+    try:
+        gw = Mt5Gateway()
+        if not gw.initialize():
+            print("FAIL: could not initialize MT5 terminal")
+            return 1
+    except Mt5NotAvailableError as exc:
+        print(f"FAIL: {exc}")
+        return 1
+
+    account = gw.account_info()
+    if account is None:
+        print("FAIL: could not read account info")
+        gw.shutdown()
+        return 1
+
+    now_utc = int(time.time())
+    start_utc = now_utc - args.days * 86400
+    orders_inserted, deals_inserted = account_history.import_account_history(conn, gw, account, start_utc, now_utc)
+    gw.shutdown()
+    conn.close()
+    _print_json({
+        "login": account.login,
+        "server": account.server,
+        "orders_inserted": orders_inserted,
+        "deals_inserted": deals_inserted,
+    })
+    return 0
+
+
+def cmd_broker_history_status(args: argparse.Namespace) -> int:
+    """Coverage summary for the connected account's imported history."""
+    _, conn = _open_db(args.config)
+    try:
+        gw = Mt5Gateway()
+        if not gw.initialize():
+            print("FAIL: could not initialize MT5 terminal")
+            return 1
+    except Mt5NotAvailableError as exc:
+        print(f"FAIL: {exc}")
+        return 1
+
+    account = gw.account_info()
+    gw.shutdown()
+    if account is None:
+        print("FAIL: could not read account info")
+        return 1
+
+    cov = account_history.coverage(conn, account.login, account.server)
+    conn.close()
+    _print_json({"login": account.login, "server": account.server, **cov})
+    return 0
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -197,6 +348,31 @@ def build_parser() -> argparse.ArgumentParser:
     ks_clear.add_argument("--reason", required=True)
     ks_clear.add_argument("--operator-id", required=True)
     ks_clear.set_defaults(func=cmd_kill_switch_clear)
+
+    hist = sub.add_parser("history", help="historical MT5 data bootstrap")
+    hist_sub = hist.add_subparsers(dest="history_command", required=True)
+
+    hist_bootstrap = hist_sub.add_parser(
+        "bootstrap", help="chunked, resumable bar+tick download for every broker-resolved symbol"
+    )
+    hist_bootstrap.add_argument("--years", type=int, default=history_bootstrap.DEFAULT_BAR_YEARS)
+    hist_bootstrap.add_argument("--tick-days", type=int, default=history_bootstrap.DEFAULT_TICK_DAYS)
+    hist_bootstrap.add_argument("--no-ticks", action="store_true")
+    hist_bootstrap.add_argument("--resolutions", nargs="+", choices=SUPPORTED_BAR_RESOLUTIONS)
+    hist_bootstrap.set_defaults(func=cmd_history_bootstrap)
+
+    hist_status = hist_sub.add_parser("status", help="coverage summary per configured symbol/resolution")
+    hist_status.set_defaults(func=cmd_history_status)
+
+    bh = sub.add_parser("broker-history", help="connected account's order/deal history import")
+    bh_sub = bh.add_subparsers(dest="broker_history_command", required=True)
+
+    bh_import = bh_sub.add_parser("import", help="idempotently import order/deal history for the connected account")
+    bh_import.add_argument("--days", type=int, default=3650, help="how many days of account history to request")
+    bh_import.set_defaults(func=cmd_broker_history_import)
+
+    bh_status = bh_sub.add_parser("status", help="coverage summary for the connected account's imported history")
+    bh_status.set_defaults(func=cmd_broker_history_status)
 
     dash = sub.add_parser("dashboard", help="run the local dashboard (binds 127.0.0.1 by default)")
     dash.add_argument("--host", default=DEFAULT_HOST)

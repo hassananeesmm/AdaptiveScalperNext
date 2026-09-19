@@ -33,6 +33,27 @@ delete) once fixed, with the fixing commit/date noted.
    with a lock or a gateway-call queue before the dashboard adds
    concurrent panels that call the gateway.
 
+3. [SEVERITY: LOW, SUBSYSTEM: history] `adaptive_scalper/history/jobs.py`'s
+   `get_or_create_job()` supports extending an existing job's
+   `requested_end_utc` forward (incremental resync) but raises `ValueError`
+   if ever asked to widen `requested_start_utc` backward (pull MORE history
+   than a prior job already committed to) — the single-cursor checkpoint
+   model can't safely reinterpret "resume" in that direction. Not expected
+   in normal operation (the 5-year bar / 30-day tick windows are fixed
+   defaults), but if a future need arises to backfill deeper history for an
+   already-bootstrapped symbol, this needs a real design (e.g. a second job
+   walking backward from the original start), not a workaround.
+
+4. [SEVERITY: LOW, SUBSYSTEM: history] Tick history storage
+   (`adaptive_scalper/history/store.py`) dedupes on
+   `(canonical_symbol, time_msc)`. A future MT5 build/broker whose tick feed
+   doesn't fill `time_msc` (or fills it with second-resolution granularity)
+   could silently drop distinct ticks that collide on that key. Not
+   observed so far;  `Mt5Gateway._tick_row` always reads the SDK's real
+   `time_msc` field for range-fetched ticks, but flag for re-check if a
+   live tick-bootstrap run ever reports suspiciously low counts vs. known
+   volume.
+
 2. **`_split_statements()` in `adaptive_scalper/persistence/database.py`
    is a naive `;`-split, not a real SQL tokenizer.** Fine for today's
    plain-DDL migrations. Would silently mis-split a migration containing a

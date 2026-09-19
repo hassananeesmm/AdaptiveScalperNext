@@ -117,6 +117,43 @@ def test_kill_switch_clear_requires_operator_id(config_path, capsys):
     assert body["changed_by"] == "jane"
 
 
+def test_history_status_reports_not_started_before_any_bootstrap(config_path, capsys):
+    cfg_path, _ = config_path
+    code = _run(cfg_path, "history", "status")
+    body = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert set(body.keys()) == {"XAUUSD", "GBPJPY", "BTCUSD"}
+    xau = body["XAUUSD"]
+    assert xau["bars"]["M1"]["job_status"] == "NOT_STARTED"
+    assert xau["bars"]["M1"]["bar_count"] == 0
+    assert xau["ticks"]["job_status"] == "NOT_STARTED"
+
+
+def test_history_status_reflects_completed_bootstrap(config_path, capsys):
+    from adaptive_scalper.gateway.types import Bar
+    from adaptive_scalper.history.bootstrap import bootstrap_bars
+
+    cfg_path, db_path = config_path
+    conn = connect(db_path)
+    migrate(conn)
+    from adaptive_scalper.gateway.fake_gateway import FakeGateway
+
+    start = 1_700_000_000
+    bars = [
+        Bar(time=start + i * 60, open=1, high=1, low=1, close=1, tick_volume=1, spread=1, real_volume=0)
+        for i in range(5)
+    ]
+    gw = FakeGateway(bars_by_resolution={"XAUUSDm": {"M1": bars}})
+    bootstrap_bars(conn, gw, "XAUUSD", "XAUUSDm", "M1", start, bars[-1].time)
+    conn.close()
+
+    code = _run(cfg_path, "history", "status")
+    body = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert body["XAUUSD"]["bars"]["M1"]["job_status"] == "COMPLETE"
+    assert body["XAUUSD"]["bars"]["M1"]["bar_count"] == 5
+
+
 def test_config_error_reported_and_nonzero_exit(tmp_path, capsys):
     bad_cfg = tmp_path / "bad.toml"
     bad_cfg.write_text('mode = "PAPER"\n[market]\nsymbols = ["EURUSD"]\n', encoding="utf-8")
