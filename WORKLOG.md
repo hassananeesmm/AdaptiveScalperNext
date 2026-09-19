@@ -521,3 +521,44 @@ Chronological, factual record of initialization events. Append only.
   with real COMPRESSION/TRENDING/ERRATIC periods) matches the intuitive
   expectation for a short-timeframe market.
 - Full suite: 263 passed, 0 failed, 0 skipped.
+- Committed as `a7618a6` and pushed to `origin/main`.
+- Built `adaptive_scalper/strategies/` — the six directive-mandated
+  active strategy families plus the strategy-registry retirement
+  firewall (directive sections 9, 90, 121):
+  - `base.py`: `Strategy` protocol + `StrategySignal`, which structurally
+    has NO monetary/volume field (only price DISTANCES) — directive
+    section 9's "a strategy must never decide money risk/volume" is
+    enforced by the type itself, not just documentation. Validates
+    direction/confidence/distance bounds in `__post_init__`.
+  - `registry.py`: `StrategyRegistry.register()` checks every key
+    against `RETIRED_STRATEGY_KEYS` unconditionally on every call and
+    raises `RetiredStrategyError` — no config flag or restore path can
+    bypass it, because there's no state the check depends on other than
+    the hardcoded constant itself.
+  - Six strategies, each self-contained and regime-gated:
+    `momentum_continuation`, `pullback_continuation` (pullback within an
+    intact trend, deliberately distinct entry logic from pure
+    continuation per directive section 18), `range_breakout`,
+    `statistical_reversion` (fades proximity to the recent range
+    extreme), `volatility_expansion` (candle wick-rejection direction),
+    `microstructure_acceleration` (short-horizon velocity+acceleration
+    alignment, excluding COMPRESSION/ERRATIC/UNKNOWN regimes as too
+    noisy for a short read).
+  - `build_active_registry()`: the single source of truth for which
+    strategies are active — exactly the six, freshly constructed per
+    call, no shared mutable state.
+  - `tests/test_strategies.py` (43 tests) + `tests/test_strategy_registry.py`
+    (21 tests): per-strategy fire/FLAT conditions, `StrategySignal`
+    validation (including an explicit no-money/volume-field assertion),
+    and the retirement firewall parametrized over BOTH retired keys
+    (not just one) — proving a rejected registration doesn't corrupt
+    subsequent valid ones, and that `build_active_registry()`'s key set
+    is exactly the expected six and disjoint from the retired set.
+- **TESTED (live)**: ran the complete active registry (all six
+  strategies, 18,000 strategy×bar evaluations) against 3000 real,
+  causally-walked XAUUSD M5 bars — zero crashes; signal frequency varied
+  sensibly per strategy, consistent with the regime distribution
+  observed in the earlier live regime-classifier run (RANGE-dominant
+  data producing far more statistical_reversion/microstructure_
+  acceleration signals than momentum/breakout/volatility_expansion ones).
+- Full suite: 311 passed, 0 failed, 0 skipped.

@@ -398,6 +398,60 @@ each step — completed with no crash; confirmed-regime distribution
 the intuitive expectation that a short-timeframe market spends most of
 its time ranging, not trending.
 
+### `adaptive_scalper/strategies/` — six active strategies + retirement firewall (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive sections 9, 90, 121. Common `Strategy` protocol
+(`base.py`): `evaluate(features, regime) -> StrategySignal | None`.
+`StrategySignal` structurally has NO monetary/volume field — only PRICE
+distances (`stop_distance`/`target_distance`, e.g. ATR multiples) —
+enforcing directive section 9's "a strategy must never decide money
+risk, volume, ..." at the type level, not just by convention.
+`__post_init__` validates direction ∈ {BUY, SELL}, confidence ∈ [0,1],
+both distances positive.
+
+**Retirement firewall** (`registry.py`): `StrategyRegistry.register()`
+checks every key against `RETIRED_STRATEGY_KEYS`
+(`config/constants.py` — the single hardcoded source of truth) on every
+call and raises `RetiredStrategyError` unconditionally — there is no
+configuration flag, restore path, or one-time gate a retired key could
+slip through. `build_active_registry()` (package `__init__.py`) is the
+single source of truth for which strategies are active: exactly the six
+directive-named families, freshly constructed on every call (no shared
+mutable module state a "restart" could leak state through).
+
+Six strategies, each a self-contained, deterministic, regime-gated rule
+set (Stage 0 per directive §61 — no ML/learning influence yet):
+- `momentum_continuation` — rides a TRENDING_UP/DOWN regime; confidence
+  scales with regime confidence × efficiency ratio.
+- `pullback_continuation` — enters a confirmed trend on a short-term
+  counter-move (latest bar against the trend, longer momentum still
+  confirms it) rather than chasing the extreme.
+- `range_breakout` — trades the decisive direction of a BREAKOUT-regime
+  bar (the same signal the regime classifier itself used).
+- `statistical_reversion` — fades price within `proximity_threshold` of
+  the recent high/low, only in RANGE/COMPRESSION.
+- `volatility_expansion` — trades candle wick-rejection direction in a
+  VOLATILITY_EXPANSION regime (long lower wick → BUY, long upper → SELL).
+- `microstructure_acceleration` — short-horizon signal when velocity and
+  acceleration agree in sign and are large relative to ATR; excludes
+  COMPRESSION/ERRATIC/UNKNOWN regimes as too noisy/untrustworthy for a
+  short-horizon read.
+
+`tests/test_strategies.py` (43 tests) + `tests/test_strategy_registry.py`
+(21 tests, 64 total): `StrategySignal` validation including an explicit
+assertion it has no money/volume field; each strategy's fire/stay-FLAT
+conditions; the retirement firewall parametrized over BOTH retired keys
+(not just one), proving a rejection doesn't corrupt subsequent valid
+registrations, and that `build_active_registry()` contains exactly the
+six expected keys and is disjoint from `RETIRED_STRATEGY_KEYS`.
+**TESTED (live)**: ran the full active registry (all six strategies)
+against 3000 real, causally-walked XAUUSD M5 bars (18,000 strategy×bar
+evaluations) — zero crashes; signal frequency varied sensibly by
+strategy (microstructure_acceleration/statistical_reversion fired most
+often, matching the earlier finding that RANGE is the dominant confirmed
+regime; momentum/pullback/breakout/volatility_expansion fired rarely,
+matching their respective regimes' real rarity in this data).
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -436,12 +490,16 @@ the kill-switch slice (see `core/permission.py` above).
 - failed_breakout_fade
 - support_resistance_reaction
 
-Enforced at config-validation layer only (`StrategiesConfig` rejects a
-`retired` list missing either key). **No strategy registry exists yet**
-— there is nothing yet for these to be excluded FROM at runtime; the
-directive §121 retired-strategy tests (registry/signal/rank/train/
-promote/execute) cannot be written until strategies exist. This is the
-next major workstream (see "Current next task").
+Enforced at TWO independent layers now: config-validation
+(`StrategiesConfig` rejects a `retired` list missing either key) and the
+strategy registry (`strategies/registry.py`'s `register()` unconditionally
+rejects either key, regardless of caller). Directive §121's "registry/
+signal" tests are covered (parametrized over both keys, proving a
+rejection doesn't corrupt the registry). NOT yet covered because the
+subsystems don't exist yet: rank (no selector), train/promote (no
+ML/model registry), RAG reactivation (no RAG), execute (no order path) —
+each will get its own retirement-firewall regression test as that
+subsystem is built, not assumed safe by extension.
 
 ## Known environment/plugin issues (non-blocking)
 
@@ -455,15 +513,16 @@ next major workstream (see "Current next task").
 
 ## Current next task
 
-Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is
-in progress: the feature engine and regime classifier both exist (see
-above). Immediately next, in directive dependency order: the six active
-strategies behind a common interface plus the retirement firewall's
-structural regression tests, then building the composed final permission
-gate incrementally as each further dependency (news, cost, correlation,
-portfolio, risk) lands. A live tick-bootstrap run (currently only
-fake-tested + individual live gateway-call verification) remains a
-smaller open item from Phase 2.
+Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is in
+progress: feature engine, regime classifier, and the six active
+strategies + retirement firewall all exist (see above). Immediately
+next, in directive dependency order: the immutable decision journal
+(needed so strategy signals have somewhere durable to be recorded before
+cost/correlation/risk gates can meaningfully reject them), then cost
+model + expected-net-edge, correlation/portfolio, risk governor, and
+finally composing the full final permission gate as each lands. A live
+tick-bootstrap run (currently only fake-tested + individual live
+gateway-call verification) remains a smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -492,13 +551,14 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 263 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 311 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_kill_switch.py`,
 `test_guardrails.py`, `test_demo_gate.py`, `test_symbol_resolver.py`,
 `test_symbol_validation.py`, `test_synchronized_gateway.py`,
 `test_dashboard_health.py`, `test_cli.py`, `test_history_bootstrap.py`,
 `test_account_history.py`, `test_bar_features.py`,
-`test_regime_classifier.py`, and `test_mt5_gateway_live.py`
+`test_regime_classifier.py`, `test_strategies.py`,
+`test_strategy_registry.py`, and `test_mt5_gateway_live.py`
 (live-terminal-only, self-skipping — 7 tests, currently connected on
 this machine).
 
