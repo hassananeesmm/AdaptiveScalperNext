@@ -705,3 +705,41 @@ Chronological, factual record of initialization events. Append only.
   own window correctly extended the block. This is real production news
   data exercising a real overlapping-events case none of the synthetic
   unit tests happened to construct.
+- Committed as `fbdb128` and pushed to `origin/main`.
+- Built `adaptive_scalper/costs/` (directive section 34), continuing
+  automatically:
+  - `model.py`: `estimate_cost()` (spread + commission + slippage +
+    swap + uncertainty margin, margin provably monotonic — can only
+    increase total cost) and `price_equivalent_of_monetary_cost()`,
+    which converts a flat per-lot monetary cost (commission, swap) into
+    a price distance using the SYMBOL'S OWN `trade_tick_size`/
+    `trade_tick_value` rather than one generic forex constant (directive
+    section 34's explicit requirement).
+  - `edge.py`: `expected_gross_edge_price()` — a standard
+    confidence/stop/target expected-value formula computed directly from
+    the strategy's own hypothesis (Stage 0, no model/RAG yet — directive
+    section 61). `evaluate_cost_gate()` distinguishes `BLOCK_COST`
+    (costs couldn't be determined) from `BLOCK_EXPECTED_EDGE` (costs
+    known, net edge insufficient) from `ALLOW`.
+  - `tracking.py` + migration `0008_costs.sql`: estimated-vs-realized
+    cost tracking with `prediction_error`, ready for the execution layer
+    to call once it exists; a realized cost can be recorded once, never
+    overwritten.
+  - 29 new tests across three files: conversion math, component
+    validation, the EV formula hand-checked against manual arithmetic,
+    all three gate outcomes, prediction-error sign in both directions,
+    double-recording rejection, restart persistence.
+  - Full suite: 429 passed, 0 failed, 0 skipped.
+- **TESTED (live)**: computed a real cost estimate from the live XAUUSD
+  contract spec (point=0.01, tick_size=0.01, tick_value=$1) with a
+  $7/lot commission assumption — the price-equivalent conversion matched
+  the unit-tested formula exactly on real data. Ran the complete
+  features → regime → strategy → cost → edge pipeline against real M5
+  bar history and found real signals on both sides of the gate: two
+  low-confidence microstructure_acceleration signals (~0.16, right at
+  the strategy's own minimum threshold) correctly resulted in
+  `BLOCK_EXPECTED_EDGE` with negative net edge; four higher-confidence
+  signals correctly `ALLOW`ed with positive net edge — hand-verified the
+  EV arithmetic against the printed numbers for one case
+  (raw_confidence=0.651, stop=4.09, target=6.13 → EV≈2.7, minus real
+  cost≈0.54 → net≈2.38, matching the pipeline's own 2.3755 output).

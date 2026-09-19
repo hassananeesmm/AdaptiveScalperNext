@@ -590,6 +590,54 @@ event's own window, not a bug) — genuine real-world data exercising a
 real overlapping-events case the synthetic unit tests didn't happen to
 cover.
 
+### `adaptive_scalper/costs/` — per-symbol cost model + expected-net-edge gate (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive section 34. Everything stays in PRICE units — the same units
+`StrategySignal.stop_distance`/`target_distance` use — so cost can be
+compared directly against a strategy's own hypothesis without needing
+position size or account risk (which the not-yet-built risk governor
+alone decides).
+
+- `model.py`: `estimate_cost()` combines spread + commission + slippage
+  + swap + an uncertainty margin (a % buffer that can only ever increase
+  the effective cost bar, never reduce it) into one `CostEstimate`.
+  `price_equivalent_of_monetary_cost()` converts a flat per-lot monetary
+  cost (commission, swap) into an equivalent price distance using the
+  SYMBOL'S OWN `trade_tick_size`/`trade_tick_value` — directive section
+  34: "Do not use one generic forex cost for all markets."
+- `edge.py`: `expected_gross_edge_price()` computes a standard
+  expected-value estimate directly from the strategy's own
+  `raw_confidence`/`stop_distance`/`target_distance` (Stage 0 — directive
+  section 61, no model/RAG adjustment yet; this is the exact seam where
+  a future bounded model/RAG adjustment would plug in without changing
+  this function's signature). `evaluate_cost_gate()` returns `BLOCK_COST`
+  when costs couldn't be determined at all (distinct from
+  `BLOCK_EXPECTED_EDGE`, when costs are known but the net edge doesn't
+  clear the bar) or `ALLOW`.
+- `tracking.py` + migration `0008_costs.sql` (`cost_observations`):
+  `record_estimated_cost()` at decision time, `record_realized_cost()`
+  once (never twice — raises if already recorded) when a real fill's
+  cost becomes known later, computing `prediction_error`. The
+  realized-cost half is ready for when the execution layer exists to
+  call it; no execution layer calls it yet.
+
+`tests/test_cost_model.py` (13) + `tests/test_cost_edge.py` (10) +
+`tests/test_cost_tracking.py` (6) = 29 tests: conversion math,
+component validation, margin monotonicity, the standard EV formula
+(hand-checked), all three gate outcomes, prediction-error sign in both
+directions, double-recording rejection, and restart persistence.
+
+**TESTED (live)**: computed a real cost estimate from the live XAUUSD
+contract spec (`point=0.01`, `tick_size=0.01`, `tick_value=$1`) and a
+$7/lot commission assumption, confirming the price-equivalent conversion
+matches the unit-tested formula exactly on real data. Ran the full
+features → regime → strategy → cost → edge pipeline against real M5 bar
+history: low-confidence signals (~0.16, right near the strategy's own
+minimum threshold) correctly resulted in `BLOCK_EXPECTED_EDGE` with
+negative net edge; higher-confidence signals correctly `ALLOW`ed with
+positive net edge — the standard EV arithmetic checks out by hand against
+the printed numbers.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -653,17 +701,17 @@ subsystem is built, not assumed safe by extension.
 
 Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is in
 progress: feature engine, regime classifier, six active strategies +
-retirement firewall, the immutable decision journal, and the keyless
-news system all exist (see above). Immediately next: cost model +
-expected-net-edge, correlation/portfolio heat, risk governor (sole
-sizing authority), then composing the full final permission gate as each
+retirement firewall, the immutable decision journal, the keyless news
+system, and the cost/expected-net-edge gate all exist (see above).
+Immediately next: correlation/portfolio heat, risk governor (sole sizing
+authority), then composing the full final permission gate as each
 lands — journaling each gate's ENTRY_ALLOWED/ENTRY_BLOCKED decision as
 it's built. `order_send` remains locked (must not be added) until
-cost/edge, portfolio/risk, the full final permission gate, execution
-state machine, idempotency, UNKNOWN handling, reconciliation, and a
-fresh DEMO interlock are ALL in place — journal and news are now done;
-the rest are not. A live tick-bootstrap run (currently only fake-tested
-+ individual live gateway-call verification) remains a smaller open item
+portfolio/risk, the full final permission gate, execution state machine,
+idempotency, UNKNOWN handling, reconciliation, and a fresh DEMO interlock
+are ALL in place — journal, news, and cost/edge are now done; the rest
+are not. A live tick-bootstrap run (currently only fake-tested +
+individual live gateway-call verification) remains a smaller open item
 from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
@@ -682,9 +730,9 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-7 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+8 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
-`0007_news`).
+`0007_news`, `0008_costs`).
 
 ## Model state
 
@@ -694,7 +742,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 401 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 429 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
@@ -702,7 +750,8 @@ entry: 401 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_history_bootstrap.py`, `test_account_history.py`,
 `test_bar_features.py`, `test_regime_classifier.py`, `test_strategies.py`,
 `test_strategy_registry.py`, `test_journal.py`, `test_news_blocking.py`,
-`test_news_providers.py`, `test_news_calendar_service.py`, and
+`test_news_providers.py`, `test_news_calendar_service.py`,
+`test_cost_model.py`, `test_cost_edge.py`, `test_cost_tracking.py`, and
 `test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
 currently connected on this machine).
 
