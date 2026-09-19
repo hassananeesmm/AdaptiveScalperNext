@@ -64,11 +64,43 @@ definitions.
   News, cost, correlation, portfolio, risk, account/broker validation, the
   symbol allow-list, and the retired-strategy firewall are not yet
   implemented or composed into it.
+- `adaptive_scalper/gateway/` (directive §110 gateway boundary, §4 DEMO
+  interlock, §6 symbol resolution):
+  - `types.py` / `protocol.py` — broker-independent dataclasses and the
+    `Gateway` Protocol. Deliberately excludes `order_send`/`order_check`
+    (waiting on the order state machine/reconciliation to exist first —
+    directive §118 "no showpiece modules").
+  - `mt5_gateway.py` — real implementation; the only module allowed to
+    `import MetaTrader5`. **Not yet covered by an automated test** — see
+    "Unverified components".
+  - `fake_gateway.py` — deterministic in-memory implementation used by
+    all current gateway-layer tests.
+  - `demo_gate.py` — `verify_demo_before_order()`, re-fetches fresh state
+    every call (no caching), fails closed with the directive §36
+    vocabulary (`BLOCK_MT5_DISCONNECTED`, `BLOCK_TERMINAL_TRADING_DISABLED`,
+    `BLOCK_BROKER_TRADING_DISABLED`, `BLOCK_ACCOUNT_NOT_DEMO`). Fully
+    unit-tested against `FakeGateway`.
+  - `symbol_resolver.py` — exact + capped-affix alias matching, fails
+    closed on no-match/ambiguous, persists to the new `symbol_mapping`
+    table (migration `0002`). Fully unit-tested.
 
 ## Implementation status
 
-No MT5 gateway, no market data, no strategies, no execution path yet.
-Trading (even PAPER) cannot run.
+No market data ingestion, no strategies, no execution path yet. Trading
+(even PAPER) cannot run. The MT5 gateway wrapper exists but has not yet
+been exercised by an automated test against a real terminal (see
+"Unverified components").
+
+## Live MT5 environment (this machine only)
+
+This development machine has a real MT5 terminal already installed and
+logged in: IC Markets Global, server `ICMarketsSC-Demo`,
+`trade_mode=0` (DEMO per MT5's `ENUM_ACCOUNT_TRADE_MODE`), confirmed via
+a direct, ad-hoc `MetaTrader5.account_info()`/`terminal_info()` call
+(read-only). This is NOT something to assume is true on any other
+machine or CI — do not write code or tests that require it. No
+`order_send`/`order_check` call has been made or is planned without
+explicit operator sign-off.
 
 ## Authoritative specification
 
@@ -91,9 +123,12 @@ all yet, so there is nothing to place a real-money order in the first place.
 - GBPJPY
 - BTCUSD
 
-Enforced today at config-validation layer (`MarketConfig` rejects any
-symbol outside this set). Broker symbol resolution and the independent
-final-gate check (directive §6/§36) are not yet implemented.
+Enforced at config-validation layer (`MarketConfig` rejects any symbol
+outside this set) AND now at broker-resolution layer
+(`gateway.symbol_resolver` fails closed on no-match/ambiguous — see
+"Completed components"). The independent final-gate check (directive
+§36's `BLOCK_SYMBOL_NOT_ALLOWED`) is not yet implemented — no final
+permission gate exists yet beyond the kill-switch slice.
 
 ## Permanently retired strategies
 
@@ -125,21 +160,26 @@ these to actually be excluded from.
 
 ## Current next task
 
-Continue Phase 1 foundation per directive §117: MT5 gateway (isolated per
-§110), DEMO hard interlock (§4), three-symbol broker resolution (§6),
-basic dashboard health endpoint. Cannot be verified against a real MT5
-terminal/account in this environment without operator-provided MT5
-login — build against mocks and label real-world state UNVERIFIED until a
-live check is possible.
+Write a live (skip-if-unavailable) smoke test for `Mt5Gateway` against
+this machine's real terminal — currently the only untested piece of the
+gateway layer. Then continue Phase 1: basic dashboard health endpoint,
+and start composing `gateway` + `core.permission` toward the real final
+permission gate as each dependency (news, cost, risk, etc.) lands.
 
 ## Current git commit
 
-See WORKLOG.md for the checkpoint commit hash created alongside this
-status update.
+See the latest entry in WORKLOG.md for the current commit hash — this
+file is updated before each commit, so the hash is recorded there rather
+than duplicated (and risking going stale) here.
+
+## Bug backlog
+
+See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-1 (`0001_initial` — `schema_migrations`, `app_state`, `configuration_audit`).
+2 (`0001_initial` — `schema_migrations`, `app_state`, `configuration_audit`;
+`0002_symbol_mapping` — `symbol_mapping`).
 
 ## Model state
 
@@ -147,15 +187,25 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 ## Tests
 
-80 passed, 0 failed, 0 skipped:
+109 passed, 0 failed, 0 skipped:
 - `tests/test_environment.py` (1)
 - `tests/test_config.py` (24)
-- `tests/test_persistence.py` (6)
+- `tests/test_persistence.py` (7)
 - `tests/test_kill_switch.py` (26)
 - `tests/test_guardrails.py` (23)
+- `tests/test_demo_gate.py` (12)
+- `tests/test_symbol_resolver.py` (16)
+
+All of the above are deterministic (FakeGateway/mocks/tmp SQLite) and
+portable to any machine.
 
 ## Unverified components
 
-Everything MT5-related (gateway, DEMO interlock, symbol resolution,
-account history, order execution) — no MT5 terminal/account has been
-connected in this session.
+- `adaptive_scalper/gateway/mt5_gateway.py` (the real `Mt5Gateway` class)
+  — no automated test exercises it yet. Ad-hoc, manual, read-only calls
+  directly against the `MetaTrader5` package (not through this wrapper
+  class) confirmed `initialize()`/`account_info()`/`terminal_info()` work
+  on this machine's live DEMO terminal, but that is not the same as
+  `Mt5Gateway` itself being tested.
+- Broker account history, order execution, reconciliation, position
+  management — not implemented at all yet.

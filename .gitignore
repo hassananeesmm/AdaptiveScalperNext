@@ -26,8 +26,7 @@ secrets*
 *.sqlite3
 *.log
 logs/
-data/*.db
-data/*.db-*
+data/
 models/runtime/
 
 # Editor / OS

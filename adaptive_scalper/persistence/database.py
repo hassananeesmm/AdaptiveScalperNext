@@ -7,10 +7,19 @@ store for the whole system.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+# Matches a `--` line comment through end-of-line. Stripped before
+# splitting on ';' so a semicolon inside a comment (e.g. "one row per
+# symbol; re-resolution overwrites it") doesn't get mistaken for a
+# statement terminator. Does NOT account for '--' inside a string
+# literal — not a concern for today's plain-DDL migrations (see
+# _split_statements' docstring for the tracked limitation).
+_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
 
 
 class MigrationError(Exception):
@@ -67,14 +76,20 @@ def applied_versions(conn: sqlite3.Connection) -> set[int]:
 def _split_statements(sql: str) -> list[str]:
     """Split a migration file into individual ';'-terminated statements.
 
-    Deliberately NOT a general SQL tokenizer — it splits on every top-level
-    ';' with no awareness of string literals or trigger bodies that embed
-    their own semicolons. That is sufficient for the plain DDL our
-    migrations contain today. If a future migration needs a trigger body
-    or a string literal containing ';', this must be replaced with a real
-    tokenizer first — do not add such a migration against this splitter.
+    Strips '--' line comments first (so a semicolon inside a comment isn't
+    mistaken for a statement terminator — this broke migration 0002, whose
+    comment read "...per symbol; re-resolution overwrites..."), then splits
+    on every remaining top-level ';'.
+
+    Deliberately NOT a general SQL tokenizer — it has no awareness of
+    string literals or trigger bodies that embed their own semicolons or
+    '--'. That is sufficient for the plain DDL our migrations contain
+    today. If a future migration needs a trigger body or a string literal
+    containing ';' or '--', this must be replaced with a real tokenizer
+    first — do not add such a migration against this splitter.
     """
-    return [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
+    without_comments = _LINE_COMMENT_RE.sub("", sql)
+    return [stmt.strip() for stmt in without_comments.split(";") if stmt.strip()]
 
 
 def migrate(conn: sqlite3.Connection) -> list[int]:

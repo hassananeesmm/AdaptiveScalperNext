@@ -130,3 +130,64 @@ Chronological, factual record of initialization events. Append only.
 - First Git commit of the repository created after all of the above
   (safeguards + Phase 1 foundation code together) — see PROJECT_STATUS.md
   "Current git commit" for the hash.
+- Created `BUG_BACKLOG.md` per user request to track non-blocking issues
+  going forward.
+- Discovered this machine already has a real MT5 terminal installed and
+  logged in (IC Markets Global, server `ICMarketsSC-Demo`, `trade_mode=0`
+  i.e. DEMO per MT5's ENUM_ACCOUNT_TRADE_MODE) — MT5 login is therefore
+  NOT a blocker here. No order-related calls (`order_send`/`order_check`)
+  were made or will be made without explicit operator sign-off; only
+  read-only calls (`account_info`, `terminal_info`, `symbols_get`, etc.)
+  are used to build/verify the gateway.
+- Built `adaptive_scalper/gateway/` (directive §110 MT5 gateway boundary,
+  §4 DEMO hard interlock, §6 symbol resolution):
+  - `types.py`: broker-independent dataclasses (`AccountSnapshot`,
+    `TerminalSnapshot`, `SymbolSpec`, `Tick`, `Bar`) and `TradeMode`
+    (mirrors MT5's `ENUM_ACCOUNT_TRADE_MODE`).
+  - `protocol.py`: `Gateway` Protocol. Deliberately excludes
+    `order_send`/`order_check` — those wait for the order state machine,
+    idempotency and reconciliation (directive §29-31) to exist to receive
+    their result safely.
+  - `mt5_gateway.py`: real implementation; the only module allowed to
+    `import MetaTrader5`, imported lazily so the rest of the codebase
+    stays importable without the package installed.
+  - `fake_gateway.py`: in-memory implementation of the same protocol for
+    deterministic tests.
+  - `demo_gate.py`: `verify_demo_before_order()` — re-fetches fresh
+    account/terminal state on every call (no caching, so a mid-session
+    switch off DEMO is caught) and fails closed to
+    `BLOCK_MT5_DISCONNECTED` / `BLOCK_TERMINAL_TRADING_DISABLED` /
+    `BLOCK_BROKER_TRADING_DISABLED` / `BLOCK_ACCOUNT_NOT_DEMO` using the
+    directive §36 block-reason vocabulary.
+  - `symbol_resolver.py`: `resolve_symbol()`/`resolve_all()` — exact
+    match, then a capped-affix alias pattern (handles `XAUUSD.a`,
+    `XAUUSDm`, `#XAUUSD`, etc.), fails closed to `NO_MATCH`/`AMBIGUOUS`
+    (never guesses); `persist_resolution()`/`load_persisted_mapping()`
+    against the new `symbol_mapping` table (migration `0002`).
+  - Installed the `MetaTrader5` pip package into the project venv.
+- Root-caused and fixed a second real bug in
+  `adaptive_scalper/persistence/database.py`'s `_split_statements()`: its
+  naive `;`-split (added in the earlier `executescript()` fix) also
+  mis-split on a semicolon that appeared INSIDE a `--` SQL comment in the
+  new `0002_symbol_mapping.sql` migration ("...per canonical symbol;
+  re-resolution overwrites...") — `re-resolution` was left as bare,
+  uncommented SQL and raised `sqlite3.OperationalError: near "re": syntax
+  error`. Fixed by stripping `--` line comments before splitting. Updated
+  `BUG_BACKLOG.md`'s existing entry for this splitter's known limitations.
+  Also fixed two now-stale test assertions in `tests/test_persistence.py`
+  that hardcoded "only migration 1 exists" (they now check against
+  whatever migrations are actually discovered, so a future migration
+  can't silently break them the same way).
+- Pre-commit safety audit (user-requested, before any GitHub push):
+  reviewed every untracked/modified file's diff for credentials/secrets.
+  Found and fixed one real issue: `tests/test_demo_gate.py` had hardcoded
+  the REAL MT5 account login number (`53044952`) and real server name
+  observed from this machine's live terminal as a test fixture value —
+  not a password/secret, but account-identifying information that should
+  not be committed. Replaced with an obviously-fake placeholder
+  (`90000001` / `Broker-Demo-Server`). Grepped the full working tree for
+  the real login, server, account name, and terminal data-path GUID —
+  none found elsewhere. Broadened `.gitignore`'s `data/*.db` entry to a
+  blanket `data/` (raw market/tick data will live there and is not source
+  to be committed).
+- Full suite: 109 passed, 0 failed, 0 skipped.
