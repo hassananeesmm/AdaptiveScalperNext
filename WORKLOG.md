@@ -495,3 +495,29 @@ Chronological, factual record of initialization events. Append only.
   directly against the live terminal earlier), no crash on the full real
   dataset.
 - Full suite: 241 passed, 0 failed, 0 skipped.
+- Committed as `a569d5e` and pushed to `origin/main`.
+- Built `adaptive_scalper/regimes/classifier.py` (directive section 13):
+  `classify_regime()` is a pure, stateless function of one
+  `FeatureSnapshot` -> TRENDING_UP/TRENDING_DOWN/RANGE/COMPRESSION/
+  VOLATILITY_EXPANSION/BREAKOUT/ERRATIC/UNKNOWN with a heuristic
+  confidence and reason string; missing underlying feature data resolves
+  to UNKNOWN rather than guessing. `RegimeTracker` adds the hysteresis
+  the directive requires ("do not close a position solely because one
+  noisy observation briefly flips regime") — its `confirmed_regime` only
+  changes after `min_confirmations` consecutive raw classifications
+  agree on the same new regime.
+  `tests/test_regime_classifier.py` (22 tests): every branch of the
+  classification decision tree, confidence always in [0,1], and the
+  tracker's hysteresis behavior including a candidate-streak-reset case
+  (a different candidate interrupting a streak must restart the count,
+  not carry over) and a confirmed-regime-reoccurring case (a raw
+  observation matching the currently-confirmed regime again must reset
+  any in-progress candidate streak for a different regime).
+- **TESTED (live)**: walked causally through the last ~2000 real XAUUSD
+  M5 bars (from the earlier bootstrap) computing features + tracked
+  regime at each step, one bar at a time using only bars up to that
+  point (respecting the feature engine's no-lookahead contract) — no
+  crash; the resulting confirmed-regime distribution (RANGE dominant,
+  with real COMPRESSION/TRENDING/ERRATIC periods) matches the intuitive
+  expectation for a short-timeframe market.
+- Full suite: 263 passed, 0 failed, 0 skipped.

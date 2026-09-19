@@ -365,6 +365,39 @@ schema version/timestamp recording, multi-resolution composition.
 bootstrapped earlier this session — completed instantly, all fields
 populated with sane values, no crash on the full real dataset.
 
+### `adaptive_scalper/regimes/` — deterministic regime classification (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive section 13. `classify_regime()` is a pure, stateless function
+of one `FeatureSnapshot` — TRENDING_UP/TRENDING_DOWN/RANGE/COMPRESSION/
+VOLATILITY_EXPANSION/BREAKOUT/ERRATIC/UNKNOWN, each with a heuristic
+0..1 confidence (documented as heuristic, not a calibrated probability)
+and a `reason` string. Missing underlying feature data (`efficiency_ratio`/
+`range_expansion_ratio` is `None`) resolves to `UNKNOWN`, never a guess.
+`RegimeTracker` adds the hysteresis the directive explicitly requires
+("do not close a position solely because one noisy observation briefly
+flips regime"): its `confirmed_regime` only changes after
+`min_confirmations` consecutive raw classifications agree on the same
+new regime — a single noisy bar cannot flip it. `REGIME_VERSION` is
+persisted on every classification for future journal/decision-chain
+linkage once the journal exists.
+
+`tests/test_regime_classifier.py` (22 tests): every regime branch
+(missing-data → UNKNOWN, wide+decisive → BREAKOUT, wide+choppy → ERRATIC,
+wide+no-direction → VOLATILITY_EXPANSION, narrow → COMPRESSION,
+high-efficiency+persistent → TRENDING_UP/DOWN, low-efficiency → RANGE,
+ambiguous middle → RANGE default), confidence always in `[0,1]`, every
+returned regime is a known state, and `RegimeTracker`'s hysteresis
+(does-not-flip-on-one-observation, flips-after-N-confirmations,
+candidate-streak-resets-on-a-different-candidate,
+streak-resets-when-a-raw-observation-matches-the-currently-confirmed-
+regime-again, rejects `min_confirmations < 1`).
+**TESTED (live)**: walked causally through the last ~2000 real XAUUSD M5
+bars (bootstrapped earlier this session) computing features + regime at
+each step — completed with no crash; confirmed-regime distribution
+(RANGE dominant, with real COMPRESSION/TRENDING/ERRATIC periods) matches
+the intuitive expectation that a short-timeframe market spends most of
+its time ranging, not trending.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -423,14 +456,14 @@ next major workstream (see "Current next task").
 ## Current next task
 
 Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is
-now in progress: the feature engine exists (see above). Immediately next,
-in directive dependency order: regime classification (consumes
-`FeatureSnapshot`), then the six active strategies behind a common
-interface plus the retirement firewall's structural regression tests,
-then building the composed final permission gate incrementally as each
-further dependency (news, cost, correlation, portfolio, risk) lands. A
-live tick-bootstrap run (currently only fake-tested + individual live
-gateway-call verification) remains a smaller open item from Phase 2.
+in progress: the feature engine and regime classifier both exist (see
+above). Immediately next, in directive dependency order: the six active
+strategies behind a common interface plus the retirement firewall's
+structural regression tests, then building the composed final permission
+gate incrementally as each further dependency (news, cost, correlation,
+portfolio, risk) lands. A live tick-bootstrap run (currently only
+fake-tested + individual live gateway-call verification) remains a
+smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -459,14 +492,15 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 241 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 263 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_kill_switch.py`,
 `test_guardrails.py`, `test_demo_gate.py`, `test_symbol_resolver.py`,
 `test_symbol_validation.py`, `test_synchronized_gateway.py`,
 `test_dashboard_health.py`, `test_cli.py`, `test_history_bootstrap.py`,
-`test_account_history.py`, `test_bar_features.py`, and
-`test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
-currently connected on this machine).
+`test_account_history.py`, `test_bar_features.py`,
+`test_regime_classifier.py`, and `test_mt5_gateway_live.py`
+(live-terminal-only, self-skipping — 7 tests, currently connected on
+this machine).
 
 ## Unverified components
 
