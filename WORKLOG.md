@@ -191,3 +191,24 @@ Chronological, factual record of initialization events. Append only.
   blanket `data/` (raw market/tick data will live there and is not source
   to be committed).
 - Full suite: 109 passed, 0 failed, 0 skipped.
+- Committed as `7a2d840` ("Implement MT5 gateway foundation and symbol
+  mapping"). Not pushed; no remote configured.
+- Added `tests/test_mt5_gateway_live.py`: a live, self-skipping smoke test
+  for the real `Mt5Gateway` class (the one piece of the gateway layer
+  that had only been exercised via ad-hoc manual calls, not an automated
+  test). Ran for real on this machine: confirmed `Mt5Gateway`'s typed
+  wrappers work, the connected account is genuinely DEMO,
+  `verify_demo_before_order()` allows against it, and — genuinely
+  resolved, not fabricated — all three canonical symbols (XAUUSD, GBPJPY,
+  BTCUSD) exist under their exact canonical names on IC Markets Global.
+  Skips cleanly on any machine without a live terminal, so it cannot
+  break portability elsewhere.
+- Removed a duplicate/conflicting pytest config: `pyproject.toml` had its
+  own `[tool.pytest.ini_options]` alongside `pytest.ini`, which pytest was
+  silently ignoring in favor of `pytest.ini` while printing a warning
+  every run. `pytest.ini` is CLAUDE.md's documented canonical location, so
+  removed the duplicate section from `pyproject.toml` and left a comment
+  explaining why.
+- Full suite: 116 passed on this machine (109 + 7 live), 0 failed, 0
+  skipped. On a machine without a live MT5 terminal: 109 passed, 7
+  skipped (not failed).

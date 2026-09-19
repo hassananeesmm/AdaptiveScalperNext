@@ -83,24 +83,33 @@ definitions.
   - `symbol_resolver.py` — exact + capped-affix alias matching, fails
     closed on no-match/ambiguous, persists to the new `symbol_mapping`
     table (migration `0002`). Fully unit-tested.
+  - `tests/test_mt5_gateway_live.py` — live, skip-if-unavailable smoke
+    test. Runs for real on this machine (see "Live MT5 environment"):
+    verified `Mt5Gateway.account_info()`/`terminal_info()` return
+    well-typed snapshots, the connected account is genuinely DEMO,
+    `verify_demo_before_order()` allows against it, and — real, not
+    fabricated — all three canonical symbols (XAUUSD, GBPJPY, BTCUSD)
+    resolve as EXACT_MATCH against IC Markets Global's live symbol list.
+    Skips cleanly (does not fail) on any machine without a live terminal.
 
 ## Implementation status
 
 No market data ingestion, no strategies, no execution path yet. Trading
-(even PAPER) cannot run. The MT5 gateway wrapper exists but has not yet
-been exercised by an automated test against a real terminal (see
-"Unverified components").
+(even PAPER) cannot run. The MT5 gateway wrapper is now verified against
+a real (DEMO) terminal on this machine (see above) — still unverified on
+any other environment.
 
 ## Live MT5 environment (this machine only)
 
 This development machine has a real MT5 terminal already installed and
 logged in: IC Markets Global, server `ICMarketsSC-Demo`,
-`trade_mode=0` (DEMO per MT5's `ENUM_ACCOUNT_TRADE_MODE`), confirmed via
-a direct, ad-hoc `MetaTrader5.account_info()`/`terminal_info()` call
-(read-only). This is NOT something to assume is true on any other
-machine or CI — do not write code or tests that require it. No
-`order_send`/`order_check` call has been made or is planned without
-explicit operator sign-off.
+`trade_mode=0` (DEMO per MT5's `ENUM_ACCOUNT_TRADE_MODE`). All three
+canonical symbols (XAUUSD, GBPJPY, BTCUSD) exist on this broker under
+their exact canonical names — confirmed live via
+`tests/test_mt5_gateway_live.py`, not assumed. This is NOT something to
+assume is true on any other machine or CI — do not write non-skipping
+code or tests that require it. No `order_send`/`order_check` call has
+been made or is planned without explicit operator sign-off.
 
 ## Authoritative specification
 
@@ -160,11 +169,11 @@ these to actually be excluded from.
 
 ## Current next task
 
-Write a live (skip-if-unavailable) smoke test for `Mt5Gateway` against
-this machine's real terminal — currently the only untested piece of the
-gateway layer. Then continue Phase 1: basic dashboard health endpoint,
-and start composing `gateway` + `core.permission` toward the real final
-permission gate as each dependency (news, cost, risk, etc.) lands.
+Continue Phase 1: basic dashboard health endpoint (FastAPI, directive
+§83/§108, bind 127.0.0.1 only), then start Phase 2 (five-year bar/tick
+bootstrap) or Phase 3 (features/regime/strategies) groundwork, composing
+`gateway` + `core.permission` toward the real final permission gate as
+each dependency (news, cost, risk, etc.) lands.
 
 ## Current git commit
 
@@ -187,7 +196,8 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 ## Tests
 
-109 passed, 0 failed, 0 skipped:
+116 passed, 0 failed, 0 skipped (on this machine; 109 on any machine
+without a live MT5 terminal, where `test_mt5_gateway_live.py` self-skips):
 - `tests/test_environment.py` (1)
 - `tests/test_config.py` (24)
 - `tests/test_persistence.py` (7)
@@ -195,17 +205,18 @@ None yet — no ML models implemented (Stage 0, directive §61).
 - `tests/test_guardrails.py` (23)
 - `tests/test_demo_gate.py` (12)
 - `tests/test_symbol_resolver.py` (16)
+- `tests/test_mt5_gateway_live.py` (7 — live-terminal-only, self-skipping)
 
-All of the above are deterministic (FakeGateway/mocks/tmp SQLite) and
-portable to any machine.
+Everything except `test_mt5_gateway_live.py` is deterministic
+(FakeGateway/mocks/tmp SQLite) and portable to any machine.
 
 ## Unverified components
 
-- `adaptive_scalper/gateway/mt5_gateway.py` (the real `Mt5Gateway` class)
-  — no automated test exercises it yet. Ad-hoc, manual, read-only calls
-  directly against the `MetaTrader5` package (not through this wrapper
-  class) confirmed `initialize()`/`account_info()`/`terminal_info()` work
-  on this machine's live DEMO terminal, but that is not the same as
-  `Mt5Gateway` itself being tested.
 - Broker account history, order execution, reconciliation, position
   management — not implemented at all yet.
+- `Mt5Gateway` has only been exercised read-only (`account_info`,
+  `terminal_info`, `symbols_get`, `symbol_info_tick`) against ONE broker
+  (IC Markets Global). Behavior against a different broker's symbol
+  naming/specification quirks is unverified. `copy_rates_from_pos` (bar
+  history) is implemented but not yet exercised by any test, live or
+  fake.
