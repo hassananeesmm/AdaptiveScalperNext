@@ -516,6 +516,80 @@ produced (391 `SIGNAL_CREATED` events) into the actual persistent
 applied (not a tmp test DB) — confirmed readable back via
 `get_events_by_type()`.
 
+### `adaptive_scalper/news/` — keyless economic news system (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive sections 38-44. `EconomicCalendarProvider` protocol
+(`provider.py`) + normalized `EconomicEvent` (`types.py`, directive
+section 39's full field list). `blocking.py` is the safety-critical,
+pure-function core — no I/O, fully testable without network:
+`evaluate_news_block()` checks calendar health FIRST (STALE/UNAVAILABLE
+→ `BLOCK_NEWS_CALENDAR_UNAVAILABLE`, CONFLICT →
+`BLOCK_NEWS_PROVIDER_CONFLICT`, unconditionally, before ever looking at
+events — directive section 43's core requirement), then the systemic
+FOMC/US_CPI/US_CORE_CPI/US_NFP global blockers (all 3 symbols) and the
+per-symbol currency-relevance mapping (XAUUSD/BTCUSD: USD;
+GBPJPY: GBP, JPY), using a 15-min-pre/30-min-post window with an
+**inclusive start, exclusive end** boundary — matching directive section
+41's exact worked example (16:15:00 blocked, 16:59:59 blocked, 17:00:00
+clear) byte-for-byte; this boundary detail was caught wrong on the first
+attempt (inclusive end) and fixed against that exact worked example
+before anything else touched it.
+
+**Honesty note on the PRIMARY provider**: the directive names
+"FinanceCalendar" as the keyless PRIMARY source. A real web search
+during implementation found no genuine, distinct, official, keyless,
+structured-JSON service by that name. Per directive section 138's own
+acceptance-checklist escape valve ("FinanceCalendar primary implemented
+OR actual limitation documented"), `providers/financecalendar.py` is an
+honest, explicit stub — `fetch()` always raises immediately with no
+network call, documented as a real limitation, not faked. The fallback
+chain treats this exactly like any other primary failure and proceeds to
+SECONDARY.
+
+- `providers/forexfactory.py` — the REAL, live-verified SECONDARY
+  provider: Forex Factory's public JSON feed
+  (`nfs.faireconomy.media/ff_calendar_thisweek.json`), no API key, no
+  HTML scraping. Live-verified returning genuine structured events
+  (schema: title/country/date/impact/forecast/previous) AND, separately,
+  a genuine HTTP 429 "Rate Limited" response under repeated polling
+  during development — exactly the real-world provider-failure case
+  `ProviderError` exists to surface rather than silently swallow.
+- `providers/cache.py` — TERTIARY last-known-good local cache
+  (migration `0007_news.sql`: `news_events`, `news_provider_state`).
+  Raises if never populated or if the newest cached data exceeds
+  `max_age_seconds` — staleness is a real, checked failure mode, not
+  assumed away.
+- `providers/manual.py` — OPTIONAL operator-supplied normalized JSON
+  fallback, never used automatically.
+- `calendar_service.fetch_with_fallback()` — tries every live provider
+  (not just the first), so PRIMARY/SECONDARY can be cross-checked for
+  conflict; persists every success to cache; falls back to cache only
+  when every live provider fails; reports `UNAVAILABLE` (never a silent
+  empty "no news") when even the cache can't help.
+
+`tests/test_news_blocking.py` (34 tests, no network) + 
+`tests/test_news_providers.py` (26 tests, HTTP mocked) +
+`tests/test_news_calendar_service.py` (8 tests) = 68 total: the exact
+directive-worked 16:30-event timeline, systemic-event blocking for all
+three symbols, per-symbol currency relevance, LOW/MEDIUM impact never
+blocking, calendar-outage/conflict precedence over normal window logic,
+every provider's success/failure/malformed-input paths, cache
+staleness, and the fallback chain's provider-selection, persistence, and
+conflict-detection behavior.
+
+**TESTED (live)**: ran the complete real fallback chain
+(FinanceCalendar stub → real ForexFactory fetch, 105 real events, 16
+real HIGH-impact) against the actual persistent database with migration
+0007 applied — correctly identified a genuine upcoming real FOMC week
+(Federal Funds Rate / FOMC Economic Projections / FOMC Statement, all at
+one timestamp, plus a separate FOMC Press Conference 30 minutes later).
+Verified the full real timeline around that real event: ALLOW 20 minutes
+before, BLOCK 10 minutes before through the Statement, still BLOCK 20-35
+minutes after (correctly extended by the real, distinct Press Conference
+event's own window, not a bug) — genuine real-world data exercising a
+real overlapping-events case the synthetic unit tests didn't happen to
+cover.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -579,20 +653,18 @@ subsystem is built, not assumed safe by extension.
 
 Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is in
 progress: feature engine, regime classifier, six active strategies +
-retirement firewall, and the immutable decision journal all exist (see
-above). Immediately next, in directive dependency order (matching the
-operating loop in directive section 14, which places JOURNAL right after
-ACTIVE STRATEGIES and before RAG/cost/correlation/risk): news system,
-cost model + expected-net-edge, correlation/portfolio, risk governor,
-then composing the full final permission gate as each lands — and
-journaling each gate's ENTRY_ALLOWED/ENTRY_BLOCKED decision as it's
-built, not retrofitted later. `order_send` remains locked (must not be
-added) until the journal, cost/edge, portfolio/risk, full final
-permission gate, execution state machine, idempotency, UNKNOWN handling,
-reconciliation, and a fresh DEMO interlock are ALL in place — journal is
-now done; the rest are not. A live tick-bootstrap run (currently only
-fake-tested + individual live gateway-call verification) remains a
-smaller open item from Phase 2.
+retirement firewall, the immutable decision journal, and the keyless
+news system all exist (see above). Immediately next: cost model +
+expected-net-edge, correlation/portfolio heat, risk governor (sole
+sizing authority), then composing the full final permission gate as each
+lands — journaling each gate's ENTRY_ALLOWED/ENTRY_BLOCKED decision as
+it's built. `order_send` remains locked (must not be added) until
+cost/edge, portfolio/risk, the full final permission gate, execution
+state machine, idempotency, UNKNOWN handling, reconciliation, and a
+fresh DEMO interlock are ALL in place — journal and news are now done;
+the rest are not. A live tick-bootstrap run (currently only fake-tested
++ individual live gateway-call verification) remains a smaller open item
+from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -610,8 +682,9 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-6 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
-`0004_historical_data`, `0005_broker_account_history`, `0006_journal`).
+7 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+`0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
+`0007_news`).
 
 ## Model state
 
@@ -621,14 +694,15 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 341 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 401 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
 `test_synchronized_gateway.py`, `test_dashboard_health.py`, `test_cli.py`,
 `test_history_bootstrap.py`, `test_account_history.py`,
 `test_bar_features.py`, `test_regime_classifier.py`, `test_strategies.py`,
-`test_strategy_registry.py`, `test_journal.py`, and
+`test_strategy_registry.py`, `test_journal.py`, `test_news_blocking.py`,
+`test_news_providers.py`, `test_news_calendar_service.py`, and
 `test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
 currently connected on this machine).
 

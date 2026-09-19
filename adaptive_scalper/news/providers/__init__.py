@@ -1,0 +1,1 @@
+"""Concrete EconomicCalendarProvider implementations."""

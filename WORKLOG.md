@@ -647,3 +647,61 @@ Chronological, factual record of initialization events. Append only.
   `get_events_by_type()`. This is exploratory verification data in a
   gitignored local database, not a claim of any production trading
   activity.
+- Committed as `0f0f633` and pushed to `origin/main`.
+- Built `adaptive_scalper/news/` (directive sections 38-44), continuing
+  automatically per the mission's explicit instruction not to stop at
+  the journal or any phase boundary:
+  - Confirmed real outbound network access works in this environment,
+    then investigated the directive's named PRIMARY provider,
+    "FinanceCalendar." A web search found no genuine, distinct,
+    official, keyless, structured-JSON economic-calendar service by
+    that name. Rather than fabricate an integration, used directive
+    section 138's own acceptance-checklist escape valve
+    ("FinanceCalendar primary implemented OR actual limitation
+    documented"): `providers/financecalendar.py` is an explicit,
+    documented stub whose `fetch()` always raises immediately with no
+    network call.
+  - Found and verified the REAL public Forex Factory JSON feed
+    (`nfs.faireconomy.media/ff_calendar_thisweek.json`) — no API key,
+    structured JSON, not HTML scraping. Confirmed its real schema
+    (title/country/date/impact/forecast/previous) and, on a second live
+    call minutes later, a genuine HTTP 429 "Rate Limited" response —
+    real, first-hand evidence for exactly the provider-failure case
+    `ProviderError` exists to surface rather than treat as "no events."
+  - `blocking.py`: pure, no-I/O decision logic. Calendar
+    outage/staleness/conflict checked BEFORE the event-window logic
+    (directive section 43). Systemic FOMC/CPI/NFP events block all
+    three symbols; other HIGH-impact events block only via each
+    symbol's currency relevance (XAUUSD/BTCUSD: USD; GBPJPY: GBP, JPY).
+    Window is 15-min-pre/30-min-post by default. First implementation
+    used an inclusive window end; directive section 41's own worked
+    example (16:30 event, 17:00:00 must be clear) caught this wrong via
+    a dedicated regression test before anything else touched the code —
+    fixed to inclusive-start/exclusive-end, matching the example
+    exactly.
+  - `calendar_service.fetch_with_fallback()`: tries every live provider
+    (enables PRIMARY/SECONDARY conflict cross-checking, not just
+    first-success), persists every success to the new `news_events`
+    cache (migration `0007_news.sql`), falls back to cache only when
+    every live provider fails, and reports `UNAVAILABLE` rather than a
+    silent empty result when even the cache can't help.
+  - `providers/manual.py`: optional operator-supplied normalized JSON
+    fallback (never used automatically).
+  - 68 new tests across `test_news_blocking.py` (34, no network),
+    `test_news_providers.py` (26, HTTP mocked via monkeypatching
+    `httpx.get` — no real network calls in the test suite itself),
+    and `test_news_calendar_service.py` (8).
+  - Full suite: 401 passed, 0 failed, 0 skipped.
+- **TESTED (live)**: ran the complete real fallback chain against the
+  actual persistent database with migration 0007 applied — FinanceCalendar
+  correctly failed and fell through; ForexFactory returned 105 real
+  events (16 real HIGH-impact), correctly identifying a genuine upcoming
+  FOMC week. Verified the real block timeline around that real event:
+  ALLOW 20 minutes before, BLOCK from 10 minutes before through 35
+  minutes after — the continued block past the expected 30-minute
+  post-window was investigated, not assumed to be a bug, and traced to a
+  second, genuinely distinct real event in the same feed ("FOMC Press
+  Conference," scheduled exactly 30 minutes after the Statement) whose
+  own window correctly extended the block. This is real production news
+  data exercising a real overlapping-events case none of the synthetic
+  unit tests happened to construct.
