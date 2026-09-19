@@ -463,3 +463,35 @@ Chronological, factual record of initialization events. Append only.
 - Full suite: 218 passed, 0 failed, 0 skipped (24 new symbol_validation
   tests + 3 new synchronized_gateway tests on top of the 191 from the
   Phase 2 commit).
+- Committed as `4f7c762` and pushed to `origin/main`.
+- Started Phase 3 (CORE TRADING): built `adaptive_scalper/features/
+  bar_features.py`, the causal feature engine (directive section 11).
+  `compute_bar_features()` treats the last element of its input bar list
+  as "now" and only reads backward from there — the list itself is the
+  causal boundary, locked in by a no-lookahead regression test (mutating
+  bars beyond a computed prefix cannot change that prefix's already-
+  computed snapshot). Implements returns/log-returns, realized
+  volatility, ATR/normalized range, momentum, velocity/acceleration,
+  Kaufman efficiency ratio, directional persistence, range-expansion
+  ratio, candle body/wick ratios, recent high/low, spread + spread
+  percentile, movement-to-cost (needs an optional point_size param —
+  stays `None` without it rather than mixing MT5 "points" and price
+  units incorrectly), and session/hour/weekday tagging. Explicitly named
+  (not silently skipped) gaps: swing/support-resistance structure,
+  tick-frequency features, and cross-symbol correlation (belongs to the
+  not-yet-built portfolio module). `compute_multi_resolution_features()`
+  composes one snapshot per resolution.
+  `tests/test_bar_features.py` (23 tests): validation, insufficient-data
+  → honest `None` fields, the no-lookahead regression test, and
+  hand-checked formula correctness — e.g. efficiency ratio = 1.0 exactly
+  for a constructed perfect trend and < 0.3 for a choppy alternating
+  series; body+upper_wick+lower_wick ratios proven to sum to exactly
+  1.0 (this holds algebraically for any bar, not just the test fixture —
+  verified both by direct calculation and by the general test).
+- **TESTED (live)**: ran `compute_bar_features` against the real
+  100,000-row XAUUSD M1 bar history bootstrapped earlier this session —
+  completed instantly, every field populated with sane values (e.g.
+  `spread_current=40.0` matching the widened Friday-close spread observed
+  directly against the live terminal earlier), no crash on the full real
+  dataset.
+- Full suite: 241 passed, 0 failed, 0 skipped.

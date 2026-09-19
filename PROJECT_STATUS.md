@@ -329,6 +329,42 @@ command — `history bootstrap` already re-run is incremental via its job
 checkpoints, `journal recent`, `reconcile`, `why-no-trade`, `backtest`,
 `walk-forward`, `monte-carlo`).
 
+### `adaptive_scalper/features/` — causal feature engine (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive section 11. `bar_features.compute_bar_features()` takes a
+strictly-ascending, non-empty `list[Bar]` and treats the LAST bar as
+"now" — the list itself is the causal boundary; nothing in the function
+can see beyond what's passed. Raises `FeatureError` on empty input or
+out-of-order/duplicate timestamps rather than silently reordering.
+Implemented fields: returns/log-returns, realized volatility, ATR
+(simple mean of true range, not Wilder-smoothed) + normalized range,
+momentum, velocity/acceleration, Kaufman efficiency ratio, directional
+persistence, range-expansion ratio, candle body/wick ratios (which
+always exactly partition the full bar range — verified algebraically and
+by test), recent high/low, spread + spread percentile, movement-to-cost
+(requires an optional `point_size` param — `None` without it, never a
+unit-mismatched fake number), and session/hour/weekday tagging (a
+descriptive UTC-hour bucket, not a performance claim). Individual fields
+needing more history than provided are `None`, never fabricated.
+**Explicitly NOT yet implemented** (named gaps, not silent omissions):
+swing/support-resistance structure, tick-frequency-derived features
+(need raw ticks, not bars), and cross-symbol correlation (belongs to the
+not-yet-built correlation/portfolio module, not a single-symbol feature
+engine). `compute_multi_resolution_features()` composes one snapshot per
+resolution (directive section 12: no resolution is privileged).
+
+`tests/test_bar_features.py` (23 tests): input validation, insufficient-
+data fields correctly `None`, a no-lookahead regression test (mutating
+bars beyond a computed prefix cannot change that prefix's snapshot),
+hand-checked formula correctness (efficiency ratio = 1.0 for a perfect
+trend / near-0 for a choppy alternating series, directional persistence,
+body+wick ratios summing to exactly 1.0, range expansion, spread
+percentile, movement-to-cost with/without point_size), session bucketing,
+schema version/timestamp recording, multi-resolution composition.
+**TESTED (live)**: ran against the real 100,000-row XAUUSD M1 bar history
+bootstrapped earlier this session — completed instantly, all fields
+populated with sane values, no crash on the full real dataset.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -386,20 +422,15 @@ next major workstream (see "Current next task").
 
 ## Current next task
 
-Directive Phase 2 (HISTORY) is substantially complete (bar bootstrap and
-broker account history both live-verified). Immediately next, in
-directive dependency order:
-
-1. A live tick-bootstrap run (currently only fake-tested + individual
-   live gateway-call verification — a full run including ticks hasn't
-   been executed; likely large volume, measure before assuming the
-   current 30-day default is practical).
-2. Phase 3 (CORE TRADING) — this is the large remaining scope: the
-   feature engine (causal, no-lookahead), regime classification, the six
-   active strategies behind a common interface plus the retirement
-   firewall's structural regression tests, then building the composed
-   final permission gate incrementally as each further dependency (news,
-   cost, correlation, portfolio, risk) lands.
+Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is
+now in progress: the feature engine exists (see above). Immediately next,
+in directive dependency order: regime classification (consumes
+`FeatureSnapshot`), then the six active strategies behind a common
+interface plus the retirement firewall's structural regression tests,
+then building the composed final permission gate incrementally as each
+further dependency (news, cost, correlation, portfolio, risk) lands. A
+live tick-bootstrap run (currently only fake-tested + individual live
+gateway-call verification) remains a smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -428,13 +459,14 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 218 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 241 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_kill_switch.py`,
 `test_guardrails.py`, `test_demo_gate.py`, `test_symbol_resolver.py`,
 `test_symbol_validation.py`, `test_synchronized_gateway.py`,
 `test_dashboard_health.py`, `test_cli.py`, `test_history_bootstrap.py`,
-`test_account_history.py`, and `test_mt5_gateway_live.py` (live-terminal-
-only, self-skipping — 7 tests, currently connected on this machine).
+`test_account_history.py`, `test_bar_features.py`, and
+`test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
+currently connected on this machine).
 
 ## Unverified components
 
