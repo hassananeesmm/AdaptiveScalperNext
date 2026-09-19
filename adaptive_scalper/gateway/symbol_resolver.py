@@ -21,10 +21,25 @@ EXACT_MATCH = "exact_match"
 ALIAS_MATCH = "alias_match"
 
 # A broker alias is the canonical name with an optional short non-alphanumeric
-# prefix and/or a short alphanumeric suffix, e.g. "XAUUSD.a", "XAUUSDm",
-# "#XAUUSD", "XAUUSD_i". Capped suffix/prefix length avoids accidentally
-# matching an unrelated symbol that merely starts with the same letters.
-_ALIAS_RE_TEMPLATE = r"^[^A-Za-z0-9]{0,2}%s[^A-Za-z0-9]{0,1}[A-Za-z0-9]{0,3}$"
+# prefix, and an optional suffix that is EITHER a delimiter (any non-alnum
+# char) followed by up to 4 alnum chars, OR up to 3 lowercase-only chars
+# with no delimiter (typical broker markers: "m", "pro", "ecn", "raw").
+#
+# The suffix branches are deliberately asymmetric on case: a no-delimiter
+# suffix must be lowercase. An uppercase no-delimiter suffix is far more
+# likely to be a different quote currency/asset than a broker marker —
+# e.g. "XAUUSDT" (gold priced in Tether, a genuinely different instrument
+# on many brokers/exchanges) must NOT alias-match "XAUUSD", but it did
+# under an earlier version of this pattern that allowed any 0-3 alnum
+# chars regardless of case. Caught by security review before release; see
+# tests/test_symbol_resolver.py::test_currency_like_suffix_does_not_alias_match.
+#
+# `(?i:...)` scopes case-insensitivity to just the canonical-symbol
+# portion (Python 3.11+ scoped inline flags) so the trailing lowercase-only
+# branch isn't also made case-insensitive by a blanket re.IGNORECASE.
+_ALIAS_RE_TEMPLATE = (
+    r"^[^A-Za-z0-9]{0,2}(?i:%s)(?:[^A-Za-z0-9][A-Za-z0-9]{0,4}|[a-z0-9]{0,3})?$"
+)
 
 
 @dataclass(frozen=True)
@@ -37,7 +52,11 @@ class ResolutionResult:
 
 
 def _alias_pattern(canonical: str) -> re.Pattern:
-    return re.compile(_ALIAS_RE_TEMPLATE % re.escape(canonical), re.IGNORECASE)
+    # No blanket re.IGNORECASE here — case sensitivity is scoped inline via
+    # (?i:...) around just the canonical-symbol portion of the template
+    # (see _ALIAS_RE_TEMPLATE's comment for why the suffix must stay
+    # case-sensitive).
+    return re.compile(_ALIAS_RE_TEMPLATE % re.escape(canonical))
 
 
 def resolve_symbol(canonical: str, broker_symbols: list[SymbolSpec]) -> ResolutionResult:

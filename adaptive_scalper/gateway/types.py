@@ -21,6 +21,43 @@ class TradeMode(IntEnum):
     REAL = 2
 
 
+class SymbolTradeMode(IntEnum):
+    """Mirrors MT5's ENUM_SYMBOL_TRADE_MODE (per-symbol trading
+    permission — distinct from the account-level TradeMode above).
+
+    Per external architecture review: this must be preserved as its full
+    5-state enum, not flattened into one boolean. A CLOSE_ONLY symbol, for
+    example, may allow reducing an existing position but must never allow
+    new exposure — a bool can't express that distinction, so callers that
+    only check "is trading allowed" would incorrectly treat CLOSE_ONLY the
+    same as FULL.
+    """
+
+    DISABLED = 0    # no trading at all
+    LONGONLY = 1    # only BUY orders/positions
+    SHORTONLY = 2   # only SELL orders/positions
+    CLOSEONLY = 3   # only closing existing positions; no new exposure
+    FULL = 4        # unrestricted
+
+    @property
+    def allows_new_long(self) -> bool:
+        return self in (SymbolTradeMode.LONGONLY, SymbolTradeMode.FULL)
+
+    @property
+    def allows_new_short(self) -> bool:
+        return self in (SymbolTradeMode.SHORTONLY, SymbolTradeMode.FULL)
+
+    @property
+    def allows_any_new_exposure(self) -> bool:
+        return self.allows_new_long or self.allows_new_short
+
+    @property
+    def allows_close(self) -> bool:
+        # Every non-DISABLED mode allows closing existing exposure —
+        # risk reduction is never blocked by a directional restriction.
+        return self != SymbolTradeMode.DISABLED
+
+
 @dataclass(frozen=True)
 class AccountSnapshot:
     login: int
@@ -62,7 +99,7 @@ class SymbolSpec:
     trade_tick_value: float
     spread: int
     visible: bool
-    trade_allowed: bool  # symbol-level trading permission
+    trade_mode: SymbolTradeMode
 
 
 @dataclass(frozen=True)

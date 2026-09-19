@@ -212,3 +212,60 @@ Chronological, factual record of initialization events. Append only.
 - Full suite: 116 passed on this machine (109 + 7 live), 0 failed, 0
   skipped. On a machine without a live MT5 terminal: 109 passed, 7
   skipped (not failed).
+
+- Discovered `origin` (https://github.com/hassananeesmm/AdaptiveScalperNext.git,
+  branch `main`) already configured as the git remote and already at
+  93b16b1 (matching local HEAD at the time) — pushed by the user/external
+  process outside this session, not by an action taken here.
+
+- Received an external architecture/security review (via the
+  security-guidance plugin's async commit-review hook) flagging a
+  parser-differential in `gateway/symbol_resolver.py`, and a separate,
+  more extensive external review of the whole architecture. Addressed
+  both in this increment — see BUG_BACKLOG.md's "Fixed" section for full
+  detail on each. Summary:
+  1. **Kill switch now fails closed on unknown state.** Replaced the
+     boolean `engaged` field with `KillSwitchStatus`
+     (`UNINITIALIZED`/`INVALID`/`ENGAGED`/`DISENGAGED`); a missing or
+     corrupted `app_state` row no longer reads as "safe to trade". Added
+     `bootstrap()` for the one-time, operator-authorized transition out
+     of `UNINITIALIZED`.
+  2. **Kill switch state + audit write are now atomic** (`BEGIN`/two
+     inserts/`COMMIT`, `ROLLBACK` on failure) instead of two independent
+     autocommit statements.
+  3. **`clear()`/`bootstrap()` now require `OperatorAuthority`**, a typed
+     capability object (`adaptive_scalper/core/operator_authority.py`),
+     not a bare `actor_role: str`. Documented honestly: this is a code
+     review/import-boundary convention, not cryptographic access control
+     — Python can't prevent arbitrary construction. Real strengthening
+     (session/token checks) is a documented future drop-in upgrade.
+  4. **Symbol resolution now validates broker state, not just the
+     name**: new `gateway/symbol_validation.py` re-checks trade mode,
+     contract-spec sanity, and a live fresh quote, failing closed on any
+     doubt. Persisted alongside the mapping (migration
+     `0003_symbol_validation`).
+  5. **`SymbolSpec` now preserves MT5's full 5-state symbol trade mode**
+     (`SymbolTradeMode`: `DISABLED`/`LONGONLY`/`SHORTONLY`/`CLOSEONLY`/
+     `FULL`) instead of a flattened boolean, with
+     `allows_new_long`/`allows_new_short`/`allows_close` helpers so a
+     future order-validation layer can correctly treat `CLOSE_ONLY` as
+     "may reduce risk, may not open new exposure" rather than either
+     fully-allowed or fully-blocked.
+  6. **Pinned canonical Python to 3.13** in `pyproject.toml`
+     (`requires-python = ">=3.13,<3.14"`) and tightened
+     `tests/test_environment.py` to assert the exact 3.13.x range rather
+     than merely `>= 3.11`.
+  7. **Pinned exact dependency versions** in `requirements.txt` (were
+     `>=` minimums) for fresh-clone reproducibility.
+  8. **Rewrote `PROJECT_STATUS.md`** with an explicit
+     IMPLEMENTED/CONNECTED/TESTED (fake)/TESTED (live)/UNVERIFIED/KNOWN
+     DEFECT tag on every component, removing prior stale-sounding
+     language (e.g. a prior version's Phase-1 "next task" line still
+     said to build the DEMO interlock/resolver after they already
+     existed and were tested).
+  9. `BUG_BACKLOG.md`'s existing entry for the migration splitter's
+     "not a real tokenizer" limitation left open and unchanged (still
+     accurate — the "Fixed" item this pass was the specific
+     comment-semicolon manifestation of it, tracked separately).
+- Test suite after all of the above: 145 passed, 0 failed, 7 skipped (no
+  live MT5 terminal currently connected — see PROJECT_STATUS.md).

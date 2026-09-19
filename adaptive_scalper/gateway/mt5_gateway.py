@@ -16,6 +16,7 @@ from adaptive_scalper.gateway.types import (
     AccountSnapshot,
     Bar,
     SymbolSpec,
+    SymbolTradeMode,
     TerminalSnapshot,
     Tick,
     TradeMode,
@@ -80,7 +81,7 @@ def _symbol_spec(raw) -> SymbolSpec:
         trade_tick_value=raw.trade_tick_value,
         spread=raw.spread,
         visible=bool(raw.visible),
-        trade_allowed=raw.trade_mode != 0,  # SYMBOL_TRADE_MODE_DISABLED == 0
+        trade_mode=SymbolTradeMode(raw.trade_mode),
     )
 
 

@@ -11,12 +11,15 @@ now against nonexistent subsystems would be exactly the "showpiece
 module" section 118 forbids.
 
 What IS fully specified and testable today is the kill-switch policy
-(section 37): ENGAGED blocks NEW exposure, but existing-position
-management (monitoring, protective-stop moves, application close) and
-reconciliation must continue regardless. This module implements exactly
-that slice, using the directive's own block-reason vocabulary
-(BLOCK_KILL_SWITCH, section 36) so the eventual full gate can compose it
-directly instead of re-implementing the same check.
+(section 37): anything other than an explicit, operator-confirmed
+DISENGAGED state blocks NEW exposure (this includes ENGAGED, and — per
+the fail-closed design in kill_switch.py — UNINITIALIZED/INVALID too),
+but existing-position management (monitoring, protective-stop moves,
+application close) and reconciliation must continue regardless. This
+module implements exactly that slice, using the directive's own
+block-reason vocabulary (BLOCK_KILL_SWITCH, section 36) so the eventual
+full gate can compose it directly instead of re-implementing the same
+check.
 """
 
 from __future__ import annotations
@@ -53,6 +56,6 @@ def evaluate_kill_switch_permission(
     directive section 37: "Safe existing-position management and
     reconciliation continue where appropriate."
     """
-    if action is ActionKind.NEW_ENTRY and state.engaged:
+    if action is ActionKind.NEW_ENTRY and state.blocks_new_entries:
         return PermissionResult(allowed=False, block_reason=BLOCK_KILL_SWITCH)
     return PermissionResult(allowed=True, block_reason=None)

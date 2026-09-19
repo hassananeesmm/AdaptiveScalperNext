@@ -1,6 +1,12 @@
 # Adaptive Scalper Next dependencies.
-# MetaTrader5, numpy/pandas/scikit-learn, fastapi/uvicorn, etc. are added
-# incrementally as the corresponding modules (gateway, features, ML,
-# dashboard) land, per MASTER_BUILD_DIRECTIVE.md section 113.
-pytest
-pydantic>=2.6
+# Pinned to exact versions actually installed/tested in .venv so a fresh
+# clone is reproducible (per external architecture review). numpy/pandas/
+# scipy/scikit-learn/joblib/jinja2 etc. are added when the corresponding
+# modules (features, ML, dashboard templates) actually land, per
+# MASTER_BUILD_DIRECTIVE.md section 113 — not speculatively.
+pytest==9.1.1
+pydantic==2.13.5
+fastapi==0.141.1
+uvicorn==0.53.0
+httpx==0.28.1
+MetaTrader5==5.0.6180  # Windows-only; import is confined to adaptive_scalper/gateway/mt5_gateway.py

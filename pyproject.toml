@@ -2,7 +2,11 @@
 name = "adaptive-scalper-next"
 version = "0.0.1"
 description = "PAPER + MT5 DEMO adaptive scalping research and execution platform"
-requires-python = ">=3.11"
+# Canonical project interpreter is C:\AdaptiveScalperNext\.venv\Scripts\python.exe,
+# built against 3.13 (directive section 113). Pinned <3.14 deliberately —
+# do not run this project's runtime against the machine's global Python
+# 3.14 install; it is untested here and not the canonical interpreter.
+requires-python = ">=3.13,<3.14"
 
 # Pytest config lives in pytest.ini (CLAUDE.md's documented canonical
 # location) — a [tool.pytest.ini_options] section here would be silently

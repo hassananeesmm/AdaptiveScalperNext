@@ -3,6 +3,15 @@
 Update this file continuously as work happens (not retroactively), per
 `CLAUDE.md` rule 10 and `MASTER_BUILD_DIRECTIVE.md` §137.
 
+Status tags used below, applied per component:
+
+- **IMPLEMENTED** — code exists and is believed correct.
+- **CONNECTED** — wired into a real call path (not just importable/dead code).
+- **TESTED (fake/mock)** — covered by deterministic tests (FakeGateway, tmp SQLite).
+- **TESTED (live)** — exercised against this machine's real MT5 terminal.
+- **UNVERIFIED** — no automated test exercises it yet.
+- **KNOWN DEFECT** — see BUG_BACKLOG.md for detail.
+
 ## Project
 
 Adaptive Scalper Next
@@ -14,117 +23,152 @@ C:\AdaptiveScalperNext
 ## Current phase
 
 PHASE 1 — FOUNDATION (in progress). See directive §117 for phase
-definitions.
+definitions. Not yet started: Phases 2-13.
 
 ## Completed components
 
-- Development environment: project venv at `.venv` (Python 3.13.15,
-  canonical interpreter for all project Python commands — do not use the
-  global Python 3.14 install), pytest configured.
-- Development safeguards:
-  - `.claude/hooks/guardrails.py` — deterministic, stdlib-only PreToolUse
-    hook (HARD BLOCK: writes/deletes targeting the sibling `C:\AdaptiveScalper`
-    project, real-money/live-trading enablement, hardcoded secrets (in
-    edit/write content and in a staged commit diff), full test-suite
-    deletion, destructive ops outside the project root, Claude Code
-    permission-bypass attempts; WARNING/ask: individual test
-    deletion, force push, `git reset --hard`, `git clean -f`, edits to
-    safety-boundary files, writes outside the project root not otherwise
-    covered). Wired via `.claude/settings.json`. Covered by
-    `tests/test_guardrails.py` (unit + subprocess end-to-end).
-  - `.claude/claude-security-guidance.md` + `.claude/security-patterns.json`
-    — project-specific guidance/patterns for the security-guidance plugin's
-    LLM review and regex layer (real-money enablement, retired-strategy
-    reactivation, symbol-allowlist edits, hardcoded MT5 credentials).
-  - `.claude/hookify-templates/` + `scripts/setup_claude_hooks.ps1` — source
-    of truth + idempotent regeneration/self-test script so the above
-    survives a fresh clone and a fresh machine.
-  - `.gitignore` updated for `.claude/settings.local.json` and hookify
-    `*.local.*` files.
-- `adaptive_scalper/config/` — hard safety constants
-  (`ALLOWED_CANONICAL_SYMBOLS`, `RETIRED_STRATEGY_KEYS`, `ALLOWED_MODES`,
-  directive §5/§8) plus a pydantic-validated TOML config loader
-  (`load_config`) that fails startup (`ConfigError`) on anything unsafe:
-  unknown symbols, a shrunk retired-strategy list, an unrecognized mode,
-  out-of-bounds risk values, or `news.fail_closed = false`. Shipped default
-  config at `config/default.toml`.
-- `adaptive_scalper/persistence/` — SQLite connection helper (WAL,
-  foreign_keys ON) and a migration runner (`migrate()`, idempotent,
-  transactional per migration). First migration (`0001_initial`) creates
-  `schema_migrations`, `app_state`, `configuration_audit`.
-- `adaptive_scalper/core/kill_switch.py` — persistent kill switch backed by
-  `app_state` (directive §37). `engage()` open to any safety component;
-  `clear()` requires `actor_role="operator"` (raises `PermissionError` for
-  any other role — ML/RAG/strategy/model code cannot clear it through this
-  API). Every transition appended to `configuration_audit` via `history()`.
-- `adaptive_scalper/core/permission.py` — **kill-switch slice only** of the
-  eventual final trade-permission gate (directive §36): blocks `NEW_ENTRY`
-  with `BLOCK_KILL_SWITCH` when engaged; always allows
-  `POSITION_MANAGEMENT`/`RECONCILIATION`. **This is not the complete gate.**
-  News, cost, correlation, portfolio, risk, account/broker validation, the
-  symbol allow-list, and the retired-strategy firewall are not yet
-  implemented or composed into it.
-- `adaptive_scalper/gateway/` (directive §110 gateway boundary, §4 DEMO
-  interlock, §6 symbol resolution):
-  - `types.py` / `protocol.py` — broker-independent dataclasses and the
-    `Gateway` Protocol. Deliberately excludes `order_send`/`order_check`
-    (waiting on the order state machine/reconciliation to exist first —
-    directive §118 "no showpiece modules").
-  - `mt5_gateway.py` — real implementation; the only module allowed to
-    `import MetaTrader5`. **Not yet covered by an automated test** — see
-    "Unverified components".
-  - `fake_gateway.py` — deterministic in-memory implementation used by
-    all current gateway-layer tests.
-  - `demo_gate.py` — `verify_demo_before_order()`, re-fetches fresh state
-    every call (no caching), fails closed with the directive §36
-    vocabulary (`BLOCK_MT5_DISCONNECTED`, `BLOCK_TERMINAL_TRADING_DISABLED`,
-    `BLOCK_BROKER_TRADING_DISABLED`, `BLOCK_ACCOUNT_NOT_DEMO`). Fully
-    unit-tested against `FakeGateway`.
-  - `symbol_resolver.py` — exact + capped-affix alias matching, fails
-    closed on no-match/ambiguous, persists to the new `symbol_mapping`
-    table (migration `0002`). Fully unit-tested.
-  - `tests/test_mt5_gateway_live.py` — live, skip-if-unavailable smoke
-    test. Runs for real on this machine (see "Live MT5 environment"):
-    verified `Mt5Gateway.account_info()`/`terminal_info()` return
-    well-typed snapshots, the connected account is genuinely DEMO,
-    `verify_demo_before_order()` allows against it, and — real, not
-    fabricated — all three canonical symbols (XAUUSD, GBPJPY, BTCUSD)
-    resolve as EXACT_MATCH against IC Markets Global's live symbol list.
-    Skips cleanly (does not fail) on any machine without a live terminal.
+### Development safeguards (IMPLEMENTED, CONNECTED, TESTED (fake))
+
+- `.claude/hooks/guardrails.py` — deterministic, stdlib-only PreToolUse
+  hook (HARD BLOCK: writes/deletes targeting the sibling `C:\AdaptiveScalper`
+  project, real-money/live-trading enablement, hardcoded secrets, full
+  test-suite deletion, destructive ops outside the project root,
+  permission-bypass attempts; WARNING/ask: individual test deletion,
+  force push, `git reset --hard`, `git clean -f`, safety-boundary edits,
+  writes outside the project root). `tests/test_guardrails.py`.
+- `.claude/claude-security-guidance.md` + `.claude/security-patterns.json`
+  — project-specific guidance/patterns for the security-guidance plugin.
+- `.claude/hookify-templates/` + `scripts/setup_claude_hooks.ps1` —
+  regeneration/self-test so safeguards survive a fresh clone/machine.
+
+### `adaptive_scalper/config/` (IMPLEMENTED, CONNECTED, TESTED (fake))
+
+Hard safety constants (`ALLOWED_CANONICAL_SYMBOLS`, `RETIRED_STRATEGY_KEYS`,
+`ALLOWED_MODES`) plus a pydantic-validated, fail-closed TOML config loader.
+`tests/test_config.py` (24 tests).
+
+### `adaptive_scalper/persistence/` (IMPLEMENTED, CONNECTED, TESTED (fake))
+
+SQLite connection helper (WAL, foreign_keys ON) and a transactional,
+idempotent migration runner. Schema at version 3:
+`schema_migrations`, `app_state`, `configuration_audit`, `symbol_mapping`
+(+ validation columns). `tests/test_persistence.py` (7 tests).
+
+**KNOWN DEFECT** (tracked, not yet fixed): `_split_statements()` is a
+naive `;`/`--`-comment-aware splitter, not a real SQL tokenizer. Fine for
+today's plain-DDL migrations; would mis-split a migration containing a
+string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
+
+### `adaptive_scalper/core/` — kill switch, operator authority, permission slice
+
+- `kill_switch.py` (IMPLEMENTED, CONNECTED, TESTED (fake), 36 tests) —
+  **fail-closed**: `get_state()` returns `UNINITIALIZED` (no row) or
+  `INVALID` (unparseable row) rather than defaulting to "safe to trade";
+  `blocks_new_entries` is True for everything except an explicit,
+  persisted `DISENGAGED`. State + audit-row writes are wrapped in one
+  real transaction (`_write()`: `BEGIN`/two inserts/`COMMIT`,
+  `ROLLBACK` on any `sqlite3.Error`) — never observable out of sync.
+  `engage()` has no role restriction (any safety component may trip it).
+  `clear()`/`bootstrap()` require an `OperatorAuthority` instance, not a
+  bare role string.
+- `operator_authority.py` (IMPLEMENTED) — typed capability object.
+  **Honesty note**: this is NOT cryptographic access control — Python
+  cannot stop arbitrary code from constructing one. The real boundary is
+  code review + which packages ever import this module (intended
+  construction sites: CLI operator commands, the dashboard's eventual
+  authenticated operator-action endpoint). Documented as such in the
+  module docstring; future hardening (session/token verification inside
+  `__init__`) is a drop-in upgrade that doesn't change any caller.
+- `permission.py` — **kill-switch slice ONLY** of the eventual final
+  trade-permission gate (directive §36). Composes `kill_switch.py`'s
+  fail-closed state: blocks `NEW_ENTRY` with `BLOCK_KILL_SWITCH` for
+  anything except `DISENGAGED`; always allows `POSITION_MANAGEMENT`/
+  `RECONCILIATION`. **This is not the complete gate** — news, cost,
+  correlation, portfolio, risk, account/broker validation, the symbol
+  allow-list, and the retired-strategy firewall are not yet implemented
+  or composed into it. There is currently NO code path that submits an
+  order at all (see gateway section), so this gap has no live exposure
+  yet, but it must be closed before `order_send` is ever added.
+
+### `adaptive_scalper/gateway/` (IMPLEMENTED, CONNECTED where noted)
+
+- `types.py` / `protocol.py` — broker-independent dataclasses and the
+  `Gateway` Protocol. `SymbolSpec.trade_mode` preserves MT5's full
+  5-state `ENUM_SYMBOL_TRADE_MODE` (`DISABLED`/`LONGONLY`/`SHORTONLY`/
+  `CLOSEONLY`/`FULL`) rather than a flattened boolean, with
+  `allows_new_long`/`allows_new_short`/`allows_any_new_exposure`/
+  `allows_close` helper properties. Protocol deliberately excludes
+  `order_send`/`order_check`/`positions_get`/`orders_get`/
+  `history_orders_get`/`history_deals_get`/close/modify — waiting on the
+  execution state machine, idempotency, and reconciliation to exist
+  first (directive §118 "no showpiece modules"). **UNVERIFIED**: this is
+  a real, tracked gap against the directive's full gateway interface
+  list (§B in the mission brief), not an oversight — adding it before
+  those consumers exist would be dead/untestable code.
+- `mt5_gateway.py` — TESTED (live) for `initialize`/`account_info`/
+  `terminal_info`/`symbols_get`/`symbol_info`/`symbol_info_tick` on IC
+  Markets Global. `copy_rates_from_pos` (bar history) is implemented but
+  UNVERIFIED (no test, live or fake, exercises it yet).
+- `fake_gateway.py` — deterministic in-memory implementation backing all
+  fake-based gateway tests.
+- `demo_gate.py` — `verify_demo_before_order()`. TESTED (fake, 12 tests)
+  + TESTED (live, part of `test_mt5_gateway_live.py`). Re-fetches fresh
+  state every call; fails closed to the directive §36 vocabulary.
+- `symbol_resolver.py` — exact + capped-affix alias matching. TESTED
+  (fake, 20 tests) + TESTED (live: XAUUSD/GBPJPY/BTCUSD all EXACT_MATCH
+  on IC Markets Global). **Fixed defect** (caught by external security
+  review before this was ever pushed further): the alias regex
+  previously alias-matched `XAUUSDT` (a genuinely different instrument —
+  gold priced in Tether — on many brokers) to `XAUUSD`. Fixed by scoping
+  case-insensitivity to just the canonical-symbol portion of the pattern
+  and requiring a no-delimiter suffix to be lowercase-only (typical
+  broker markers) rather than any case. Regression test:
+  `test_currency_like_suffix_does_not_alias_match`.
+- `symbol_validation.py` — NEW. A name match alone does not mean a
+  symbol is safely executable. `validate_resolved_symbol()` re-checks,
+  fresh, against the live gateway: `trade_mode != DISABLED`, sane
+  contract spec (contract size/volume min·max·step/point/tick size·value
+  all positive, `volume_max >= volume_min`), a live quote exists with
+  `ask >= bid > 0`, and quote freshness within a configurable max age.
+  Any failure fails closed with a specific reason
+  (`NO_SYMBOL_INFO`/`TRADING_DISABLED`/`INVALID_CONTRACT_SPEC`/
+  `NO_QUOTE`/`INVALID_QUOTE`/`STALE_QUOTE`). Persisted alongside the
+  symbol_mapping row (migration `0003_symbol_validation`). TESTED (fake,
+  24 tests). **UNVERIFIED live** — not yet exercised by
+  `test_mt5_gateway_live.py`.
+- `tests/test_mt5_gateway_live.py` — self-skipping (skips cleanly, does
+  not fail, when no MT5 terminal is available). At last run: **skipped**
+  (terminal not currently connected on this machine — see "Live MT5
+  environment" below for when it last ran successfully).
+
+## Live MT5 environment (this machine only, not guaranteed present)
+
+This development machine has had a real MT5 terminal (IC Markets Global,
+server `ICMarketsSC-Demo`, account `trade_mode=0`/DEMO) installed and
+logged in during earlier work in this session; at the time of the most
+recent check, `Mt5Gateway.initialize()` returned False (terminal not
+currently running/connected). This is expected to be transient (terminal
+app state on this machine, not a code defect) — `test_mt5_gateway_live.py`
+will re-verify automatically next time it's run with the terminal up.
+Do NOT assume a live terminal is present on any other machine or CI.
 
 ## Implementation status
 
-No market data ingestion, no strategies, no execution path yet. Trading
-(even PAPER) cannot run. The MT5 gateway wrapper is now verified against
-a real (DEMO) terminal on this machine (see above) — still unverified on
-any other environment.
-
-## Live MT5 environment (this machine only)
-
-This development machine has a real MT5 terminal already installed and
-logged in: IC Markets Global, server `ICMarketsSC-Demo`,
-`trade_mode=0` (DEMO per MT5's `ENUM_ACCOUNT_TRADE_MODE`). All three
-canonical symbols (XAUUSD, GBPJPY, BTCUSD) exist on this broker under
-their exact canonical names — confirmed live via
-`tests/test_mt5_gateway_live.py`, not assumed. This is NOT something to
-assume is true on any other machine or CI — do not write non-skipping
-code or tests that require it. No `order_send`/`order_check` call has
-been made or is planned without explicit operator sign-off.
-
-## Authoritative specification
-
-MASTER_BUILD_DIRECTIVE.md
+No market data ingestion, features, regime detection, strategies,
+journal, news, cost model, correlation, portfolio, risk governor, full
+final permission gate, execution state machine, reconciliation, position
+management, adaptive exit, re-entry, RAG, ML/learning, backtesting,
+dashboard (beyond a health endpoint in progress), CLI, or Windows
+packaging exist yet. Trading (even PAPER) cannot run — there is no
+code path that connects market data to a decision to an order attempt.
 
 ## Operating modes
 
-PAPER + MT5 DEMO only (enforced today only at the config-validation layer;
-no runtime mode gate/DEMO interlock exists yet — that is MT5-gateway work).
-
-## Real-money trading
-
-PROHIBITED — `ALLOWED_MODES` contains no third value, and config validation
-rejects any mode outside `{PAPER, DEMO}`. No order-send code path exists at
-all yet, so there is nothing to place a real-money order in the first place.
+PAPER + MT5 DEMO only. `ALLOWED_MODES` contains no third value; config
+validation rejects any mode outside `{PAPER, DEMO}`. No `order_send`/
+`order_check` exists anywhere in the codebase yet, so there is no
+real-money execution path to disable — it has never been added, not
+"added and then blocked".
 
 ## Allowed executable canonical symbols
 
@@ -132,48 +176,47 @@ all yet, so there is nothing to place a real-money order in the first place.
 - GBPJPY
 - BTCUSD
 
-Enforced at config-validation layer (`MarketConfig` rejects any symbol
-outside this set) AND now at broker-resolution layer
-(`gateway.symbol_resolver` fails closed on no-match/ambiguous — see
-"Completed components"). The independent final-gate check (directive
-§36's `BLOCK_SYMBOL_NOT_ALLOWED`) is not yet implemented — no final
-permission gate exists yet beyond the kill-switch slice.
+Enforced at THREE independent layers today: config validation
+(`MarketConfig`), broker-name resolution (`symbol_resolver`, fails closed
+on no-match/ambiguous), and broker-state validation (`symbol_validation`,
+fails closed on disabled/invalid-contract/no-quote/stale-quote). The
+directive §36 final-gate `BLOCK_SYMBOL_NOT_ALLOWED` check does not exist
+yet — there is no final permission gate beyond the kill-switch slice.
 
 ## Permanently retired strategies
 
 - failed_breakout_fade
 - support_resistance_reaction
 
-Enforced today at config-validation layer (`StrategiesConfig` rejects a
-`retired` list missing either key). No strategy registry exists yet for
-these to actually be excluded from.
+Enforced at config-validation layer only (`StrategiesConfig` rejects a
+`retired` list missing either key). **No strategy registry exists yet**
+— there is nothing yet for these to be excluded FROM at runtime; the
+directive §121 retired-strategy tests (registry/signal/rank/train/
+promote/execute) cannot be written until strategies exist.
 
 ## Known environment/plugin issues (non-blocking)
 
 - The `security-guidance` plugin's LLM-powered reviewer depends on a
-  machine-global venv at `~/.claude/security/agent-sdk-venv` (Python 3.14,
-  outside this repo/git). Earlier this session `claude_agent_sdk` was
-  transiently not importable there (`ModuleNotFoundError`) with a stale
-  `.building` lock file present — consistent with the SessionStart
-  bootstrap having been interrupted before finishing. Re-running the
-  install completed it, and `import claude_agent_sdk` now succeeds; the
-  plugin's regex-based PostToolUse checks were unaffected throughout (they
-  don't depend on this venv) and were independently verified working via
-  synthetic hook payloads. Because this venv is a machine-global resource
-  not tracked by this repo, its state is NOT guaranteed to stay fixed
-  across machine/session boundaries — do not report it as "fully
-  operational" without re-checking
+  machine-global venv at `~/.claude/security/agent-sdk-venv` (Python
+  3.14, outside this repo/git). Verified working earlier this session
+  after a transient stale-lock issue; state not guaranteed to persist
+  across machine/session boundaries — re-check
   (`~/.claude/security/agent-sdk-venv/Scripts/python.exe -c "import claude_agent_sdk"`)
-  at the start of a new session. `scripts/setup_claude_hooks.ps1` includes
-  this check.
+  before relying on it. `scripts/setup_claude_hooks.ps1` includes this
+  check.
 
 ## Current next task
 
-Continue Phase 1: basic dashboard health endpoint (FastAPI, directive
-§83/§108, bind 127.0.0.1 only), then start Phase 2 (five-year bar/tick
-bootstrap) or Phase 3 (features/regime/strategies) groundwork, composing
-`gateway` + `core.permission` toward the real final permission gate as
-each dependency (news, cost, risk, etc.) lands.
+Complete the Phase 1 basic dashboard health endpoint
+(`adaptive_scalper/dashboard/`, FastAPI, bind 127.0.0.1 — health.py
+exists and is being wired into a FastAPI app + tested). Then continue
+toward Phase 2/3 per directive dependency order: historical bootstrap,
+then features/regime/strategies, building the composed final permission
+gate incrementally as each dependency (news, cost, risk, etc.) lands.
+This is a genuinely large remaining scope — see BUG_BACKLOG.md and this
+file's per-component notes for exactly what is and isn't done; do not
+infer completion of anything not explicitly marked IMPLEMENTED/CONNECTED/
+TESTED above.
 
 ## Current git commit
 
@@ -187,8 +230,7 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-2 (`0001_initial` — `schema_migrations`, `app_state`, `configuration_audit`;
-`0002_symbol_mapping` — `symbol_mapping`).
+3 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`).
 
 ## Model state
 
@@ -196,27 +238,20 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 ## Tests
 
-116 passed, 0 failed, 0 skipped (on this machine; 109 on any machine
-without a live MT5 terminal, where `test_mt5_gateway_live.py` self-skips):
+145 passed, 0 failed, 7 skipped (skip = `test_mt5_gateway_live.py`, no
+live MT5 terminal currently connected on this machine — see above):
 - `tests/test_environment.py` (1)
 - `tests/test_config.py` (24)
 - `tests/test_persistence.py` (7)
-- `tests/test_kill_switch.py` (26)
+- `tests/test_kill_switch.py` (36)
 - `tests/test_guardrails.py` (23)
 - `tests/test_demo_gate.py` (12)
-- `tests/test_symbol_resolver.py` (16)
+- `tests/test_symbol_resolver.py` (20)
+- `tests/test_symbol_validation.py` (24)
 - `tests/test_mt5_gateway_live.py` (7 — live-terminal-only, self-skipping)
-
-Everything except `test_mt5_gateway_live.py` is deterministic
-(FakeGateway/mocks/tmp SQLite) and portable to any machine.
 
 ## Unverified components
 
-- Broker account history, order execution, reconciliation, position
-  management — not implemented at all yet.
-- `Mt5Gateway` has only been exercised read-only (`account_info`,
-  `terminal_info`, `symbols_get`, `symbol_info_tick`) against ONE broker
-  (IC Markets Global). Behavior against a different broker's symbol
-  naming/specification quirks is unverified. `copy_rates_from_pos` (bar
-  history) is implemented but not yet exercised by any test, live or
-  fake.
+- `Mt5Gateway.copy_rates_from_pos` (bar history) — implemented, no test yet.
+- `symbol_validation.py` against a real live broker (only fake-tested so far).
+- Everything listed in "Implementation status" as not yet existing.

@@ -14,7 +14,7 @@ from adaptive_scalper.gateway.symbol_resolver import (
     resolve_all,
     resolve_symbol,
 )
-from adaptive_scalper.gateway.types import SymbolSpec
+from adaptive_scalper.gateway.types import SymbolSpec, SymbolTradeMode
 from adaptive_scalper.persistence import connect, migrate
 
 
@@ -23,7 +23,7 @@ def _symbol(name: str, **overrides) -> SymbolSpec:
         name=name, description="", currency_base="USD", currency_profit="USD",
         currency_margin="USD", digits=2, point=0.01, trade_contract_size=100.0,
         volume_min=0.01, volume_max=100.0, volume_step=0.01, trade_tick_size=0.01,
-        trade_tick_value=1.0, spread=10, visible=True, trade_allowed=True,
+        trade_tick_value=1.0, spread=10, visible=True, trade_mode=SymbolTradeMode.FULL,
     )
     defaults.update(overrides)
     return SymbolSpec(**defaults)
@@ -71,6 +71,27 @@ def test_unrelated_symbol_starting_with_same_letters_does_not_match():
     result = resolve_symbol("XAUUSD", symbols)
     assert result.resolved is False
     assert result.reason == NO_MATCH
+
+
+def test_currency_like_suffix_does_not_alias_match():
+    # "XAUUSDT" (gold priced in Tether) is a genuinely different instrument
+    # from XAUUSD on many brokers/exchanges, not a broker-naming variant of
+    # it. An earlier version of the alias regex allowed any 0-3 alnum
+    # suffix chars regardless of case and DID alias-match this — caught by
+    # security review before release. A no-delimiter suffix must be
+    # lowercase-only (typical broker markers: "m", "pro", "ecn") to match;
+    # an uppercase no-delimiter suffix must not.
+    symbols = [_symbol("XAUUSDT")]
+    result = resolve_symbol("XAUUSD", symbols)
+    assert result.resolved is False
+    assert result.reason == NO_MATCH
+
+
+def test_lowercase_no_delimiter_suffix_still_matches():
+    symbols = [_symbol("XAUUSDm")]
+    result = resolve_symbol("XAUUSD", symbols)
+    assert result.resolved is True
+    assert result.reason == ALIAS_MATCH
 
 
 # --------------------------------------------------------------------------
