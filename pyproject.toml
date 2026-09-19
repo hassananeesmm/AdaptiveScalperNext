@@ -1,0 +1,8 @@
+[project]
+name = "adaptive-scalper-next"
+version = "0.0.1"
+description = "PAPER + MT5 DEMO adaptive scalping research and execution platform"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

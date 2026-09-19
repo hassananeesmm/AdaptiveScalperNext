@@ -1,0 +1,28 @@
+{
+  "patterns": [
+    {
+      "rule_name": "real_money_trading_enabled",
+      "regex": "(?i)\\b(LIVE_TRADING\\s*=\\s*True|real[_-]?money\\s*=\\s*True|enable[_-]?live[_-]?trading|allow[_-]?real[_-]?money|trading_mode\\s*=\\s*[\"']?LIVE[\"']?|ACCOUNT_TYPE\\s*=\\s*[\"']?REAL[\"']?|demo[_-]?only\\s*=\\s*False)\\b",
+      "reminder": "\u26a0\ufe0f This looks like it enables real-money/live trading. CLAUDE.md rule 4 and the master build directive permanently prohibit this. PAPER and MT5 DEMO are the only allowed modes.",
+      "exclude_paths": ["**/tests/**", "**/*.md"]
+    },
+    {
+      "rule_name": "retired_strategy_reactivation",
+      "regex": "(?i)(failed_breakout_fade|support_resistance_reaction)[^\\n]{0,80}(active\\s*=\\s*True|enabled\\s*=\\s*True|ACTIVE_STRATEG)",
+      "reminder": "\u26a0\ufe0f This appears to reactivate a permanently retired strategy (failed_breakout_fade / support_resistance_reaction). These must never register as active, generate signals, or be promoted, per CLAUDE.md rule 6.",
+      "exclude_paths": ["**/tests/**", "**/*.md"]
+    },
+    {
+      "rule_name": "symbol_allowlist_weakened",
+      "regex": "ALLOWED_CANONICAL_SYMBOLS\\s*=",
+      "reminder": "\u26a0\ufe0f This edits the canonical executable-symbol allow-list. It must remain exactly {XAUUSD, GBPJPY, BTCUSD} \u2014 verify no fourth symbol was added.",
+      "exclude_paths": ["**/tests/**", "**/*.md"]
+    },
+    {
+      "rule_name": "hardcoded_mt5_credential",
+      "regex": "(?i)\\bMT5_(PASSWORD|LOGIN|SECRET)\\s*[:=]\\s*[\"'][^\"'\\n]{2,}[\"']",
+      "reminder": "\u26a0\ufe0f This looks like a hardcoded MT5 broker credential. CLAUDE.md rule 9: never store secrets or broker credentials in Git. Use environment variables / a local, gitignored config file instead.",
+      "exclude_paths": ["**/tests/**"]
+    }
+  ]
+}

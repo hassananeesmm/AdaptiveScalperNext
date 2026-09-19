@@ -1,0 +1,47 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Config and secrets (never commit credentials)
+config/secrets.toml
+config/config.toml
+.env
+.env.*
+*.key
+*.pem
+credentials*
+secrets*
+
+# Data / runtime artifacts
+*.db
+*.sqlite3
+*.log
+logs/
+data/*.db
+data/*.db-*
+models/runtime/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code: local-only overrides and hookify-generated rule files.
+# The actual committed safeguards live in .claude/settings.json,
+# .claude/hooks/, .claude/hookify-templates/, .claude/security-patterns.json
+# and .claude/claude-security-guidance.md — those are NOT ignored.
+.claude/settings.local.json
+.claude/*.local.md
+.claude/*.local.json
+.claude/*.local.yaml
+.claude/*.local.yml

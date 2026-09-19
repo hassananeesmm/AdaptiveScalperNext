@@ -1,0 +1,6 @@
+# Adaptive Scalper Next dependencies.
+# MetaTrader5, numpy/pandas/scikit-learn, fastapi/uvicorn, etc. are added
+# incrementally as the corresponding modules (gateway, features, ML,
+# dashboard) land, per MASTER_BUILD_DIRECTIVE.md section 113.
+pytest
+pydantic>=2.6

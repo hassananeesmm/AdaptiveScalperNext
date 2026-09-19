@@ -1,0 +1,31 @@
+# Adaptive Scalper Next — default configuration.
+#
+# Hard safety sections (mode, market.symbols, strategies.retired, risk,
+# news.fail_closed) are validated by adaptive_scalper.config.loader and
+# fail startup if unsafe. See MASTER_BUILD_DIRECTIVE.md section 114.
+
+mode = "PAPER"
+
+[market]
+symbols = ["XAUUSD", "GBPJPY", "BTCUSD"]
+
+[strategies]
+retired = ["failed_breakout_fade", "support_resistance_reaction"]
+
+[risk]
+risk_per_trade_pct = 0.25
+max_total_open_risk_pct = 0.75
+max_daily_loss_pct = 2.00
+max_drawdown_pct = 5.00
+max_open_positions = 2
+max_positions_per_symbol = 1
+
+[news]
+primary_provider = "financecalendar"
+secondary_provider = "forexfactory"
+pre_high_impact_minutes = 15
+post_high_impact_minutes = 30
+fail_closed = true
+
+[database]
+path = "data/adaptive_scalper.sqlite3"
