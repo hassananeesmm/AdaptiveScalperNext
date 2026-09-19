@@ -229,14 +229,31 @@ FastAPI's worker-thread dispatch (`sqlite3.ProgrammingError`: connections
 are thread-affine). Now takes a DB path and opens a per-request
 connection. See BUG_BACKLOG.md.
 
+### `adaptive_scalper/cli.py` (IMPLEMENTED, CONNECTED)
+
+Real subcommands only — no stub prints a placeholder (directive §118).
+`doctor` (config+DB+MT5-reachability check), `status`, `health` (exits
+non-zero when not HEALTHY), `symbols` (live broker resolution),
+`kill-switch status/engage/clear`, `dashboard` (runs uvicorn bound to
+127.0.0.1 by default). TESTED (fake, 8 tests: `status`/`health`/
+`kill-switch`/config-error path via tmp config+DB). TESTED (live, manual
+smoke test this session, not yet an automated pytest): `doctor` and
+`symbols` against the real IC Markets terminal — both succeeded (`mt5:
+reachable`; all three canonical symbols EXACT_MATCH). Not yet automated
+as a live pytest case alongside `test_mt5_gateway_live.py` — tracked as
+a small follow-up, not a defect. Not implemented: every command listed
+in the directive that depends on a subsystem that doesn't exist yet
+(`scan`, `analyse`, `paper`, `demo`, `strategies`, `models`, `learning
+*`, `rag *`, `news *`, `history *`, `broker-history import`, `journal
+recent`, `reconcile`, `why-no-trade`, `backtest`, `walk-forward`,
+`monte-carlo`).
+
 ## Current next task
 
-Wire a `dashboard` CLI/launcher command that actually calls
-`uvicorn.run()` bound to 127.0.0.1 (no CLI exists yet at all — directive
-§108). Then continue toward Phase 2/3 per directive dependency order:
-historical bootstrap, then features/regime/strategies, building the
-composed final permission gate incrementally as each dependency (news,
-cost, risk, etc.) lands. This is a genuinely large remaining scope — see
+Continue toward Phase 2/3 per directive dependency order: historical
+bootstrap, then features/regime/strategies, building the composed final
+permission gate incrementally as each dependency (news, cost, risk,
+etc.) lands. This is a genuinely large remaining scope — see
 BUG_BACKLOG.md and this file's per-component notes for exactly what is
 and isn't done; do not infer completion of anything not explicitly
 marked IMPLEMENTED/CONNECTED/TESTED above.
@@ -261,7 +278,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 ## Tests
 
-161 passed, 0 failed, 0 skipped (live MT5 terminal is currently connected
+169 passed, 0 failed, 0 skipped (live MT5 terminal is currently connected
 — see "Live MT5 environment"; on a machine/moment without one,
 `test_mt5_gateway_live.py`'s 7 tests self-skip instead of failing):
 - `tests/test_environment.py` (1)
@@ -273,6 +290,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 - `tests/test_symbol_resolver.py` (20)
 - `tests/test_symbol_validation.py` (24)
 - `tests/test_dashboard_health.py` (9)
+- `tests/test_cli.py` (8)
 - `tests/test_mt5_gateway_live.py` (7 — live-terminal-only, self-skipping)
 
 ## Unverified components

@@ -298,3 +298,25 @@ Chronological, factual record of initialization events. Append only.
   dashboard grows concurrent panels.
 - Full suite: 154 passed, 0 failed, 7 skipped (live MT5 test still
   self-skips; terminal not connected on this machine right now).
+- Committed as `332f959` ("Complete Phase 1 dashboard health endpoint").
+  Pushed to `origin/main` (99550a9..332f959). MT5 terminal reconnected
+  during this run — a full suite run right after showed 161/161 passed
+  (0 skipped), including `symbols_get()` successfully converting
+  `SymbolTradeMode` across IC Markets' entire real symbol catalog with
+  no error — live-verifying the earlier trade-mode-enum fix. Updated
+  PROJECT_STATUS.md's "Live MT5 environment" note accordingly, with the
+  explicit caveat that it's a point-in-time snapshot to re-check, not a
+  standing guarantee.
+- Built `adaptive_scalper/cli.py` (directive §108): `doctor`, `status`,
+  `health` (exits non-zero when not HEALTHY), `symbols`, `kill-switch
+  status/engage/clear`, `dashboard` (runs uvicorn bound to 127.0.0.1).
+  Only commands backed by an existing, real subsystem — no placeholder
+  stubs. `tests/test_cli.py` (8 tests, deterministic: tmp config + tmp
+  SQLite DB for everything except MT5-touching `doctor`/`symbols`
+  behavior). Manually smoke-tested `doctor` and `symbols` against the
+  live terminal: both succeeded (`mt5: reachable`; all three canonical
+  symbols resolved EXACT_MATCH). Not yet folded into an automated
+  skip-if-unavailable pytest case alongside `test_mt5_gateway_live.py` —
+  small tracked follow-up, not a defect. Cleaned up the `data/` runtime
+  DB the manual smoke test created (gitignored, never staged).
+- Full suite: 169 passed, 0 failed, 0 skipped.
