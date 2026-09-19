@@ -743,3 +743,37 @@ Chronological, factual record of initialization events. Append only.
   EV arithmetic against the printed numbers for one case
   (raw_confidence=0.651, stop=4.09, target=6.13 → EV≈2.7, minus real
   cost≈0.54 → net≈2.38, matching the pipeline's own 2.3755 output).
+- Committed as `37ec261` and pushed to `origin/main`.
+- Built `adaptive_scalper/portfolio/` (directive section 35), continuing
+  automatically:
+  - `correlation.py`: Pearson correlation over ALIGNED observations —
+    `{timestamp: return}` dicts intersected on shared timestamps, never
+    two equal-length series zipped positionally (a deliberate test,
+    `test_mismatched_timestamps_never_silently_zipped`, proves this:
+    two 40-observation series with completely disjoint timestamps align
+    to exactly 0 shared points, not 40). Reports `None` ("N/A") for
+    insufficient sample size or zero-variance series, never a
+    fabricated `0.0` (directive's explicit requirement).
+    `evaluate_correlation_gate()` blocks a new proposal only on a
+    genuinely measured high correlation with an already-open symbol.
+  - `exposure.py`: `compute_exposure()` -- open/pending risk, per-symbol
+    exposure, net currency-direction exposure. Uses a
+    portfolio-accounting-specific canonical currency-pair map,
+    explicitly documented as distinct from
+    `symbol_validation.EXPECTED_IDENTITY` (that module verifies
+    broker-reported metadata and deliberately avoids claiming BTCUSD's
+    broker `currency_base` is "BTC" -- a different, unrelated question
+    from "what's the idealized long/short exposure of holding BTCUSD").
+    `correlated_cluster_exposure()` combines exposure across
+    open+correlated symbol pairs.
+  - 30 new tests across both files.
+  - Full suite: 459 passed, 0 failed, 0 skipped.
+- TESTED (live): computed real pairwise correlations across all three
+  canonical symbols' full M5 return history from the earlier bootstrap.
+  This surfaced a genuine, meaningful confirmation of why
+  timestamp-alignment (not positional zipping) matters: BTCUSD trades
+  24/7 while XAUUSD/GBPJPY only trade market hours, so real aligned
+  sample sizes differed substantially by pair (68,855 to 95,130
+  observations) rather than being a uniform count -- exactly the
+  divergence a naive same-length zip would have masked. All three real
+  correlations came out low-to-modest (0.07 to 0.23).

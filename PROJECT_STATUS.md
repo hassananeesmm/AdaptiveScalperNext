@@ -638,6 +638,55 @@ negative net edge; higher-confidence signals correctly `ALLOW`ed with
 positive net edge — the standard EV arithmetic checks out by hand against
 the printed numbers.
 
+### `adaptive_scalper/portfolio/` — correlation and exposure tracking (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive section 35. Measurement only — hard risk ceilings belong to
+the not-yet-built risk governor, which will consume this module's
+outputs.
+
+- `correlation.py`: `compute_pairwise_correlation()`/
+  `compute_correlation_matrix()` compute Pearson correlation over
+  ALIGNED observations only (`{timestamp: return}` dicts intersected on
+  shared timestamps) — never two series of equal length zipped
+  positionally, which would silently misalign data whenever coverage
+  differs between symbols (live-verified this actually matters: BTCUSD's
+  24/7 trading coverage vs. XAUUSD/GBPJPY's market-hours-only coverage
+  gives real pairs different aligned sample sizes, not the same one).
+  Reports `None` ("N/A") — never a fabricated `0.0` — for insufficient
+  sample size or zero-variance (constant) series, per directive section
+  35's explicit requirement. `evaluate_correlation_gate()` blocks a new
+  proposal only on a GENUINELY measured high correlation with an
+  already-open symbol; missing/insufficient data does not itself block
+  (informational, not assumed safe or dangerous).
+- `exposure.py`: `compute_exposure()` aggregates open/pending monetary
+  risk, per-symbol exposure, and net currency-direction exposure (a BUY
+  is long the base currency / short the profit currency) using a
+  portfolio-accounting-specific canonical currency pair map — explicitly
+  NOT the same as `symbol_validation.EXPECTED_IDENTITY` (that verifies
+  broker-reported metadata and deliberately avoids claiming BTCUSD's
+  broker `currency_base` is "BTC"; this module wants the idealized
+  long/short accounting view instead, a different question). Tracks
+  USD-related exposure and, via `correlated_cluster_exposure()`, combined
+  exposure across symbol pairs that are BOTH open AND genuinely highly
+  correlated.
+
+`tests/test_portfolio_correlation.py` (16) + `tests/test_portfolio_exposure.py`
+(14) = 30 tests: perfect correlation/anti-correlation, insufficient-sample
+and zero-variance → `None` (not `0.0`), alignment correctness (including
+a deliberate mismatched-timestamps case proving series are never
+positionally zipped), matrix symmetry and self-correlation, the
+correlation gate's block/allow/missing-data behavior, exposure
+aggregation and currency-direction netting across symbols, USD-related
+exposure, and cluster exposure's threshold/N/A-exclusion behavior.
+
+**TESTED (live)**: computed real pairwise correlations across all three
+canonical symbols' full M5 return history — genuinely large aligned
+samples (68,855 to 95,130 observations depending on the pair, correctly
+reflecting BTCUSD's different real trading-hours coverage rather than a
+uniform count a naive positional zip would have produced). All three
+real correlations came out low-to-modest (0.07-0.23), a plausible result
+for these three instruments.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -702,16 +751,16 @@ subsystem is built, not assumed safe by extension.
 Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is in
 progress: feature engine, regime classifier, six active strategies +
 retirement firewall, the immutable decision journal, the keyless news
-system, and the cost/expected-net-edge gate all exist (see above).
-Immediately next: correlation/portfolio heat, risk governor (sole sizing
-authority), then composing the full final permission gate as each
-lands — journaling each gate's ENTRY_ALLOWED/ENTRY_BLOCKED decision as
-it's built. `order_send` remains locked (must not be added) until
-portfolio/risk, the full final permission gate, execution state machine,
+system, the cost/expected-net-edge gate, and correlation/portfolio
+exposure tracking all exist (see above). Immediately next: the risk
+governor (sole sizing authority — the last individual gate dependency),
+then composing the full final permission gate from everything built so
+far — journaling each gate's ENTRY_ALLOWED/ENTRY_BLOCKED decision as
+it's built. `order_send` remains locked (must not be added) until the
+risk governor, the full final permission gate, execution state machine,
 idempotency, UNKNOWN handling, reconciliation, and a fresh DEMO interlock
-are ALL in place — journal, news, and cost/edge are now done; the rest
-are not. A live tick-bootstrap run (currently only fake-tested +
-individual live gateway-call verification) remains a smaller open item
+are ALL in place. A live tick-bootstrap run (currently only fake-tested
++ individual live gateway-call verification) remains a smaller open item
 from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
@@ -742,7 +791,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 429 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 459 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
@@ -751,7 +800,8 @@ entry: 429 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_bar_features.py`, `test_regime_classifier.py`, `test_strategies.py`,
 `test_strategy_registry.py`, `test_journal.py`, `test_news_blocking.py`,
 `test_news_providers.py`, `test_news_calendar_service.py`,
-`test_cost_model.py`, `test_cost_edge.py`, `test_cost_tracking.py`, and
+`test_cost_model.py`, `test_cost_edge.py`, `test_cost_tracking.py`,
+`test_portfolio_correlation.py`, `test_portfolio_exposure.py`, and
 `test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
 currently connected on this machine).
 
