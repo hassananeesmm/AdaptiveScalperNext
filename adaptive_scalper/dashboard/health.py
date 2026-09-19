@@ -17,7 +17,7 @@ import sqlite3
 from dataclasses import dataclass
 from enum import Enum
 
-from adaptive_scalper.core.kill_switch import get_state
+from adaptive_scalper.core.kill_switch import KillSwitchStatus, get_state
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.persistence.database import integrity_check
 
@@ -35,7 +35,8 @@ class HealthReport:
     state: HealthState
     reasons: tuple[str, ...]
     database_integrity: str
-    kill_switch_engaged: bool
+    kill_switch_status: str
+    kill_switch_blocks_new_entries: bool
     kill_switch_reason: str | None
     mt5_connected: bool | None  # None = no gateway supplied, i.e. not checked
 
@@ -44,8 +45,10 @@ def compute_health(conn: sqlite3.Connection, gateway: Gateway | None = None) -> 
     """Compose current health from whatever subsystems exist today.
 
     Precedence (highest wins): CRITICAL (database integrity failure) >
-    TRADING_BLOCKED (kill switch engaged) > NEW_ENTRIES_BLOCKED (gateway
-    supplied but not connected) > HEALTHY.
+    TRADING_BLOCKED (kill switch blocks new entries — this includes
+    UNINITIALIZED/INVALID, not just ENGAGED, since the kill switch fails
+    closed) > NEW_ENTRIES_BLOCKED (gateway supplied but not connected) >
+    HEALTHY.
     """
     reasons: list[str] = []
 
@@ -54,8 +57,8 @@ def compute_health(conn: sqlite3.Connection, gateway: Gateway | None = None) -> 
         reasons.append(f"database integrity check failed: {integrity}")
 
     ks = get_state(conn)
-    if ks.engaged:
-        reasons.append(f"kill switch engaged: {ks.reason}")
+    if ks.blocks_new_entries:
+        reasons.append(f"kill switch status={ks.status.value}: {ks.reason}")
 
     mt5_connected: bool | None = None
     if gateway is not None:
@@ -70,7 +73,7 @@ def compute_health(conn: sqlite3.Connection, gateway: Gateway | None = None) -> 
 
     if integrity != "ok":
         state = HealthState.CRITICAL
-    elif ks.engaged:
+    elif ks.blocks_new_entries:
         state = HealthState.TRADING_BLOCKED
     elif gateway is not None and mt5_connected is False:
         state = HealthState.NEW_ENTRIES_BLOCKED
@@ -81,7 +84,8 @@ def compute_health(conn: sqlite3.Connection, gateway: Gateway | None = None) -> 
         state=state,
         reasons=tuple(reasons),
         database_integrity=integrity,
-        kill_switch_engaged=ks.engaged,
+        kill_switch_status=ks.status.value,
+        kill_switch_blocks_new_entries=ks.blocks_new_entries,
         kill_switch_reason=ks.reason,
         mt5_connected=mt5_connected,
     )

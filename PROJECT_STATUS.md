@@ -143,14 +143,19 @@ string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
 
 ## Live MT5 environment (this machine only, not guaranteed present)
 
-This development machine has had a real MT5 terminal (IC Markets Global,
+This development machine has a real MT5 terminal (IC Markets Global,
 server `ICMarketsSC-Demo`, account `trade_mode=0`/DEMO) installed and
-logged in during earlier work in this session; at the time of the most
-recent check, `Mt5Gateway.initialize()` returned False (terminal not
-currently running/connected). This is expected to be transient (terminal
-app state on this machine, not a code defect) — `test_mt5_gateway_live.py`
-will re-verify automatically next time it's run with the terminal up.
-Do NOT assume a live terminal is present on any other machine or CI.
+logged in — connectivity fluctuated during this session (the terminal
+app itself, not a code defect) but `test_mt5_gateway_live.py` passed all
+7 tests on the most recent run, confirming: typed account/terminal
+snapshots, genuine DEMO status, `verify_demo_before_order()` allowing,
+all three canonical symbols EXACT_MATCH-resolving, and — new since the
+last check — `symbols_get()` successfully converting `SymbolTradeMode`
+for IC Markets' entire real symbol catalog (thousands of symbols) with
+no `ValueError`, live-verifying Fix #5's enum conversion. Do NOT assume
+a live terminal is present on any other machine or CI; re-run
+`test_mt5_gateway_live.py` to check current connectivity rather than
+trusting this note, which is a point-in-time snapshot.
 
 ## Implementation status
 
@@ -205,18 +210,36 @@ promote/execute) cannot be written until strategies exist.
   before relying on it. `scripts/setup_claude_hooks.ps1` includes this
   check.
 
+### `adaptive_scalper/dashboard/` (IMPLEMENTED, CONNECTED, TESTED (fake))
+
+FastAPI app (`create_app(db_path, gateway=None)`) with one endpoint,
+`GET /api/health`, composing `health.compute_health()` — the directive
+§107 HEALTHY/DEGRADED/NEW_ENTRIES_BLOCKED/TRADING_BLOCKED/CRITICAL state
+from database integrity + kill-switch status (correctly reports
+TRADING_BLOCKED for a fresh UNINITIALIZED kill switch, not HEALTHY —
+consistent with the fail-closed design) + optional gateway connection
+state. Not yet started: WebSocket push, any panel beyond health, binding
+to 127.0.0.1 by an actual run script (the FastAPI app itself doesn't
+bind — that's `uvicorn.run(app, host=DEFAULT_HOST, ...)`, not yet wired
+into a CLI command). `tests/test_dashboard_health.py` (9 tests).
+
+**Fixed defect found by its own test before any commit**: `create_app()`
+originally took a live `sqlite3.Connection`, which crashed under
+FastAPI's worker-thread dispatch (`sqlite3.ProgrammingError`: connections
+are thread-affine). Now takes a DB path and opens a per-request
+connection. See BUG_BACKLOG.md.
+
 ## Current next task
 
-Complete the Phase 1 basic dashboard health endpoint
-(`adaptive_scalper/dashboard/`, FastAPI, bind 127.0.0.1 — health.py
-exists and is being wired into a FastAPI app + tested). Then continue
-toward Phase 2/3 per directive dependency order: historical bootstrap,
-then features/regime/strategies, building the composed final permission
-gate incrementally as each dependency (news, cost, risk, etc.) lands.
-This is a genuinely large remaining scope — see BUG_BACKLOG.md and this
-file's per-component notes for exactly what is and isn't done; do not
-infer completion of anything not explicitly marked IMPLEMENTED/CONNECTED/
-TESTED above.
+Wire a `dashboard` CLI/launcher command that actually calls
+`uvicorn.run()` bound to 127.0.0.1 (no CLI exists yet at all — directive
+§108). Then continue toward Phase 2/3 per directive dependency order:
+historical bootstrap, then features/regime/strategies, building the
+composed final permission gate incrementally as each dependency (news,
+cost, risk, etc.) lands. This is a genuinely large remaining scope — see
+BUG_BACKLOG.md and this file's per-component notes for exactly what is
+and isn't done; do not infer completion of anything not explicitly
+marked IMPLEMENTED/CONNECTED/TESTED above.
 
 ## Current git commit
 
@@ -238,8 +261,9 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 ## Tests
 
-145 passed, 0 failed, 7 skipped (skip = `test_mt5_gateway_live.py`, no
-live MT5 terminal currently connected on this machine — see above):
+161 passed, 0 failed, 0 skipped (live MT5 terminal is currently connected
+— see "Live MT5 environment"; on a machine/moment without one,
+`test_mt5_gateway_live.py`'s 7 tests self-skip instead of failing):
 - `tests/test_environment.py` (1)
 - `tests/test_config.py` (24)
 - `tests/test_persistence.py` (7)
@@ -248,6 +272,7 @@ live MT5 terminal currently connected on this machine — see above):
 - `tests/test_demo_gate.py` (12)
 - `tests/test_symbol_resolver.py` (20)
 - `tests/test_symbol_validation.py` (24)
+- `tests/test_dashboard_health.py` (9)
 - `tests/test_mt5_gateway_live.py` (7 — live-terminal-only, self-skipping)
 
 ## Unverified components

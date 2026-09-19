@@ -269,3 +269,32 @@ Chronological, factual record of initialization events. Append only.
      comment-semicolon manifestation of it, tracked separately).
 - Test suite after all of the above: 145 passed, 0 failed, 7 skipped (no
   live MT5 terminal currently connected — see PROJECT_STATUS.md).
+- Committed as `99550a9` ("Fix 9 external-review architecture findings
+  (kill switch, symbol resolution)"). Pushed to `origin/main`
+  (93b16b1..99550a9) — `origin` was already configured pointing at
+  https://github.com/hassananeesmm/AdaptiveScalperNext.git, branch
+  `main`, from outside this session.
+- Completed the Phase 1 dashboard health endpoint
+  (`adaptive_scalper/dashboard/`): `health.py` (`compute_health()`,
+  directive §107 states) + `app.py` (`create_app()`, one FastAPI
+  endpoint `GET /api/health`). Updated `health.py` to use the redesigned
+  kill switch's `blocks_new_entries`/`status` instead of the old
+  `engaged` boolean it was originally written against (this module was
+  mid-write when the kill-switch redesign landed). This also fixed a
+  latent correctness gap: a fresh, never-bootstrapped kill switch now
+  correctly reports dashboard state `TRADING_BLOCKED` rather than
+  `HEALTHY`, consistent with the fail-closed design.
+- `tests/test_dashboard_health.py`'s own endpoint test immediately caught
+  a real bug before any commit: `create_app()` originally captured a
+  live `sqlite3.Connection`, which crashed under FastAPI's worker-thread
+  request dispatch (`sqlite3.ProgrammingError: SQLite objects created in
+  a thread can only be used in that same thread`). Fixed by having
+  `create_app()` take a DB path and open a short-lived connection per
+  request instead. Documented in BUG_BACKLOG.md, plus a related
+  LOW-severity backlog note: `Mt5Gateway`'s underlying SDK calls aren't
+  documented as thread-safe either, and the dashboard doesn't yet guard
+  against concurrent gateway calls from multiple worker threads — not a
+  problem today (one read-only call per request), tracked for before the
+  dashboard grows concurrent panels.
+- Full suite: 154 passed, 0 failed, 7 skipped (live MT5 test still
+  self-skips; terminal not connected on this machine right now).

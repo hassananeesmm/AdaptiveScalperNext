@@ -16,6 +16,23 @@ delete) once fixed, with the fixing commit/date noted.
    fresh session anyway). Not blocking because `.claude/hooks/guardrails.py`
    (this project's own PreToolUse gate) does not depend on it at all.
 
+2a. [SEVERITY: LOW, SUBSYSTEM: dashboard] `starlette.testclient` (via
+   FastAPI's `TestClient`) emits a `StarletteDeprecationWarning` about
+   `httpx` vs `httpx2` on every test run. Third-party warning, not our
+   code; not actionable without a starlette/fastapi upgrade or switching
+   test client libraries. Non-blocking; revisit at next dependency bump.
+
+2b. [SEVERITY: LOW, SUBSYSTEM: gateway/dashboard] `Mt5Gateway`'s
+   underlying `MetaTrader5` module calls are synchronous and not
+   documented by the vendor as safe for concurrent multi-thread use.
+   `adaptive_scalper/dashboard/app.py` currently accepts a `gateway`
+   object shared across FastAPI's per-request worker threads without a
+   lock. Not yet a problem (dashboard only issues one read-only call per
+   request, and the SQLite connection-per-request pattern was already
+   fixed for the analogous DB issue — see "Fixed" below), but revisit
+   with a lock or a gateway-call queue before the dashboard adds
+   concurrent panels that call the gateway.
+
 2. **`_split_statements()` in `adaptive_scalper/persistence/database.py`
    is a naive `;`-split, not a real SQL tokenizer.** Fine for today's
    plain-DDL migrations. Would silently mis-split a migration containing a
@@ -73,3 +90,17 @@ delete) once fixed, with the fixing commit/date noted.
   `test_corrupted_app_state_row_is_invalid_and_blocks_new_entries`,
   `test_state_write_and_audit_row_are_never_observed_out_of_sync`,
   `test_clear_rejects_every_non_operatorauthority_value`).
+
+- ~~[SEVERITY: HIGH, SUBSYSTEM: dashboard] `dashboard/app.py`'s
+  `/api/health` endpoint crashed with `sqlite3.ProgrammingError: SQLite
+  objects created in a thread can only be used in that same thread`.~~
+  Suspected cause: `create_app()` took a live `sqlite3.Connection` and
+  captured it in the endpoint closure, but FastAPI dispatches sync
+  endpoints onto a worker thread pool (`anyio.to_thread.run_sync`) —
+  the connection, created on the main/fixture thread, was then used from
+  a different thread. Found immediately by the endpoint's own test
+  (`tests/test_dashboard_health.py`), before any commit. Fixed
+  2026-09-19 — `create_app()` now takes a DB **path**, not a connection,
+  and opens a short-lived connection per request
+  (`contextlib.closing(connect(db_path))`); WAL mode makes this cheap
+  and supports concurrent readers.
