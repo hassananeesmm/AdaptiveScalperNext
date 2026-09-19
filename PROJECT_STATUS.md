@@ -687,6 +687,49 @@ uniform count a naive positional zip would have produced). All three
 real correlations came out low-to-modest (0.07-0.23), a plausible result
 for these three instruments.
 
+### `adaptive_scalper/risk/` — risk governor, sole sizing authority (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive sections 32-33. `calculate_safe_volume()` is the ONLY function
+in this codebase that may compute a position's monetary size — it takes
+CURRENT equity, CURRENT stop distance, and CURRENT broker contract data
+only. It has **no "previous volume"/"loss streak"/"multiplier"
+parameter at all**, which makes martingale/grid/revenge-sizing
+structurally impossible to express through this API, not merely
+discouraged — enforced by
+`test_calculate_safe_volume_has_no_martingale_style_parameter`, which
+inspects the actual function signature so the guarantee can't silently
+erode from a future edit. Rounds DOWN to the broker's `volume_step`
+(directive: never round up); if the rounded-down volume is still below
+`volume_min`, REJECTS rather than bumping to the minimum (which would
+risk more than `risk_per_trade_pct`).
+
+`evaluate_risk_gate()` enforces the five hard ceilings
+(`max_open_positions`, `max_positions_per_symbol`,
+`max_total_open_risk_pct`, `max_daily_loss_pct`, `max_drawdown_pct`) in a
+fixed check order, so the reported block reason is always the first
+limit actually breached. `risk_limits_from_config()` is the only
+intended construction path for `RiskLimits`, built directly from the
+existing validated `RiskConfig` (directive's defaults: 0.25% per trade,
+0.75% total open, 2% daily loss, 5% drawdown, 2 open positions max, 1
+per symbol) — documented honestly as an import-discipline/code-review
+boundary (same pattern as `operator_authority.py`'s kill-switch
+boundary), since there is no ML/learning module yet that could attempt
+to raise these limits.
+
+`tests/test_risk_governor.py` (22 tests): the martingale-impossibility
+signature check, safe-volume rounding/rejection/capping across a range
+of contract specs, every risk-gate ceiling individually and the
+first-breach-reported ordering, and `risk_limits_from_config`'s field
+mapping including the directive's exact default values.
+
+**TESTED (live)**: computed a real safe-volume result from the actual
+DEMO account's real equity ($9,707.85) and XAUUSD's real contract spec
+(volume_step=0.01, tick_size=0.01, tick_value=$1) with a real stop
+distance from an earlier live strategy signal (4.09) — result: 0.05 lots,
+$20.45 monetary risk (≈0.21% of equity after round-down, consistent with
+the 0.25% target), correctly `ALLOW`ed by the risk gate with zero prior
+open risk.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -748,20 +791,23 @@ subsystem is built, not assumed safe by extension.
 
 ## Current next task
 
-Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is in
-progress: feature engine, regime classifier, six active strategies +
-retirement firewall, the immutable decision journal, the keyless news
-system, the cost/expected-net-edge gate, and correlation/portfolio
-exposure tracking all exist (see above). Immediately next: the risk
-governor (sole sizing authority — the last individual gate dependency),
-then composing the full final permission gate from everything built so
-far — journaling each gate's ENTRY_ALLOWED/ENTRY_BLOCKED decision as
-it's built. `order_send` remains locked (must not be added) until the
-risk governor, the full final permission gate, execution state machine,
-idempotency, UNKNOWN handling, reconciliation, and a fresh DEMO interlock
-are ALL in place. A live tick-bootstrap run (currently only fake-tested
-+ individual live gateway-call verification) remains a smaller open item
-from Phase 2.
+Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING)'s
+individual gate dependencies are now ALL built: feature engine, regime
+classifier, six active strategies + retirement firewall, the immutable
+decision journal, the keyless news system, the cost/expected-net-edge
+gate, correlation/portfolio exposure tracking, and the risk governor
+(see above). Immediately next: COMPOSE the full final permission gate
+(directive section 36) from everything above plus the existing
+kill-switch slice (`core/permission.py`) and symbol identity/direction
+checks (`gateway/symbol_validation.py`) — this is the first point where
+these independent modules get wired into one deterministic decision
+function using the complete `BLOCK_*` reason vocabulary, journaling
+every ENTRY_ALLOWED/ENTRY_BLOCKED decision. `order_send` remains locked
+(must not be added) until that composed gate, the execution state
+machine, idempotency, UNKNOWN handling, reconciliation, and a fresh DEMO
+interlock are ALL in place. A live tick-bootstrap run (currently only
+fake-tested + individual live gateway-call verification) remains a
+smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -791,7 +837,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 459 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 481 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
@@ -801,9 +847,10 @@ entry: 459 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_strategy_registry.py`, `test_journal.py`, `test_news_blocking.py`,
 `test_news_providers.py`, `test_news_calendar_service.py`,
 `test_cost_model.py`, `test_cost_edge.py`, `test_cost_tracking.py`,
-`test_portfolio_correlation.py`, `test_portfolio_exposure.py`, and
-`test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
-currently connected on this machine).
+`test_portfolio_correlation.py`, `test_portfolio_exposure.py`,
+`test_risk_governor.py`, and `test_mt5_gateway_live.py`
+(live-terminal-only, self-skipping — 7 tests, currently connected on
+this machine).
 
 ## Unverified components
 

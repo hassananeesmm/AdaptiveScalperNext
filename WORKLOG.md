@@ -777,3 +777,41 @@ Chronological, factual record of initialization events. Append only.
   observations) rather than being a uniform count -- exactly the
   divergence a naive same-length zip would have masked. All three real
   correlations came out low-to-modest (0.07 to 0.23).
+- Committed as `2721650` and pushed to `origin/main`.
+- Built `adaptive_scalper/risk/` (directive sections 32-33), completing
+  every individual Phase 3 gate dependency:
+  - `calculate_safe_volume()`: the sole sizing authority, computing
+    volume from CURRENT equity/stop/contract data only -- no
+    "previous volume"/"loss streak"/"multiplier" parameter exists in its
+    signature at all, making martingale/grid/revenge-sizing structurally
+    impossible rather than merely discouraged. A dedicated test inspects
+    the actual function signature for forbidden parameter-name
+    substrings, so this guarantee can't silently erode from a future
+    edit without a test catching it. Rounds DOWN to volume_step; rejects
+    (never rounds up) when that falls below volume_min.
+  - `evaluate_risk_gate()`: the five hard ceilings
+    (max_open_positions, max_positions_per_symbol,
+    max_total_open_risk_pct, max_daily_loss_pct, max_drawdown_pct)
+    checked in a fixed order, so the reported block reason is always the
+    first limit actually breached, not an arbitrary one.
+  - `risk_limits_from_config()`: the only intended construction path for
+    RiskLimits, built from the existing validated RiskConfig -- honestly
+    documented as an import-discipline boundary (same pattern as
+    operator_authority.py's kill-switch boundary) since no ML/learning
+    module exists yet that could attempt to raise these limits.
+  - 22 new tests. One test's own tolerance was too tight on first run
+    (a rounding-discretization difference of $1 at these numbers,
+    correctly computed, just asserted too strictly) -- fixed the test,
+    not the implementation, after confirming by hand that $24 and $25
+    were both correct roundings of the same $25 risk budget at different
+    stop distances.
+  - Full suite: 481 passed, 0 failed, 0 skipped.
+- TESTED (live): computed a real safe-volume result from the actual DEMO
+  account's real equity ($9,707.85) and XAUUSD's real contract spec with
+  a real stop distance from an earlier live strategy signal -- result:
+  0.05 lots, $20.45 monetary risk (~0.21% of equity after round-down,
+  consistent with the 0.25% target), correctly ALLOWed by the risk gate.
+- Every individual Phase 3 gate dependency now exists and is
+  live-verified: features, regime, strategies, journal, news, cost/edge,
+  correlation/portfolio, risk. Next task is composing the full final
+  permission gate (directive section 36) from all of them.
