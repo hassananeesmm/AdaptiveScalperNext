@@ -61,13 +61,6 @@ delete) once fixed, with the fixing commit/date noted.
    live tick-bootstrap run ever reports suspiciously low counts vs. known
    volume.
 
-2. **`_split_statements()` in `adaptive_scalper/persistence/database.py`
-   is a naive `;`-split, not a real SQL tokenizer.** Fine for today's
-   plain-DDL migrations. Would silently mis-split a migration containing a
-   string literal or trigger body with an embedded `;`. Replace with a
-   real tokenizer (or switch to one-statement-per-file) before adding any
-   such migration.
-
 ## Fixed
 
 - ~~[SEVERITY: HIGH, SUBSYSTEM: gateway/symbol_validation] First draft of
@@ -101,9 +94,44 @@ delete) once fixed, with the fixing commit/date noted.
 - ~~`_split_statements()`'s naive `;`-split also mis-split on a `;`
   INSIDE a `--` SQL comment (migration 0002's comment text), leaving
   bare text as SQL and raising a syntax error.~~ Fixed 2026-09-19,
-  commit 93b16b1 — strip `--` line comments before splitting. (Item 2
-  above — the general "not a real tokenizer" limitation — remains open;
-  this only fixed the specific comment-semicolon manifestation of it.)
+  commit 93b16b1 — strip `--` line comments before splitting. (Superseded
+  by the full tokenizer replacement below, which removed the
+  comment-stripping regex entirely in favor of a general fix.)
+
+- ~~`_split_statements()` was a naive `;`-split, not a real SQL
+  tokenizer — flagged as a known limitation that would mis-split a
+  migration containing a trigger body or string literal with an
+  embedded `;`, and the journal migration (0006, immutability enforced
+  via `CREATE TRIGGER ... BEGIN ... END`) hit exactly that.~~ Fixed
+  2026-09-20: replaced with a `sqlite3.complete_statement()`-based
+  scanner in `adaptive_scalper/persistence/database.py`. Algorithm: scan
+  character by character; each `;` triggers a
+  `sqlite3.complete_statement(buffer)` check against the accumulated
+  buffer — SQLite's own C library boundary oracle (`sqlite3_complete()`),
+  which is comment- and string-literal-aware and correctly tracks
+  `CREATE TRIGGER ... BEGIN ... END` nesting. Only when the buffer is a
+  genuinely complete statement is it emitted and the buffer reset; a `;`
+  inside a comment, a quoted string, or a trigger body just keeps
+  accumulating. This let the previous `_LINE_COMMENT_RE` comment-strip
+  step be removed entirely — `complete_statement()` already handles
+  comments correctly, and stripping them separately was itself the
+  source of the very first fix above. A migration ending in genuinely
+  incomplete SQL now raises `MigrationError` (not silently dropped),
+  while a trailing comment-only remainder is correctly treated as
+  nothing to execute.
+  Regression tests: `tests/test_migration_parser.py` (12 tests) —
+  ordinary/multiple statement splitting, two statements on one physical
+  line, a semicolon inside a quoted string literal, a semicolon inside a
+  comment, a trigger body with two internal `RAISE` statements emitted
+  as exactly one statement, an end-to-end migration mixing
+  `CREATE TABLE`/`CREATE TRIGGER`/`CREATE TABLE` that both applies AND
+  whose trigger genuinely blocks an `UPDATE`, transactional rollback of
+  earlier statements when a later one fails, incomplete trailing SQL
+  raising, and idempotency. Also live-verified end-to-end: migration
+  0006 applies against a fresh database alongside migrations 1-5, and
+  the resulting `journal_events` immutability triggers genuinely block a
+  real `UPDATE`/`DELETE` attempt (`sqlite3.IntegrityError`, not merely
+  "no test caught a problem").
 
 - ~~[SEVERITY: HIGH, SUBSYSTEM: gateway/symbol_resolver] Symbol alias
   regex alias-matched `XAUUSDT` (gold priced in Tether — a genuinely

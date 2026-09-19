@@ -452,6 +452,70 @@ often, matching the earlier finding that RANGE is the dominant confirmed
 regime; momentum/pullback/breakout/volatility_expansion fired rarely,
 matching their respective regimes' real rarity in this data).
 
+### `adaptive_scalper/persistence/database.py` — migration parser rewrite (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+`_split_statements()` was a naive `;`-split (see BUG_BACKLOG.md's now-
+fully-fixed entry). Replaced with a `sqlite3.complete_statement()`-based
+scanner: scan character by character, and at every `;` test whether the
+accumulated buffer is a complete statement per SQLite's own C-library
+boundary oracle (comment- and string-literal-aware, and correctly
+tracks `CREATE TRIGGER ... BEGIN ... END` nesting). This is what let
+migration 0006 (below) add an immutability-enforcing trigger at all — the
+previous splitter could not have applied it correctly.
+`tests/test_migration_parser.py` (12 tests): ordinary/multiple
+statements, two statements on one physical line, semicolon inside a
+quoted string literal, semicolon inside a comment, a multi-statement
+trigger body emitted as exactly one statement, an end-to-end migration
+whose trigger genuinely blocks a real `UPDATE`, transactional rollback on
+a later statement's failure, incomplete-SQL raising rather than
+vanishing, and idempotency.
+
+### `adaptive_scalper/journal/` — immutable decision journal (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive sections 54-58. Migration `0006_journal.sql`:
+`decision_chains` (one row per traceable chain) + `journal_events`
+(append-only rows in chain order). 27 event types spanning
+`SIGNAL_CREATED` through `LEARNING_UPDATE` (directive's full list plus
+`ORDER_PENDING`/`ORDER_CANCELLED`/`ORDER_EXPIRED`), enforced by both a
+database `CHECK` constraint and Python's `EVENT_TYPES` frozenset (the
+Python check raises a specific `UnknownEventTypeError` before ever
+reaching the database). Strongly-typed, indexed linkage columns
+(`broker_symbol`, `strategy_key`, `client_request_id`, `broker_order_id`,
+`broker_position_id`, `broker_deal_id`) sit alongside a `payload_json`
+column for event-specific fields — no dozens-of-mostly-NULL-columns
+schema for subsystems (cost, RAG, models) that don't exist yet.
+
+**Immutability enforced at two independent layers**: the application API
+(`journal/events.py`) exposes only `append_event()` — no update/delete
+function exists — AND migration 0006's `trg_journal_events_no_update`/
+`trg_journal_events_no_delete` triggers make a direct `UPDATE`/`DELETE`
+fail at the database level too (defense in depth against a future bug in
+the Python layer). `append_event()` assigns `sequence_in_chain`
+deterministically (`1 + MAX(existing)`) inside a `BEGIN IMMEDIATE`
+transaction together with the row insert, closing a TOCTOU race a
+plain autocommit read-then-write would have left open under concurrent
+callers.
+
+`tests/test_journal.py` (18 tests): append/ordering, cross-chain
+independence, linkage-field + payload round-trip, `get_events_by_type`/
+`get_events_for_broker_order` query correctness, unknown-event-type
+rejection (and that nothing partially writes), every directive-named
+event type accepted, `get_or_create_chain` idempotency and its
+symbol-mismatch guard, both immutability triggers actually firing
+(`sqlite3.Error` with an "append-only" message, not just "no test caught
+a problem"), the point-in-time-immutability principle itself (an earlier
+event's payload is provably unaffected by a later contradicting one),
+restart persistence via a fresh connection, and atomic chain-creation
+handling.
+
+**TESTED (live)**: ran the complete features → regime → strategy →
+journal pipeline against 500 real, causally-walked XAUUSD M5 bars,
+journaling every real `StrategySignal` the six active strategies
+produced (391 `SIGNAL_CREATED` events) into the actual persistent
+`data/adaptive_scalper.sqlite3` database with migration 0006 genuinely
+applied (not a tmp test DB) — confirmed readable back via
+`get_events_by_type()`.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -514,15 +578,21 @@ subsystem is built, not assumed safe by extension.
 ## Current next task
 
 Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING) is in
-progress: feature engine, regime classifier, and the six active
-strategies + retirement firewall all exist (see above). Immediately
-next, in directive dependency order: the immutable decision journal
-(needed so strategy signals have somewhere durable to be recorded before
-cost/correlation/risk gates can meaningfully reject them), then cost
-model + expected-net-edge, correlation/portfolio, risk governor, and
-finally composing the full final permission gate as each lands. A live
-tick-bootstrap run (currently only fake-tested + individual live
-gateway-call verification) remains a smaller open item from Phase 2.
+progress: feature engine, regime classifier, six active strategies +
+retirement firewall, and the immutable decision journal all exist (see
+above). Immediately next, in directive dependency order (matching the
+operating loop in directive section 14, which places JOURNAL right after
+ACTIVE STRATEGIES and before RAG/cost/correlation/risk): news system,
+cost model + expected-net-edge, correlation/portfolio, risk governor,
+then composing the full final permission gate as each lands — and
+journaling each gate's ENTRY_ALLOWED/ENTRY_BLOCKED decision as it's
+built, not retrofitted later. `order_send` remains locked (must not be
+added) until the journal, cost/edge, portfolio/risk, full final
+permission gate, execution state machine, idempotency, UNKNOWN handling,
+reconciliation, and a fresh DEMO interlock are ALL in place — journal is
+now done; the rest are not. A live tick-bootstrap run (currently only
+fake-tested + individual live gateway-call verification) remains a
+smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -540,8 +610,8 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-5 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
-`0004_historical_data`, `0005_broker_account_history`).
+6 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+`0004_historical_data`, `0005_broker_account_history`, `0006_journal`).
 
 ## Model state
 
@@ -551,16 +621,16 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 311 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
-`test_config.py`, `test_persistence.py`, `test_kill_switch.py`,
-`test_guardrails.py`, `test_demo_gate.py`, `test_symbol_resolver.py`,
-`test_symbol_validation.py`, `test_synchronized_gateway.py`,
-`test_dashboard_health.py`, `test_cli.py`, `test_history_bootstrap.py`,
-`test_account_history.py`, `test_bar_features.py`,
-`test_regime_classifier.py`, `test_strategies.py`,
-`test_strategy_registry.py`, and `test_mt5_gateway_live.py`
-(live-terminal-only, self-skipping — 7 tests, currently connected on
-this machine).
+entry: 341 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+`test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
+`test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
+`test_symbol_resolver.py`, `test_symbol_validation.py`,
+`test_synchronized_gateway.py`, `test_dashboard_health.py`, `test_cli.py`,
+`test_history_bootstrap.py`, `test_account_history.py`,
+`test_bar_features.py`, `test_regime_classifier.py`, `test_strategies.py`,
+`test_strategy_registry.py`, `test_journal.py`, and
+`test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
+currently connected on this machine).
 
 ## Unverified components
 

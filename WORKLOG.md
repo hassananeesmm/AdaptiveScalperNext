@@ -562,3 +562,88 @@ Chronological, factual record of initialization events. Append only.
   data producing far more statistical_reversion/microstructure_
   acceleration signals than momentum/breakout/volatility_expansion ones).
 - Full suite: 311 passed, 0 failed, 0 skipped.
+- Committed as `c085b6f` and pushed to `origin/main`.
+
+## 2026-09-20 (new session)
+
+- Resumed from a fresh session. Verified local working tree: one
+  untracked file beyond the last push (`c085b6f`) —
+  `adaptive_scalper/persistence/migrations/0006_journal.sql`, work in
+  progress from the previous session's start on the decision journal.
+- Building 0006's immutability trigger (`CREATE TRIGGER ... BEGIN ...
+  END;`) exposed the exact defect BUG_BACKLOG.md had flagged as a known,
+  open limitation: the migration splitter's naive `;`-split cannot
+  safely parse a trigger body's internal semicolons. Rather than route
+  around it (e.g. special-casing 0006, or weakening the trigger), fixed
+  the general parser:
+  - `adaptive_scalper/persistence/database.py`'s `_split_statements()`
+    rewritten around `sqlite3.complete_statement()` — SQLite's own C
+    library statement-boundary oracle. Scans character by character;
+    each `;` triggers a completeness check against the accumulated
+    buffer, so a `;` inside a quoted string, inside a `--` comment, or
+    inside a trigger's `BEGIN...END` body correctly keeps accumulating
+    instead of splitting. This also let the previous separate
+    comment-stripping regex be removed entirely — `complete_statement()`
+    already handles comments correctly.
+  - `tests/test_migration_parser.py` (12 tests): ordinary/multiple
+    statement splitting, two statements on one physical line, a
+    semicolon inside a quoted string literal, a semicolon inside a
+    comment, a two-internal-statement trigger body emitted as exactly
+    one statement, an end-to-end migration (CREATE TABLE + CREATE
+    TRIGGER + CREATE TABLE) that both applies AND whose trigger
+    genuinely blocks a real UPDATE, transactional rollback of earlier
+    statements when a later one fails, incomplete trailing SQL raising
+    `MigrationError` rather than silently vanishing, and idempotency.
+  - Full suite (all prior migrations 0001-0005 still apply correctly
+    under the new parser): 323 passed, 0 failed, 0 skipped.
+  - Live-verified end-to-end: applied migration 0006 against a fresh
+    in-memory database alongside 0001-0005, inserted a real
+    `journal_events` row, then confirmed a direct `UPDATE` and a direct
+    `DELETE` against it both genuinely raise `sqlite3.IntegrityError`
+    with the trigger's "append-only" message — not merely "no test
+    caught a problem."
+  - Marked BUG_BACKLOG.md's naive-splitter entry (and its earlier
+    comment-semicolon sub-fix, which this supersedes) as fully Fixed,
+    with the implementation and exact test list recorded.
+- Completed `adaptive_scalper/journal/` (directive sections 54-58):
+  - `events.py`: `append_event()` — the only write path; no
+    update/delete function exists in the module at all. `sequence_in_chain`
+    is computed as `1 + MAX(existing)` and inserted together with the
+    row inside one `BEGIN IMMEDIATE` transaction, closing a TOCTOU race
+    a plain autocommit read-then-write would leave open under concurrent
+    callers. `EVENT_TYPES` (27 types — directive's full list plus
+    `ORDER_PENDING`/`ORDER_CANCELLED`/`ORDER_EXPIRED`, added after
+    the pasted mission listed them explicitly) is checked in Python
+    before ever reaching the database's own `CHECK` constraint, for a
+    specific `UnknownEventTypeError` instead of a generic
+    `sqlite3.IntegrityError`.
+  - `queries.py`: `get_chain_events()` (full causal chain, in order),
+    `get_events_by_type()`, `get_events_for_broker_order()`.
+  - Migration `0006_journal.sql`: `decision_chains` + `journal_events`,
+    with strongly-typed indexed linkage columns (`broker_symbol`,
+    `strategy_key`, `client_request_id`, `broker_order_id`,
+    `broker_position_id`, `broker_deal_id`) alongside a `payload_json`
+    column for event-specific fields belonging to subsystems that don't
+    exist yet (cost, RAG, models) — avoiding a dozens-of-permanently-NULL-
+    columns schema.
+  - `tests/test_journal.py` (18 tests): append/ordering,
+    cross-chain independence, linkage+payload round-trip, both query
+    functions, unknown-event-type rejection (nothing partially written),
+    every directive-named event type accepted, `get_or_create_chain`
+    idempotency and its cross-symbol-reuse guard, both immutability
+    triggers actually firing, the point-in-time-immutability principle
+    itself (an earlier event's payload is provably unaffected by a later
+    contradicting one — directive section 54's core requirement, not
+    just "no update function exists"), restart persistence via a fresh
+    connection, and atomic chain-creation-plus-insert.
+  - Full suite: 341 passed, 0 failed, 0 skipped.
+- **TESTED (live)**: ran the complete features → regime → strategy →
+  journal pipeline against 500 real, causally-walked XAUUSD M5 bars,
+  journaling every real `StrategySignal` the six active strategies
+  produced (391 `SIGNAL_CREATED` events, `microstructure_acceleration`
+  dominant — consistent with its earlier-observed higher firing
+  frequency) into the ACTUAL persistent `data/adaptive_scalper.sqlite3`
+  database with migration 0006 genuinely applied, then read them back via
+  `get_events_by_type()`. This is exploratory verification data in a
+  gitignored local database, not a claim of any production trading
+  activity.

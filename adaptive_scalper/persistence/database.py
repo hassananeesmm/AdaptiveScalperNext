@@ -13,12 +13,10 @@ from pathlib import Path
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-# Matches a `--` line comment through end-of-line. Stripped before
-# splitting on ';' so a semicolon inside a comment (e.g. "one row per
-# symbol; re-resolution overwrites it") doesn't get mistaken for a
-# statement terminator. Does NOT account for '--' inside a string
-# literal — not a concern for today's plain-DDL migrations (see
-# _split_statements' docstring for the tracked limitation).
+# Used ONLY to decide whether a trailing leftover buffer (after the main
+# splitting loop, which is itself sqlite3-native and comment-aware) is
+# "just a trailing comment" — harmless — versus genuinely incomplete SQL
+# that must raise. Not used for statement splitting itself.
 _LINE_COMMENT_RE = re.compile(r"--[^\n]*")
 
 
@@ -74,22 +72,56 @@ def applied_versions(conn: sqlite3.Connection) -> set[int]:
 
 
 def _split_statements(sql: str) -> list[str]:
-    """Split a migration file into individual ';'-terminated statements.
+    """Split a migration file into individual complete SQL statements.
 
-    Strips '--' line comments first (so a semicolon inside a comment isn't
-    mistaken for a statement terminator — this broke migration 0002, whose
-    comment read "...per symbol; re-resolution overwrites..."), then splits
-    on every remaining top-level ';'.
+    Uses `sqlite3.complete_statement()` — the SQLite C library's own
+    statement-boundary oracle (`sqlite3_complete()`) — as the test for
+    "is this a whole statement yet", rather than a hand-rolled tokenizer.
+    We scan character by character; each time we hit a `;`, we test
+    whether the buffer accumulated so far is a complete statement. If it
+    is, that buffer IS one full statement (including any leading
+    comments) — emit it and reset. If not — e.g. the `;` was inside a
+    quoted string literal, inside a `--` comment, or inside a
+    `CREATE TRIGGER ... BEGIN ... END` body's internal statements — we
+    keep accumulating.
 
-    Deliberately NOT a general SQL tokenizer — it has no awareness of
-    string literals or trigger bodies that embed their own semicolons or
-    '--'. That is sufficient for the plain DDL our migrations contain
-    today. If a future migration needs a trigger body or a string literal
-    containing ';' or '--', this must be replaced with a real tokenizer
-    first — do not add such a migration against this splitter.
+    This is what makes a trigger body's own internal semicolons (e.g.
+    `SELECT RAISE(ABORT, '...');` inside `BEGIN ... END;`) correctly
+    stay part of ONE statement instead of being split into invalid
+    fragments — the previous regex-based splitter could not do this (see
+    BUG_BACKLOG.md's now-fixed entry on it) and explicitly forbade adding
+    a migration with a trigger body against it. `sqlite3.complete_statement()`
+    is comment- and string-literal-aware on its own, so there is no
+    separate comment-stripping step here (there previously was, and it
+    was itself a source of a real bug — see BUG_BACKLOG.md).
+
+    Relies on our migration files' convention of never putting two
+    complete top-level statements on the same physical `;` boundary
+    inside a single accumulated test — true by construction here since
+    we test at every individual `;` occurrence, not per-line, so this
+    also correctly splits e.g. "CREATE TABLE a(x); CREATE TABLE b(y);"
+    written on one line into two statements.
+
+    Raises `MigrationError` if the file ends with trailing SQL that
+    never became complete (a missing final ';', or an unterminated
+    trigger body) rather than silently dropping it.
     """
-    without_comments = _LINE_COMMENT_RE.sub("", sql)
-    return [stmt.strip() for stmt in without_comments.split(";") if stmt.strip()]
+    statements: list[str] = []
+    buffer = ""
+    for ch in sql:
+        buffer += ch
+        if ch == ";" and sqlite3.complete_statement(buffer):
+            stmt = buffer.strip()
+            if stmt:
+                statements.append(stmt)
+            buffer = ""
+    remainder = buffer.strip()
+    if remainder and _LINE_COMMENT_RE.sub("", remainder).strip():
+        raise MigrationError(
+            f"migration file ends with an incomplete SQL statement "
+            f"(missing terminating ';', or an unterminated trigger/quote?): {remainder!r}"
+        )
+    return statements
 
 
 def migrate(conn: sqlite3.Connection) -> list[int]:
