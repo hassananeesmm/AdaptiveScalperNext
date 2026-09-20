@@ -63,6 +63,15 @@ def test_apply_transition_raises_from_a_terminal_state():
         apply_transition(OrderState.FILLED, OrderState.CANCELLED)
 
 
+def test_submitted_can_reach_partial_resting_cancelled_directly():
+    # execution-safety review finding #2: order_send's own retcode can
+    # directly report DONE_PARTIAL/PLACED/CANCEL -- these must not
+    # require an artificial intermediate ACCEPTED step.
+    assert validate_transition(OrderState.SUBMITTED, OrderState.PARTIAL) is True
+    assert validate_transition(OrderState.SUBMITTED, OrderState.RESTING) is True
+    assert validate_transition(OrderState.SUBMITTED, OrderState.CANCELLED) is True
+
+
 def test_every_order_state_has_an_entry_in_allowed_transitions():
     # No state can silently fall through to an unspecified (and thus
     # accidentally permissive) default.

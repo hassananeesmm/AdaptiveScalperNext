@@ -5,6 +5,46 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
+0a. [SEVERITY: HIGH, SUBSYSTEM: execution] `execution/reconciliation
+   .run_reconciliation()`'s `RECOVERED` status is misleading — it
+   classifies MISSING_LOCAL_POSITION-only findings as `RECOVERED` but
+   does not actually repair the local `positions` row from broker
+   deal/order history (close price, time, volume, commission, swap,
+   profit), mark it CLOSED, or resolve the incident. Round-2 external
+   review finding #4. Needs either a rename to `RECOVERABLE` or (preferred)
+   real repair logic querying `history_deals_get()`/`history_orders_get()`
+   for the exact position id and atomically updating local state +
+   journaling `POSITION_CLOSED` + resolving the incident.
+
+0b. [SEVERITY: HIGH, SUBSYSTEM: core] `core/final_permission.py` still
+   documents `BLOCK_PORTFOLIO_RISK` as an unintegrated gap. Round-2
+   external review finding #6. Needs a deterministic portfolio-heat
+   policy using open/pending/proposed monetary risk, per-symbol and
+   currency-direction exposure, and correlated-cluster exposure —
+   conservative, configurable, bounded by the existing
+   `max_total_open_risk_pct`, fail-closed on N/A evidence, never
+   raisable by ML/RAG.
+
+0c. [SEVERITY: HIGH, SUBSYSTEM: execution] `execution/unknown.py`'s
+   `resolve_unknown_order()` still requires `order.broker_order_id` to be
+   known before it attempts any resolution — an ambiguous send that lost
+   acknowledgement entirely (broker_order_id never recorded, even though
+   the broker may have accepted the request) has no resolution path at
+   all today beyond staying UNKNOWN forever. Round-2 external review
+   finding #7. Needs a conservative secondary correlation path (embedded
+   client_request_id token in the broker comment, magic, symbol,
+   direction, volume, tight time window against deals/positions/pending
+   orders) that resolves ONLY on unique positive evidence, remaining
+   UNKNOWN (blocking new entries) on any ambiguity. `execution/service.py`
+   does not yet embed a compact request token in `OrderRequest.comment`
+   for this to key off — needed first.
+
+0d. [SEVERITY: HIGH, SUBSYSTEM: position_management] Still no
+   `position_management/expectancy.py` — see earlier entry below (was
+   already tracked as item 6; round-2 external review restates this as
+   finding #8 and additionally asks for RAG/model evidence and
+   holding-duration/current-R/peak-R inputs to feed it, once it exists).
+
 1. **security-guidance plugin's agent-sdk-venv is a machine-global,
    non-git-tracked resource.** `~/.claude/security/agent-sdk-venv`
    (Python 3.14) can independently go stale/broken (observed once this
@@ -95,6 +135,21 @@ delete) once fixed, with the fixing commit/date noted.
    volume.
 
 ## Fixed
+
+- ~~[SEVERITY: CRITICAL, SUBSYSTEM: execution] Round-2 external review, 3
+  CRITICAL findings: (1) fresh pre-send safety was documented but not
+  structurally enforced -- a caller could pass a stale `FinalPermissionInput`;
+  (2) `order_send` retcodes were reduced to a "10009 or REJECTED" binary,
+  misclassifying `DONE_PARTIAL`/`PLACED` (real broker state) as rejections;
+  (3) `execution/close.py` sent directly via `gateway.order_send()` without
+  the same pre-send protections a new entry gets.~~ Fixed 2026-09-20 — see
+  PROJECT_STATUS.md's "Execution-safety review round 2" section for full
+  detail. New: `gateway/retcodes.py`. Rewrote:
+  `execution/service.py` (evidence-builder-callable pattern, called
+  twice), `execution/close.py` (same two-round-of-checks pattern, DEMO-
+  verification-scoped rather than full final-permission-gated). Widened:
+  `execution/state_machine.py`'s `SUBMITTED` transitions. 5 more HIGH
+  findings from the same review remain open — see items 0a-0d above.
 
 - ~~[SEVERITY: CRITICAL, SUBSYSTEM: execution] 9 execution-safety issues
   found by external review of the Phase 4 execution layer, before

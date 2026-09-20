@@ -1193,4 +1193,70 @@ source self-modification, no eval/exec):
   walk-forward subsystem's temporal-split machinery first — directive's
   own dependency order, not skipped by oversight).
 
-Full suite: 799 passed, 0 failed, 0 skipped.
+Full suite: 799 passed, 0 failed, 0 skipped. Committed as `bebb540` and
+pushed to `origin/main`.
+
+## Session: round-2 execution-safety review (3 CRITICAL fixed)
+
+Resumed from `bebb540` (verified clean, nothing newer locally). A second
+external review of the execution layer found 8 more issues before any
+real `order_send` could be considered. Fixed the 3 CRITICAL ones this
+checkpoint (the 5 HIGH ones are tracked as BUG_BACKLOG.md items 0a-0d):
+
+1. **Fresh pre-send safety, structurally enforced.**
+   `execution/service.submit_new_entry()`'s signature changed from a
+   plain `permission_input: FinalPermissionInput` parameter to
+   `fetch_fresh_evidence: Callable[[], FreshEvidence]`. The function now
+   calls this callable TWICE and re-runs
+   `evaluate_and_journal_final_permission()` both times — once before
+   `order_check`, and again immediately before `order_send`. A plain
+   parameter can only be evaluated once, at whatever moment the caller
+   built it; a callable structurally forces a second, independent
+   evaluation this function itself controls the timing of. New
+   `BLOCKED_PRESEND_RECHECK` status. 9 new regression tests, each
+   simulating one volatile-evidence change (account leaves DEMO, kill
+   switch engages, quote goes stale, a news window opens, reconciliation
+   becomes blocking, an UNKNOWN appears, risk state moves, a duplicate
+   appears) between the two evidence fetches, each asserting
+   `gateway.order_send_calls == []` — proving the second check actually
+   prevents the send, not just that the function returns a different
+   status.
+2. **Authoritative MT5 retcode mapping.** New `gateway/retcodes.py`:
+   real `ENUM_TRADE_RETCODE` semantics, not a "10009 or REJECTED"
+   binary. `DONE_PARTIAL` (10010) -> `PARTIAL` (real exposure at the
+   actual filled volume, journaled, never rejected). `PLACED` (10008)
+   -> `RESTING` (never rejected). `TIMEOUT`/`ERROR`/`CONNECTION` ->
+   `UNKNOWN` (ambiguous transport outcome, conservative, never guessed
+   into DONE or REJECTED, never blindly resent). Only retcodes with
+   positive proof of rejection (`REQUOTE`, `REJECT`, `INVALID_*`,
+   `TRADE_DISABLED`, `MARKET_CLOSED`, `NO_MONEY`, etc.) map to
+   `REJECTED`. An unrecognized retcode (future SDK/broker value not in
+   the table) also conservatively maps to `UNKNOWN`, never guessed.
+   `execution/state_machine.py`'s `SUBMITTED` transitions widened to
+   allow direct `PARTIAL`/`RESTING`/`CANCELLED` (order_send's own
+   retcode can report these immediately — `SUBMITTED -> FILLED` directly
+   remains illegal, broker acknowledgement of a full DONE still isn't a
+   fill). 16 tests in `test_gateway_retcodes.py`, including explicit
+   regressions proving 10008/10009/10010 can never become REJECTED and
+   TIMEOUT can never become REJECTED or DONE.
+3. **Safe close gets the same pre-send protections as a new entry.**
+   `execution/close.close_position_safely()` rewritten around
+   `verify_demo_before_order()` (genuinely fresh — it calls
+   `terminal_info()`/`account_info()` itself every time, no caching
+   layer to go stale) + fresh `positions_get()` + fresh `symbol_info()`
+   -derived filling type, run TWICE (once before `order_check`, once
+   again immediately before `order_send`), then `interpret_retcode()` on
+   the result. Deliberately does NOT check the kill switch or run the
+   full final-permission gate — directive: "risk reduction should remain
+   available" even when new entries are blocked; only DEMO-account truth
+   and freshly-proven position identity gate a close. Optional
+   `conn`/`reconciliation_chain_key` params trigger a real reconciliation
+   pass immediately after a `SENT` outcome. 14 tests, including the
+   account-switches-to-REAL-mid-flight and position-disappears-mid-flight
+   races, both proving zero additional `order_send` calls.
+
+Also fixed the stale `PROJECT_STATUS.md` "Current phase" section
+(round-2 finding #5) — it still claimed Phases 4-13 hadn't started and
+`order_send` didn't exist, both false since the round-1 checkpoint.
+
+Full suite: 837 passed, 0 failed, 0 skipped (up from 799).

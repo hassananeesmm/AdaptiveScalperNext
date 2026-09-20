@@ -49,7 +49,18 @@ class InvalidTransitionError(ValueError):
 # state OR PARTIAL once reconciliation determines the truth.
 ALLOWED_TRANSITIONS: dict[OrderState, frozenset[OrderState]] = {
     OrderState.PROPOSED: frozenset({OrderState.SUBMITTED}),
-    OrderState.SUBMITTED: frozenset({OrderState.ACCEPTED, OrderState.REJECTED, OrderState.UNKNOWN}),
+    # execution-safety review finding #2: MT5's order_send retcode can
+    # itself directly report PARTIAL (DONE_PARTIAL=10010) or a resting
+    # pending order (PLACED=10008) or an outright CANCEL — these are
+    # real, immediate broker acknowledgement outcomes, not states that
+    # must first pass through ACCEPTED. SUBMITTED -> FILLED directly
+    # remains illegal (broker acknowledgement is still never conflated
+    # with a fill — a DONE=10009 result always resolves through ACCEPTED
+    # first, then position resolution decides FILLED/UNKNOWN).
+    OrderState.SUBMITTED: frozenset({
+        OrderState.ACCEPTED, OrderState.REJECTED, OrderState.CANCELLED,
+        OrderState.PARTIAL, OrderState.RESTING, OrderState.UNKNOWN,
+    }),
     OrderState.ACCEPTED: frozenset({
         OrderState.PENDING, OrderState.RESTING, OrderState.FILLED, OrderState.PARTIAL, OrderState.UNKNOWN,
     }),

@@ -26,19 +26,40 @@ C:\AdaptiveScalperNext (GitHub: `hassananeesmm/AdaptiveScalperNext`, branch `mai
 ## Current phase
 
 Directive §117 PHASE 1 (FOUNDATION) and PHASE 2 (HISTORY) are complete
-and live-verified. PHASE 3 (CORE TRADING) is now substantially complete
-and live-verified end to end: feature engine, regime classifier, six
-active strategies + retirement firewall, the immutable decision journal,
-the keyless news system, the cost/expected-net-edge gate, correlation/
-portfolio exposure tracking, the risk governor, and the COMPOSED final
-permission gate (directive §36) all exist and were verified together in
-one real pipeline run against the live DEMO account and real market
-data (see "Composed final permission gate" below). Phases 4-13
-(execution, position management, RAG, ML, backtesting, full dashboard,
-release) have not started — `order_send` does not exist anywhere in
-this codebase and remains deliberately locked until Phase 4's
-dependencies (execution state machine, idempotency, UNKNOWN handling,
-reconciliation) exist.
+and live-verified. PHASE 3 (CORE TRADING) is complete and live-verified
+end to end: feature engine, regime classifier, six active strategies +
+retirement firewall, the immutable decision journal, the keyless news
+system, the cost/expected-net-edge gate, correlation/portfolio exposure
+tracking, the risk governor, and the COMPOSED final permission gate
+(directive §36) all exist and were verified together in one real
+pipeline run against the live DEMO account and real market data.
+
+PHASE 4 (EXECUTION) exists: `order_send`/`order_check`/`positions_get`/
+`orders_get` are implemented on `Mt5Gateway`/`FakeGateway`; the order
+state machine, idempotent persistence, UNKNOWN resolution (all-evidence),
+reconciliation (real gateway truth), position-ticket resolution, a safe
+close path, and `execution/service.py` (the one execution orchestration
+service, architecturally enforced) all exist and are tested. **No real
+DEMO `order_send` has ever been performed** — this remains a deliberate
+scope boundary pending the full PAPER run and QA campaign, not a missing
+capability.
+
+PHASE 5 (position management) has adaptive-exit and re-entry DECISION
+CORES implemented and tested, but no continuous position-expectancy
+engine or runtime position-management LOOP yet (see "Current next task"
+below for the exact gap).
+
+Local RAG (`adaptive_scalper/rag/`, advisory-only) and ML/self-learning
+OBSERVER-STAGE machinery (`adaptive_scalper/learning/` — lifecycle,
+registry, promotion gate, drift response; no real model training yet)
+are both implemented and tested.
+
+NOT yet started: backtest/walk-forward/OOS, real ML training, the
+complete dashboard/CLI, the full end-to-end runtime engine, and release
+packaging. Schema version 11. See "Current next task" below for the
+authoritative list of what remains, and never infer completion of
+anything not explicitly marked IMPLEMENTED/CONNECTED/TESTED in this
+file.
 
 ## Completed components
 
@@ -1043,7 +1064,59 @@ subsystem is built, not assumed safe by extension.
   `.claude/hooks/guardrails.py` (this project's own PreToolUse gate) does
   not depend on it at all.
 
-## Execution-safety review fixes (this checkpoint)
+## Execution-safety review round 2 (this checkpoint) — 3 CRITICAL fixed
+
+A second external review of the execution layer found 8 more issues.
+The 3 CRITICAL ones (explicit blockers before any real `order_send`) are
+fixed this checkpoint; the 5 HIGH ones are tracked in BUG_BACKLOG.md and
+being worked next.
+
+1. **Fresh pre-send safety is now structurally enforced.**
+   `execution/service.submit_new_entry()` no longer accepts a pre-built
+   `FinalPermissionInput`. It now takes `fetch_fresh_evidence: Callable[[],
+   FreshEvidence]` and calls it TWICE — once before `order_check`, and a
+   SECOND, independent time immediately before `order_send` — re-running
+   `evaluate_and_journal_final_permission()` fresh both times. A caller
+   cannot satisfy the contract with a cached snapshot: the function
+   itself controls when the callable runs. If anything volatile changed
+   between the two calls (kill switch engaged, account left DEMO, quote
+   went stale, a news window opened, reconciliation became blocking, an
+   UNKNOWN/duplicate appeared, risk state moved), the second evaluation
+   returns something other than `ALLOW` and `order_send` is never
+   reached — new status `BLOCKED_PRESEND_RECHECK`. 9 new regression
+   tests in `test_execution_service.py`, one per volatile-evidence
+   scenario, each asserting `gateway.order_send_calls == []`.
+2. **Authoritative MT5 retcode mapping.** New `gateway/retcodes.py`
+   (`interpret_retcode()`) replaces the old "10009 or REJECTED" binary
+   with real MT5 `ENUM_TRADE_RETCODE` semantics — `DONE_PARTIAL` (10010)
+   maps to `PARTIAL` (real exposure, journaled with the actual filled
+   volume), `PLACED` (10008) maps to `RESTING`, `TIMEOUT`/`ERROR`/
+   `CONNECTION` map to `UNKNOWN` (never guessed into REJECTED or DONE,
+   never blindly resent), and only retcodes with POSITIVE proof of
+   rejection (REQUOTE, REJECT, INVALID_*, TRADE_DISABLED, MARKET_CLOSED,
+   NO_MONEY, etc.) map to `REJECTED`. `execution/state_machine.py`'s
+   `SUBMITTED` transitions widened to allow direct `PARTIAL`/`RESTING`/
+   `CANCELLED` (order_send's own retcode can report these immediately,
+   without an artificial intermediate `ACCEPTED` step — `SUBMITTED ->
+   FILLED` directly remains illegal). `execution/close.py` uses the same
+   interpreter. 16 tests in `test_gateway_retcodes.py`.
+3. **Safe close now carries the same pre-send protections as a new
+   entry.** `execution/close.close_position_safely()` rewritten: fresh
+   `verify_demo_before_order()` + fresh `positions_get()` + fresh
+   `symbol_info()`-derived filling type, exact `OrderRequest`, mandatory
+   `order_check()`, then BOTH checks refreshed again independently
+   immediately before `order_send`, then `interpret_retcode()` on the
+   result. Deliberately does NOT check the kill switch or the full final
+   permission gate — a close is risk REDUCTION and must stay available
+   even when new entries are blocked; it only verifies DEMO account
+   truth and accurate, freshly-proven position identity. Optional
+   `conn`/`reconciliation_chain_key` params run a real reconciliation
+   pass immediately after a `SENT` outcome. 14 tests including account-
+   switches-mid-flight and position-disappears-mid-flight races.
+
+Full suite: 837 passed, 0 failed, 0 skipped (up from 799).
+
+## Execution-safety review round 1 fixes (prior checkpoint)
 
 An external review of the Phase 4 execution-layer building blocks found
 9 issues before controlled-DEMO execution could be considered. All nine
@@ -1293,7 +1366,10 @@ has no code path that produces a real trained artifact yet. 51 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 799 passed, 0 failed, 0 skipped (up from 616 at the start of this
+entry: 837 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
+added `test_gateway_retcodes.py` and substantially rewrote
+`test_execution_service.py`/`test_execution_close.py`/
+`test_execution_state_machine.py`; up from 799) (up from 616 at the start of this
 checkpoint — the execution-safety review fixes and position-management
 work added `test_position_resolution.py`, `test_execution_close.py`,
 `test_broker_constraints.py`, `test_execution_service.py`,
