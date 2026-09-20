@@ -900,3 +900,43 @@ Chronological, factual record of initialization events. Append only.
   real database), under which every other real gate passed and the
   result was `ALLOW`. The real runtime kill switch was NOT cleared or
   bootstrapped at any point.
+- Committed as `8340975` and pushed to `origin/main`.
+- Built `adaptive_scalper/execution/` (directive sections 29-31),
+  continuing automatically without stopping — the safety layer that
+  must exist and be tested BEFORE `order_send` is ever added, per the
+  mission's explicit lock:
+  - `state_machine.py`: `OrderState` (12 states) + `ALLOWED_TRANSITIONS`.
+    Broker acknowledgement is deliberately NOT a fill —
+    `SUBMITTED -> FILLED` directly is an illegal transition;
+    `apply_transition()` raises rather than silently permitting it.
+  - `store.py`: `create_order()` idempotent on `client_request_id` — a
+    second call with the same id returns the EXISTING row unchanged,
+    even when called with entirely different parameters (tested
+    explicitly). `transition_order_state()` is the only path that
+    changes an order's state, always validated through the state
+    machine first, with the initial `PROPOSED` creation itself recorded
+    as a transition so an order's full lifecycle — not just its current
+    state — is always reconstructable.
+  - `unknown.py`: `resolve_unknown_order()` resolves against
+    `history_orders_get()` (already implemented, already live-tested).
+    Explicitly honest about its current limit: without
+    `positions_get`/`orders_get` (which don't exist yet), an order still
+    genuinely resting on the broker with no history entry yet correctly
+    reports `resolved=False` rather than guessing.
+  - `reconciliation.py`: `reconcile_positions()` (broker truth
+    authoritative — orphan broker position / missing local position /
+    volume-or-direction mismatch) and `has_dangerous_unresolved_unknown()`
+    for the "block new entries" check directive section 30 requires.
+    `BrokerPositionSnapshot` is an explicit, documented stand-in for
+    `positions_get()`'s future real output.
+  - Migration `0009_execution.sql`: `orders`, `order_state_transitions`,
+    `deals`, `positions`, `execution_incidents`.
+  - 52 new tests across four files, all passing on first run.
+  - Full suite: 573 passed, 0 failed, 0 skipped.
+- **TESTED (live)**: fetched 2,234 real orders from the live DEMO
+  account's order history (2,218 genuinely `FILLED`), built a simulated
+  `UNKNOWN` local order referencing one real broker ticket, and
+  confirmed `resolve_unknown_order()` correctly resolved it to `FILLED`
+  with the correct `broker_position_id` — the resolution logic works
+  against the real shape of broker history data, not just synthetic
+  fixtures.

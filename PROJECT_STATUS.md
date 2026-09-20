@@ -854,6 +854,65 @@ verification done this session: the entire composed decision chain
 working correctly end to end against real broker/market/account data,
 with the real kill switch never bypassed.
 
+### `adaptive_scalper/execution/` — order state machine, idempotency, UNKNOWN resolution, reconciliation (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive sections 29-31. `order_send` still does not exist anywhere in
+this codebase — this is the safety layer directive's own build order
+requires to exist FIRST, built and tested before it.
+
+- `state_machine.py`: `OrderState` (12 states) + `ALLOWED_TRANSITIONS`,
+  the single source of truth for legal state changes. Broker
+  acknowledgement is NOT a fill — `SUBMITTED -> FILLED` directly is
+  illegal; every non-terminal active state can reach `UNKNOWN`;
+  `UNKNOWN`/`PENDING_RECONCILIATION` can resolve to any terminal state or
+  `PARTIAL`. `apply_transition()` raises `InvalidTransitionError` on any
+  illegal jump rather than silently allowing it.
+- `store.py`: `create_order()` is idempotent on `client_request_id` —
+  calling it twice (e.g. after a caller can't tell if a previous attempt
+  reached the broker) returns the SAME row, never a duplicate, and
+  ignores the second call's parameters entirely (proven by a dedicated
+  test). `transition_order_state()` is the ONLY way an order's state
+  changes, always validated through the state machine first and recorded
+  in `order_state_transitions` (including the initial `PROPOSED`
+  creation) so an order's full lifecycle is always reconstructable, not
+  just its current state.
+- `unknown.py`: `resolve_unknown_order()` resolves against
+  `history_orders_get()` (already implemented and live-tested).
+  Explicitly, honestly limited: without a `positions_get`/`orders_get`
+  (which don't exist yet — directive's own dependency order places them
+  alongside `order_send`, not before), an order genuinely still resting
+  with no history entry yet is correctly reported `resolved=False`
+  rather than guessed at.
+- `reconciliation.py`: `reconcile_positions()` — broker truth
+  authoritative, detects `ORPHAN_BROKER_POSITION`/
+  `MISSING_LOCAL_POSITION`/volume-or-direction `RECONCILIATION_MISMATCH`.
+  `BrokerPositionSnapshot` is an explicit stand-in for `positions_get()`'s
+  future real output — pure and fully testable today against constructed
+  data; will not need to change when the real gateway call exists.
+  `has_dangerous_unresolved_unknown()` — directive section 30's "a
+  dangerous unresolved UNKNOWN may block new entries" — checks for any
+  unresolved `UNKNOWN_OUTCOME` execution incident.
+- Migration `0009_execution.sql`: `orders` (idempotency-keyed),
+  `order_state_transitions`, `deals`, `positions`, `execution_incidents`.
+
+`tests/test_execution_state_machine.py` (16) +
+`tests/test_execution_store.py` (10) + `tests/test_execution_unknown.py`
+(11) + `tests/test_execution_reconciliation.py` (15) = 52 tests: every
+transition-legality edge case, idempotent creation (including that a
+second call's DIFFERENT parameters are ignored), full lifecycle history
+reconstruction, restart persistence, every MT5 order-state resolution
+outcome (FILLED/REJECTED/CANCELLED/EXPIRED/PARTIAL/RESTING),
+transient-state non-resolution, and every reconciliation finding type
+including multi-position independence.
+
+**TESTED (live)**: fetched 2,234 real orders from the live DEMO account's
+order history (2,218 genuinely `FILLED`), constructed a simulated
+`UNKNOWN` local order referencing one real broker ticket, and confirmed
+`resolve_unknown_order()` correctly resolved it to `FILLED` with the
+correct `broker_position_id` — proving the resolution logic works
+against the real shape of broker history data, not just synthetic
+fixtures.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -915,18 +974,22 @@ subsystem is built, not assumed safe by extension.
 
 ## Current next task
 
-Phase 3 (CORE TRADING) is now substantially COMPLETE and live-verified
-end to end, including the composed final permission gate (directive
-section 36 — see `core/final_permission.py` above). Phase 4 (EXECUTION)
-is next: the strategy selector (combine the six strategies' signals into
-one proposal or FLAT — not simply highest raw confidence), the order
-state machine (PROPOSED → ... → FILLED/UNKNOWN), idempotency
-(client_request_id), UNKNOWN resolution (never blindly resend),
-reconciliation (broker truth authoritative), and only then extending the
-gateway with `order_send`/`order_check`/`positions_get`/`orders_get`.
-`order_send` remains deliberately locked until all of that exists. A
-live tick-bootstrap run (currently only fake-tested + individual live
-gateway-call verification) remains a smaller open item from Phase 2.
+Phase 3 (CORE TRADING) is complete and live-verified end to end,
+including the composed final permission gate. Phase 4 (EXECUTION) is in
+progress: the order state machine, idempotency, UNKNOWN resolution, and
+reconciliation LOGIC all exist and are live-verified (see
+`execution/` above) — but the gateway itself still has NO
+`order_send`/`order_check`/`positions_get`/`orders_get` methods, so
+nothing can actually submit an order yet. Immediately next: (1) the
+strategy selector (combine the six strategies' signals into one proposal
+or FLAT — not simply highest raw confidence), (2) extend the gateway
+with those four methods (MetaTrader5 import isolated to `mt5_gateway.py`
+as always), wired through the one shared `SynchronizedGateway`, (3) wire
+the execution layer's store/unknown/reconciliation modules to the real
+gateway calls, all BEFORE `order_send` is ever actually invoked outside
+a controlled DEMO test. A live tick-bootstrap run (currently only
+fake-tested + individual live gateway-call verification) remains a
+smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -944,9 +1007,9 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-8 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+9 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
-`0007_news`, `0008_costs`).
+`0007_news`, `0008_costs`, `0009_execution`).
 
 ## Model state
 
@@ -956,7 +1019,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 521 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 573 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
@@ -967,7 +1030,9 @@ entry: 521 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_news_providers.py`, `test_news_calendar_service.py`,
 `test_cost_model.py`, `test_cost_edge.py`, `test_cost_tracking.py`,
 `test_portfolio_correlation.py`, `test_portfolio_exposure.py`,
-`test_risk_governor.py`, `test_final_permission.py`, and
+`test_risk_governor.py`, `test_final_permission.py`,
+`test_execution_state_machine.py`, `test_execution_store.py`,
+`test_execution_unknown.py`, `test_execution_reconciliation.py`, and
 `test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
 currently connected on this machine).
 
