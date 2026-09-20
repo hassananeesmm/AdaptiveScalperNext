@@ -19,6 +19,12 @@ from adaptive_scalper.gateway.types import (
     Bar,
     HistoricalDeal,
     HistoricalOrder,
+    OrderAction,
+    OrderCheckResult,
+    OrderRequest,
+    OrderSendResult,
+    PendingOrderSnapshot,
+    PositionSnapshot,
     SymbolSpec,
     SymbolTradeMode,
     TerminalSnapshot,
@@ -185,6 +191,123 @@ def _bar(raw) -> Bar:
     )
 
 
+def _direction_from_mt5_position_type(raw_type: int) -> str:
+    # MT5 POSITION_TYPE_BUY=0, POSITION_TYPE_SELL=1.
+    return "BUY" if raw_type == 0 else "SELL"
+
+
+def _direction_from_mt5_order_type(raw_type: int) -> str:
+    # MT5 ORDER_TYPE_BUY*=even values, ORDER_TYPE_SELL*=odd values for
+    # the market/limit/stop family this project ever places (0-5); this
+    # project only ever places plain market orders (0/1) in practice,
+    # but pending orders_get() can still legitimately report limit/stop
+    # types placed manually or by a future feature, so this stays general
+    # for the direction bit specifically.
+    return "BUY" if raw_type % 2 == 0 else "SELL"
+
+
+def _position_snapshot(raw) -> PositionSnapshot:
+    return PositionSnapshot(
+        broker_position_id=str(raw.ticket),
+        symbol=raw.symbol,
+        direction=_direction_from_mt5_position_type(raw.type),
+        volume=raw.volume,
+        price_open=raw.price_open,
+        stop_loss=raw.sl,
+        take_profit=raw.tp,
+        profit=raw.profit,
+        magic=raw.magic,
+        comment=raw.comment,
+    )
+
+
+def _pending_order_snapshot(raw) -> PendingOrderSnapshot:
+    return PendingOrderSnapshot(
+        broker_order_id=str(raw.ticket),
+        symbol=raw.symbol,
+        direction=_direction_from_mt5_order_type(raw.type),
+        volume=raw.volume_current,
+        price=raw.price_open,
+        magic=raw.magic,
+        comment=raw.comment,
+    )
+
+
+_ORDER_ACTION_TO_MT5_ATTR = {
+    OrderAction.DEAL: "TRADE_ACTION_DEAL",
+    OrderAction.SLTP: "TRADE_ACTION_SLTP",
+    OrderAction.REMOVE: "TRADE_ACTION_REMOVE",
+}
+
+
+def _build_mt5_request(mt5mod, req: OrderRequest) -> dict:
+    """Translate our broker-independent `OrderRequest` into MetaTrader5's
+    raw request dict. This is the ONLY place in the codebase that
+    constructs MT5's own request shape."""
+    request: dict = {
+        "action": getattr(mt5mod, _ORDER_ACTION_TO_MT5_ATTR[req.action]),
+        "symbol": req.symbol,
+        "magic": req.magic,
+        "comment": req.comment,
+    }
+
+    if req.action == OrderAction.DEAL:
+        if req.direction not in ("BUY", "SELL"):
+            raise ValueError(f"OrderRequest.direction must be 'BUY' or 'SELL' for a DEAL, got {req.direction!r}")
+        request["type"] = mt5mod.ORDER_TYPE_BUY if req.direction == "BUY" else mt5mod.ORDER_TYPE_SELL
+        request["volume"] = req.volume
+        request["type_time"] = mt5mod.ORDER_TIME_GTC
+        request["type_filling"] = mt5mod.ORDER_FILLING_IOC
+        request["deviation"] = req.deviation_points
+        if req.price is not None:
+            request["price"] = req.price
+        if req.stop_loss is not None:
+            request["sl"] = req.stop_loss
+        if req.take_profit is not None:
+            request["tp"] = req.take_profit
+
+    elif req.action == OrderAction.SLTP:
+        if req.position_ticket is None:
+            raise ValueError("OrderRequest.position_ticket is required for an SLTP action")
+        request["position"] = req.position_ticket
+        if req.stop_loss is not None:
+            request["sl"] = req.stop_loss
+        if req.take_profit is not None:
+            request["tp"] = req.take_profit
+
+    elif req.action == OrderAction.REMOVE:
+        if req.order_ticket is None:
+            raise ValueError("OrderRequest.order_ticket is required for a REMOVE action")
+        request["order"] = req.order_ticket
+
+    return request
+
+
+def _order_send_result(raw, retcode_on_none: tuple[int, str] | None = None) -> OrderSendResult:
+    if raw is None:
+        code, msg = retcode_on_none or (-1, "order_send returned None")
+        return OrderSendResult(
+            retcode=code, comment=msg, broker_order_id=None, broker_deal_id=None,
+            broker_position_id=None, volume_filled=0.0, price_filled=None, raw={},
+        )
+    return OrderSendResult(
+        retcode=raw.retcode,
+        comment=raw.comment,
+        broker_order_id=str(raw.order) if raw.order else None,
+        broker_deal_id=str(raw.deal) if raw.deal else None,
+        # MT5 sets `order` to the position ticket for a market DEAL fill;
+        # `deal`/`order` disambiguation for SLTP/REMOVE happens at the
+        # caller level, which knows which action it sent.
+        broker_position_id=str(raw.order) if raw.order else None,
+        volume_filled=raw.volume,
+        price_filled=raw.price if raw.price else None,
+        raw={
+            "retcode": raw.retcode, "deal": raw.deal, "order": raw.order,
+            "volume": raw.volume, "price": raw.price, "comment": raw.comment,
+        },
+    )
+
+
 class Mt5Gateway:
     """Thin translation layer over the `MetaTrader5` package. No business
     logic lives here — only calling the SDK and converting its output to
@@ -267,6 +390,33 @@ class Mt5Gateway:
         if raw is None:
             return []
         return [_historical_deal(row) for row in raw]
+
+    def positions_get(self) -> list[PositionSnapshot]:
+        raw = self._mt5.positions_get()
+        if raw is None:
+            return []
+        return [_position_snapshot(p) for p in raw]
+
+    def orders_get(self) -> list[PendingOrderSnapshot]:
+        raw = self._mt5.orders_get()
+        if raw is None:
+            return []
+        return [_pending_order_snapshot(o) for o in raw]
+
+    def order_check(self, request: OrderRequest) -> OrderCheckResult:
+        mt5_request = _build_mt5_request(self._mt5, request)
+        raw = self._mt5.order_check(mt5_request)
+        if raw is None:
+            code, msg = self.last_error()
+            return OrderCheckResult(retcode=code, comment=msg, margin_required=None)
+        return OrderCheckResult(
+            retcode=raw.retcode, comment=raw.comment, margin_required=getattr(raw, "margin", None),
+        )
+
+    def order_send(self, request: OrderRequest) -> OrderSendResult:
+        mt5_request = _build_mt5_request(self._mt5, request)
+        raw = self._mt5.order_send(mt5_request)
+        return _order_send_result(raw, retcode_on_none=self.last_error() if raw is None else None)
 
     def last_error(self) -> tuple[int, str]:
         return tuple(self._mt5.last_error())

@@ -1,10 +1,14 @@
 """The gateway interface every broker backend (real MT5, fake/test) implements.
 
-Order submission (order_send/order_check) is deliberately NOT part of this
-protocol yet. It is added only once the order state machine, idempotency,
-and reconciliation (directive sections 29-31) exist to receive its result
-safely — adding it earlier would be exactly the kind of disconnected
-"showpiece" capability section 118 forbids.
+`order_send`/`order_check`/`positions_get`/`orders_get` were deliberately
+withheld until the order state machine, idempotency, and reconciliation
+(directive sections 29-31, `adaptive_scalper/execution/`) existed to
+receive their results safely — adding them earlier would have been
+exactly the kind of disconnected "showpiece" capability section 118
+forbids. That layer now exists (see PROJECT_STATUS.md), so these methods
+are added here. Nothing in this codebase calls `order_send` yet outside
+tests against `FakeGateway` — see CLAUDE.md/MASTER_BUILD_DIRECTIVE.md for
+the PAPER/QA/controlled-DEMO validation gates that must pass first.
 """
 
 from __future__ import annotations
@@ -16,6 +20,11 @@ from adaptive_scalper.gateway.types import (
     Bar,
     HistoricalDeal,
     HistoricalOrder,
+    OrderCheckResult,
+    OrderRequest,
+    OrderSendResult,
+    PendingOrderSnapshot,
+    PositionSnapshot,
     SymbolSpec,
     TerminalSnapshot,
     Tick,
@@ -63,6 +72,29 @@ class Gateway(Protocol):
     def history_deals_get(self, date_from_utc: int, date_to_utc: int) -> list[HistoricalDeal]:
         """The connected account's deal (fill) history over the closed
         interval [date_from_utc, date_to_utc] (epoch seconds, UTC)."""
+        ...
+
+    def positions_get(self) -> list[PositionSnapshot]:
+        """Every currently OPEN position on the connected account, across
+        all symbols. This is broker-authoritative live state — directive
+        section 31's reconciliation source of truth."""
+        ...
+
+    def orders_get(self) -> list[PendingOrderSnapshot]:
+        """Every currently PENDING (not-yet-filled, still-resting) order
+        on the connected account."""
+        ...
+
+    def order_check(self, request: OrderRequest) -> OrderCheckResult:
+        """Dry-run validation of a request against current broker/account
+        state (margin, contract constraints) WITHOUT submitting it."""
+        ...
+
+    def order_send(self, request: OrderRequest) -> OrderSendResult:
+        """Submit a request. Broker acknowledgement of this call is NOT
+        a fill — callers must interpret the result through
+        `adaptive_scalper.execution.state_machine`, never assume
+        `retcode` success means `FILLED`."""
         ...
 
     def last_error(self) -> tuple[int, str]: ...

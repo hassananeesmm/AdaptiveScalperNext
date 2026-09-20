@@ -947,6 +947,43 @@ real qualifying-looking candidates actually cleared the cost/edge bar
 it correctly picked the higher-edge real candidate between two
 overlapping real signals.
 
+### Gateway execution extension: `positions_get`/`orders_get`/`order_check`/`order_send` (IMPLEMENTED, CONNECTED, TESTED (fake), PARTIALLY TESTED (live))
+
+Directive section 110/118: added only now that the execution safety
+layer (state machine, idempotency, UNKNOWN resolution, reconciliation —
+see `adaptive_scalper/execution/` above) exists to receive results
+safely. New broker-independent types (`gateway/types.py`): `OrderAction`,
+`OrderRequest`, `OrderSendResult`, `OrderCheckResult`, `PositionSnapshot`,
+`PendingOrderSnapshot`. `Mt5Gateway._build_mt5_request()` is the ONLY
+place in the codebase that constructs MetaTrader5's raw request dict;
+`_order_send_result()` parses its raw response into the typed result
+(zero `deal`/`order` ticket values become `None`, never a fake `"0"`
+id). `FakeGateway` gained a full in-memory simulation: `order_send()`
+auto-fills a DEAL into a tracked open position, applies SLTP to a
+matching position, and REMOVEs a matching pending order — or, when a
+test passes `order_send_responses`, returns exactly the queued canned
+results instead (for reject/UNKNOWN/partial-fill scenarios).
+
+`tests/test_mt5_request_builder.py` (15 tests, no real MT5 SDK needed —
+tested against a fake stand-in module exposing the same named constants):
+every `OrderAction`'s request-dict mapping, direction validation,
+optional-field omission, and response parsing including the zero-ticket
+→ `None` case. `tests/test_gateway_execution.py` (15 tests): the full
+`FakeGateway` simulation — fills, SLTP, REMOVE (including a deliberate
+ticket-mismatch case proving REMOVE only matches the exact ticket, not
+"any pending order"), queued-response override, and exhaustion.
+
+**TESTED (live), READ-ONLY ONLY**: `positions_get()`/`orders_get()`
+called against the real DEMO terminal — both returned correctly (empty
+lists, consistent with this account never having had an order placed
+against it by anything). **`order_send()`/`order_check()` were
+DELIBERATELY NOT exercised against the real terminal this session** —
+doing so would place a real (if DEMO) order before the PAPER run and
+full QA campaign the directive requires first (see "Current next task").
+This is a conscious scope boundary, not an oversight: the code path
+exists and is thoroughly tested against `FakeGateway`, but nothing in
+this codebase has called real `order_send` yet.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -1008,22 +1045,20 @@ subsystem is built, not assumed safe by extension.
 
 ## Current next task
 
-Phase 3 (CORE TRADING) is complete and live-verified end to end,
-including the composed final permission gate. Phase 4 (EXECUTION) is in
-progress: the order state machine, idempotency, UNKNOWN resolution, and
-reconciliation LOGIC all exist and are live-verified (see
-`execution/` above) — but the gateway itself still has NO
-`order_send`/`order_check`/`positions_get`/`orders_get` methods, so
-nothing can actually submit an order yet. Immediately next: (1) the
-strategy selector (combine the six strategies' signals into one proposal
-or FLAT — not simply highest raw confidence), (2) extend the gateway
-with those four methods (MetaTrader5 import isolated to `mt5_gateway.py`
-as always), wired through the one shared `SynchronizedGateway`, (3) wire
-the execution layer's store/unknown/reconciliation modules to the real
-gateway calls, all BEFORE `order_send` is ever actually invoked outside
-a controlled DEMO test. A live tick-bootstrap run (currently only
-fake-tested + individual live gateway-call verification) remains a
-smaller open item from Phase 2.
+Phase 3 (CORE TRADING) is complete and live-verified end to end. Phase 4
+(EXECUTION)'s building blocks are now ALL in place: the order state
+machine, idempotency, UNKNOWN resolution, reconciliation logic, the
+strategy selector, and the gateway's `order_send`/`order_check`/
+`positions_get`/`orders_get` methods (the latter two live-verified
+read-only; `order_send`/`order_check` deliberately not yet exercised
+against the real terminal — see the gateway execution section above).
+NOT yet done: actually WIRING these pieces into one real end-to-end
+runtime loop (selector output → risk sizing → final permission →
+`order_send` → execution-layer persistence → reconciliation), which is
+the next task — plus position management/adaptive exit/re-entry (Phase
+5), before any real controlled-DEMO test can run. A live tick-bootstrap
+run (currently only fake-tested + individual live gateway-call
+verification) remains a smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -1053,7 +1088,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 586 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 616 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
@@ -1067,7 +1102,8 @@ entry: 586 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_risk_governor.py`, `test_final_permission.py`,
 `test_execution_state_machine.py`, `test_execution_store.py`,
 `test_execution_unknown.py`, `test_execution_reconciliation.py`,
-`test_selector.py`, and
+`test_selector.py`, `test_mt5_request_builder.py`,
+`test_gateway_execution.py`, and
 `test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
 currently connected on this machine).
 
@@ -1080,4 +1116,8 @@ currently connected on this machine).
   functions, fake-tested only (no gateway I/O to live-test against; their
   correctness doesn't depend on live broker behavior the way asset
   identity did).
+- `Mt5Gateway.order_send`/`order_check` — implemented, fake-tested
+  thoroughly, deliberately NOT exercised against the real terminal yet
+  (see the gateway execution section above for why — this is an
+  intentional scope boundary pending PAPER/QA, not an oversight).
 - Everything listed under "Current next task" as not yet built.

@@ -959,3 +959,35 @@ Chronological, factual record of initialization events. Append only.
   cleared the cost/edge bar despite both looking plausible at a glance)
   and others where the selector correctly picked the real higher-edge
   candidate between two real overlapping signals.
+- Committed as `96a2211` and pushed to `origin/main`.
+- Extended the gateway with `positions_get`/`orders_get`/`order_check`/
+  `order_send` — deliberately withheld until now (directive section
+  118), added only once the execution safety layer existed to receive
+  results safely:
+  - New broker-independent types: `OrderAction`, `OrderRequest`,
+    `OrderSendResult`, `OrderCheckResult`, `PositionSnapshot`,
+    `PendingOrderSnapshot`.
+  - `Mt5Gateway._build_mt5_request()` is the ONLY place in the codebase
+    that constructs MetaTrader5's raw request dict; `_order_send_result()`
+    parses the raw response (zero deal/order tickets become `None`,
+    never a fake `"0"` id).
+  - `FakeGateway` gained a full in-memory order/position simulation:
+    `order_send()` auto-fills a DEAL into a tracked position, applies
+    SLTP, cancels a matching pending REMOVE — or returns exactly queued
+    `order_send_responses` for reject/UNKNOWN/partial-fill test
+    scenarios.
+  - 30 new tests: `test_mt5_request_builder.py` (15, no real SDK needed
+    — tested against a fake stand-in module with the same named
+    constants) and `test_gateway_execution.py` (15, including a
+    deliberate ticket-mismatch case proving REMOVE only matches the
+    exact ticket).
+  - Full suite: 616 passed, 0 failed, 0 skipped.
+- **TESTED (live), READ-ONLY ONLY**: `positions_get()`/`orders_get()`
+  called against the real DEMO terminal — both correctly returned empty
+  (this account has never had an order placed against it). **Deliberately
+  did NOT call `order_send()`/`order_check()` against the real terminal
+  this session** — doing so would place a real (if DEMO) order before the
+  PAPER run and full QA campaign the directive requires first. This is a
+  conscious scope boundary: the code exists and is thoroughly tested
+  against `FakeGateway`, but nothing in this codebase has invoked real
+  `order_send` yet.

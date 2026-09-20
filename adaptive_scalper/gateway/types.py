@@ -9,7 +9,7 @@ FakeGateway/mocks and isolated from a specific broker API's shape.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import Enum, IntEnum
 
 
 class TradeMode(IntEnum):
@@ -180,3 +180,81 @@ class HistoricalDeal:
     symbol: str
     comment: str
     external_id: str
+
+
+class OrderAction(str, Enum):
+    """Restricted to the subset of MT5's ENUM_TRADE_REQUEST_ACTIONS this
+    project ever issues. DEAL = immediate market execution. SLTP =
+    modify an existing position's stop loss/take profit (never widening
+    protection backward — directive section 23 — that rule is enforced
+    by the caller, not this type). REMOVE = cancel a still-pending
+    order. CLOSE_BY / PENDING (placing a new pending order) are not
+    supported — this project only ever trades at market."""
+
+    DEAL = "DEAL"
+    SLTP = "SLTP"
+    REMOVE = "REMOVE"
+
+
+@dataclass(frozen=True)
+class OrderRequest:
+    """Internal, broker-independent order request. `Mt5Gateway` alone
+    translates this into MetaTrader5's raw request dict — nothing
+    outside `mt5_gateway.py` ever constructs MT5's own request shape."""
+
+    action: OrderAction
+    symbol: str                          # broker symbol name
+    direction: str                       # "BUY"/"SELL" — required for DEAL, ignored for SLTP/REMOVE
+    volume: float
+    price: float | None = None           # None lets the broker fill a DEAL at current market price
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    deviation_points: int = 20           # max acceptable slippage, in points, for a DEAL
+    magic: int = 0
+    comment: str = ""                    # should embed the client_request_id for idempotency-by-comment
+    position_ticket: int | None = None   # required for SLTP (which open position to modify)
+    order_ticket: int | None = None      # required for REMOVE (which pending order to cancel)
+
+
+@dataclass(frozen=True)
+class OrderSendResult:
+    retcode: int
+    comment: str
+    broker_order_id: str | None
+    broker_deal_id: str | None
+    broker_position_id: str | None
+    volume_filled: float
+    price_filled: float | None
+    raw: dict   # full raw broker response fields, for audit — never parsed beyond the typed fields above
+
+
+@dataclass(frozen=True)
+class OrderCheckResult:
+    retcode: int
+    comment: str
+    margin_required: float | None
+
+
+@dataclass(frozen=True)
+class PositionSnapshot:
+    broker_position_id: str
+    symbol: str
+    direction: str
+    volume: float
+    price_open: float
+    stop_loss: float
+    take_profit: float
+    profit: float
+    magic: int
+    comment: str
+
+
+@dataclass(frozen=True)
+class PendingOrderSnapshot:
+    broker_order_id: str
+    symbol: str
+    direction: str
+    volume: float
+    price: float
+    magic: int
+    comment: str
