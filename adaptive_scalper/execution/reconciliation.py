@@ -17,16 +17,28 @@ status:
   `RECONCILIATION_MISMATCH` (volume/direction disagreement) exists; these
   represent possible unaccounted exposure and MUST block new entries
   until a human or the recovery path resolves them.
-- `RECOVERED` — only `MISSING_LOCAL_POSITION` findings exist (broker no
-  longer reports a position the local DB still marks OPEN — e.g. closed
-  by SL/TP/manual action). This is locally recoverable by updating the
-  local record from broker truth; it does not represent unaccounted
-  exposure, so it does not block new entries on its own.
+- `RECOVERED` — every `MISSING_LOCAL_POSITION` finding was ACTUALLY
+  repaired: `run_reconciliation()` queried `history_deals_get()` for the
+  exact position id, found its authoritative closing deal, and
+  atomically wrote that real close price/time/volume/commission/swap/
+  profit into the local `positions`/`deals` tables, marked the position
+  `CLOSED`, and journaled `POSITION_CLOSED` (execution-safety review
+  round 2 finding #4 — a status named `RECOVERED` that hadn't actually
+  repaired anything was misleading; it now only appears once repair has
+  genuinely happened). Never substitutes CURRENT market price for a
+  historical exit — only a real closing deal counts as evidence.
+- `BLOCKING_MISMATCH` — an `ORPHAN_BROKER_POSITION`, a
+  `RECONCILIATION_MISMATCH` (volume/direction disagreement), OR a
+  `MISSING_LOCAL_POSITION` that could NOT be repaired (no closing deal
+  found in broker history) exists; these represent possible unaccounted
+  exposure and MUST block new entries until a human or a later
+  reconciliation run resolves them.
 
 Every run records `RECONCILIATION_ACTION` journal events and, for each
-`BLOCKING_MISMATCH`-class finding, an `execution_incidents` row — broker
-truth is authoritative and nothing here ever fabricates a historical
-close price to paper over a gap.
+`BLOCKING_MISMATCH`-class finding (including an unrepairable
+`MISSING_LOCAL_POSITION`), an `execution_incidents` row — broker truth is
+authoritative and nothing here ever fabricates a historical close price
+to paper over a gap.
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ import time
 from dataclasses import dataclass
 
 from adaptive_scalper.gateway.protocol import Gateway
+from adaptive_scalper.gateway.types import HistoricalDeal
 from adaptive_scalper.journal.events import append_event
 
 ORPHAN_BROKER_POSITION = "ORPHAN_BROKER_POSITION"
@@ -74,6 +87,8 @@ class LocalPositionRecord:
     entry_price: float
     initial_monetary_risk: float
     strategy_key: str | None
+    opened_at_utc: int
+    entry_order_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +105,7 @@ def get_open_positions(conn: sqlite3.Connection) -> list[LocalPositionRecord]:
             id=r["id"], broker_position_id=r["broker_position_id"], canonical_symbol=r["canonical_symbol"],
             direction=r["direction"], volume=r["volume"], entry_price=r["entry_price"],
             initial_monetary_risk=r["initial_monetary_risk"], strategy_key=r["strategy_key"],
+            opened_at_utc=r["opened_at_utc"], entry_order_id=r["entry_order_id"],
         )
         for r in rows
     ]
@@ -187,17 +203,75 @@ def has_dangerous_unresolved_unknown(conn: sqlite3.Connection) -> bool:
 
 
 def classify_reconciliation(findings: list[ReconciliationFinding]) -> str:
+    """Pure classification against the RAW findings — used by callers
+    that never attempt recovery (e.g. simple monitoring). `run_reconciliation()`
+    below reclassifies AFTER attempting repair, since a repaired
+    `MISSING_LOCAL_POSITION` no longer belongs in either bucket."""
     if not findings:
         return CLEAN
     if any(f.finding_type in _BLOCKING_FINDING_TYPES for f in findings):
         return BLOCKING_MISMATCH
-    return RECOVERED  # only MISSING_LOCAL_POSITION findings — locally recoverable, not blocking
+    return RECOVERED
+
+
+# MT5 ENUM_DEAL_ENTRY: 0=IN (opened), 1=OUT (closed), 2=INOUT, 3=OUT_BY.
+_DEAL_ENTRY_OUT = 1
+
+
+def find_closing_deal(
+    gateway: Gateway, broker_position_id: str, window_from_utc: int, window_to_utc: int,
+) -> HistoricalDeal | None:
+    """The authoritative closing deal for `broker_position_id`, if broker
+    history has one in the given window — never a guess, never the
+    current market price standing in for a historical exit. If more than
+    one OUT deal matches (partial closes), the LATEST one is treated as
+    the final close (its `price`/`time` are what the local record's
+    close is repaired from; a full accounting of every partial close
+    remains a named gap — see BUG_BACKLOG.md)."""
+    deals = gateway.history_deals_get(window_from_utc, window_to_utc)
+    matching = [d for d in deals if str(d.position_id) == str(broker_position_id) and d.entry == _DEAL_ENTRY_OUT]
+    if not matching:
+        return None
+    return max(matching, key=lambda d: d.time)
+
+
+def _recover_missing_local_position(
+    conn: sqlite3.Connection, local: LocalPositionRecord, closing_deal: HistoricalDeal, now_utc: int,
+) -> None:
+    """Atomically repairs local state from a REAL broker closing deal —
+    marks the position CLOSED with its actual close time, records the
+    deal, and journals POSITION_CLOSED. Never called with a fabricated
+    or current-market-price stand-in for `closing_deal`."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "UPDATE positions SET status = 'CLOSED', closed_at_utc = ? WHERE id = ?",
+            (closing_deal.time, local.id),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO deals
+                (order_id, broker_deal_id, broker_position_id, price, volume, commission, swap, profit, occurred_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                local.entry_order_id, str(closing_deal.ticket), local.broker_position_id, closing_deal.price,
+                closing_deal.volume, closing_deal.commission, closing_deal.swap, closing_deal.profit,
+                closing_deal.time,
+            ),
+        )
+        conn.execute("COMMIT")
+    except sqlite3.Error:
+        conn.execute("ROLLBACK")
+        raise
 
 
 @dataclass(frozen=True)
 class ReconciliationReport:
     status: str
     findings: list[ReconciliationFinding]
+    recovered_position_ids: list[str]
+    unrepaired_position_ids: list[str]
 
 
 def run_reconciliation(
@@ -206,38 +280,85 @@ def run_reconciliation(
     chain_key: str,
     *,
     now_utc: int | None = None,
+    history_lookback_seconds: int = 7 * 24 * 3600,
 ) -> ReconciliationReport:
     """The real reconciliation entry point (execution-safety review
-    finding #4). Meant to be run at startup, on reconnect, before
-    enabling DEMO entries, after every order submission/uncertain
-    response/fill/modification/close, and periodically — the caller
-    decides the cadence; this function is idempotent and side-effect-free
-    beyond recording the findings it actually detects.
+    finding #4, upgraded in round 2 to perform ACTUAL repair). Meant to
+    be run at startup, on reconnect, before enabling DEMO entries, after
+    every order submission/uncertain response/fill/modification/close,
+    and periodically — the caller decides the cadence; this function is
+    idempotent (a repeat run against an already-repaired position finds
+    it no longer OPEN locally, so there is nothing left to repair).
 
     `gateway` should always be a `SynchronizedGateway` in real operation
     (directive/finding #4's shared-serialization requirement) — this
     function itself has no opinion on that; it only calls
-    `Gateway.positions_get()` through whatever was passed in.
+    `Gateway.positions_get()`/`history_deals_get()` through whatever was
+    passed in.
     """
+    now = now_utc if now_utc is not None else int(time.time())
+
     broker_raw = gateway.positions_get()
     broker_positions = [
         BrokerPositionSnapshot(p.broker_position_id, p.symbol, p.direction, p.volume) for p in broker_raw
     ]
-    local_positions = get_open_positions(conn)
-    findings = reconcile_positions(local_positions, broker_positions)
-    status = classify_reconciliation(findings)
+    local_positions = {p.broker_position_id: p for p in get_open_positions(conn)}
+    findings = reconcile_positions(list(local_positions.values()), broker_positions)
 
-    now = now_utc if now_utc is not None else int(time.time())
+    recovered_ids: list[str] = []
+    unrepaired_ids: list[str] = []
+    blocking_findings: list[ReconciliationFinding] = []
+
     for f in findings:
-        if f.finding_type in _BLOCKING_FINDING_TYPES:
-            record_incident(conn, f.finding_type, f.detail, now_utc=now)
+        if f.finding_type != MISSING_LOCAL_POSITION:
+            blocking_findings.append(f)
+            continue
+        local = local_positions[f.broker_position_id]
+        closing_deal = find_closing_deal(
+            gateway, f.broker_position_id, local.opened_at_utc, now + history_lookback_seconds,
+        )
+        if closing_deal is None:
+            unrepaired_ids.append(f.broker_position_id)
+            blocking_findings.append(f)
+            continue
+        _recover_missing_local_position(conn, local, closing_deal, now)
+        recovered_ids.append(f.broker_position_id)
+        # POSITION_CLOSED concerns one specific symbol; the reconciliation
+        # run's own chain_key is tied to the account-wide RECONCILIATION
+        # pseudo-symbol (a chain_key maps to exactly one canonical_symbol
+        # for its lifetime — journal.events.get_or_create_chain enforces
+        # this), so this event gets its own per-position sub-chain rather
+        # than reusing chain_key.
+        position_chain_key = f"{chain_key}:position:{local.broker_position_id}"
+        append_event(
+            conn, position_chain_key, "POSITION_CLOSED", closing_deal.time, local.canonical_symbol,
+            {
+                "reason": "reconciliation recovery from broker history", "price": closing_deal.price,
+                "volume": closing_deal.volume, "commission": closing_deal.commission,
+                "swap": closing_deal.swap, "profit": closing_deal.profit,
+            },
+            strategy_key=local.strategy_key, broker_position_id=local.broker_position_id,
+            broker_deal_id=str(closing_deal.ticket),
+        )
+
+    for f in blocking_findings:
+        record_incident(conn, f.finding_type, f.detail, now_utc=now)
+
+    if blocking_findings:
+        status = BLOCKING_MISMATCH
+    elif recovered_ids:
+        status = RECOVERED
+    else:
+        status = CLEAN
 
     append_event(
         conn, chain_key, "RECONCILIATION_ACTION", now, RECONCILIATION_CHAIN_SYMBOL,
         {
             "status": status,
             "finding_count": len(findings),
+            "recovered_position_ids": recovered_ids,
+            "unrepaired_position_ids": unrepaired_ids,
             "findings": [{"type": f.finding_type, "broker_position_id": f.broker_position_id} for f in findings],
         },
     )
-    return ReconciliationReport(status, findings)
+    return ReconciliationReport(status, findings, recovered_ids, unrepaired_ids)

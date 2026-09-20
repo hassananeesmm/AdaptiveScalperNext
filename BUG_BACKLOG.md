@@ -5,46 +5,6 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
-0a. [SEVERITY: HIGH, SUBSYSTEM: execution] `execution/reconciliation
-   .run_reconciliation()`'s `RECOVERED` status is misleading — it
-   classifies MISSING_LOCAL_POSITION-only findings as `RECOVERED` but
-   does not actually repair the local `positions` row from broker
-   deal/order history (close price, time, volume, commission, swap,
-   profit), mark it CLOSED, or resolve the incident. Round-2 external
-   review finding #4. Needs either a rename to `RECOVERABLE` or (preferred)
-   real repair logic querying `history_deals_get()`/`history_orders_get()`
-   for the exact position id and atomically updating local state +
-   journaling `POSITION_CLOSED` + resolving the incident.
-
-0b. [SEVERITY: HIGH, SUBSYSTEM: core] `core/final_permission.py` still
-   documents `BLOCK_PORTFOLIO_RISK` as an unintegrated gap. Round-2
-   external review finding #6. Needs a deterministic portfolio-heat
-   policy using open/pending/proposed monetary risk, per-symbol and
-   currency-direction exposure, and correlated-cluster exposure —
-   conservative, configurable, bounded by the existing
-   `max_total_open_risk_pct`, fail-closed on N/A evidence, never
-   raisable by ML/RAG.
-
-0c. [SEVERITY: HIGH, SUBSYSTEM: execution] `execution/unknown.py`'s
-   `resolve_unknown_order()` still requires `order.broker_order_id` to be
-   known before it attempts any resolution — an ambiguous send that lost
-   acknowledgement entirely (broker_order_id never recorded, even though
-   the broker may have accepted the request) has no resolution path at
-   all today beyond staying UNKNOWN forever. Round-2 external review
-   finding #7. Needs a conservative secondary correlation path (embedded
-   client_request_id token in the broker comment, magic, symbol,
-   direction, volume, tight time window against deals/positions/pending
-   orders) that resolves ONLY on unique positive evidence, remaining
-   UNKNOWN (blocking new entries) on any ambiguity. `execution/service.py`
-   does not yet embed a compact request token in `OrderRequest.comment`
-   for this to key off — needed first.
-
-0d. [SEVERITY: HIGH, SUBSYSTEM: position_management] Still no
-   `position_management/expectancy.py` — see earlier entry below (was
-   already tracked as item 6; round-2 external review restates this as
-   finding #8 and additionally asks for RAG/model evidence and
-   holding-duration/current-R/peak-R inputs to feed it, once it exists).
-
 1. **security-guidance plugin's agent-sdk-venv is a machine-global,
    non-git-tracked resource.** `~/.claude/security/agent-sdk-venv`
    (Python 3.14) can independently go stale/broken (observed once this
@@ -104,15 +64,6 @@ delete) once fixed, with the fixing commit/date noted.
    (never-sent) `order_check()` call before controlled DEMO validation —
    tracked here so it isn't silently assumed correct.
 
-6. [SEVERITY: LOW, SUBSYSTEM: position_management] No
-   `position_management/expectancy.py` exists yet — `adaptive_exit
-   .evaluate_adaptive_exit()`'s `thesis_valid`/`regime_reversed` inputs
-   are accepted as pre-computed evidence (directive section 17's
-   continuous-position-expectancy re-evaluation), but nothing yet
-   COMPUTES that evidence from live position/regime state. Scoped out of
-   this checkpoint for time; the pure decision function is complete and
-   tested, but has no real caller yet.
-
 7. [SEVERITY: LOW, SUBSYSTEM: execution] `execution/reconciliation
    .run_reconciliation()`'s `BrokerPositionSnapshot` construction passes
    the broker's raw `symbol` string (e.g. `"XAUUSDm"`) directly as
@@ -135,6 +86,39 @@ delete) once fixed, with the fixing commit/date noted.
    volume.
 
 ## Fixed
+
+- ~~[SEVERITY: HIGH, SUBSYSTEM: execution/core/position_management]
+  Round-2 external review, the remaining 5 HIGH findings: (4)
+  `run_reconciliation()`'s `RECOVERED` status didn't actually repair
+  anything; (5) `PROJECT_STATUS.md`'s "Current phase" header was stale
+  (fixed as part of the CRITICAL-findings checkpoint above); (6)
+  `BLOCK_PORTFOLIO_RISK` was an unintegrated gap; (7) UNKNOWN resolution
+  had no path at all for a send that lost broker acknowledgement
+  entirely; (8) no continuous position-expectancy engine existed.~~
+  Fixed 2026-09-20. (4): `run_reconciliation()` now queries
+  `history_deals_get()` for the exact position's authoritative closing
+  deal and atomically repairs local state (marks CLOSED, records the
+  real deal, journals `POSITION_CLOSED`) — `RECOVERED` only appears once
+  that repair has genuinely happened; an unrepairable
+  `MISSING_LOCAL_POSITION` now correctly stays `BLOCKING_MISMATCH` with
+  an incident recorded, never silently relabeled. (6): new
+  `portfolio.exposure.evaluate_portfolio_risk_gate()` — per-symbol,
+  net-currency-direction, and correlated-cluster heat ceilings, all
+  bounded by the same `max_total_open_risk_pct`
+  `risk.governor.evaluate_risk_gate()` already enforces, wired into
+  `core/final_permission.py` as `BLOCK_PORTFOLIO_RISK`. (7): new
+  `execution/request_token.py` (a compact deterministic token
+  `execution/service.py` now embeds in every `OrderRequest.comment`) and
+  `execution.unknown.resolve_unknown_order_without_broker_id()` — a
+  secondary correlation path keyed on that token (narrowed by broker
+  symbol), resolving only when every match agrees, remaining UNKNOWN on
+  any ambiguity. (8): new `position_management/expectancy.py`
+  (`evaluate_position_expectancy()`) — the "if I were flat now, would I
+  still open this?" decision core, feeding `thesis_valid`/
+  `regime_reversed` into `adaptive_exit`; RAG/ML evidence is recorded but
+  deliberately cannot by itself flip the verdict, consistent with both
+  subsystems' own advisory-only/observer-only contracts. 880 tests
+  passing (up from 855).
 
 - ~~[SEVERITY: CRITICAL, SUBSYSTEM: execution] Round-2 external review, 3
   CRITICAL findings: (1) fresh pre-send safety was documented but not

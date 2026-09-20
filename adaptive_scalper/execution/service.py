@@ -68,6 +68,7 @@ from typing import Callable
 from adaptive_scalper.core.final_permission import ALLOW as _PERMISSION_ALLOW
 from adaptive_scalper.core.final_permission import FinalPermissionInput, evaluate_and_journal_final_permission
 from adaptive_scalper.execution.position_resolution import resolve_opened_position_id
+from adaptive_scalper.execution.request_token import embed_request_token
 from adaptive_scalper.execution.state_machine import OrderState
 from adaptive_scalper.execution.store import OrderRecord, create_order, transition_order_state
 from adaptive_scalper.gateway.broker_constraints import derive_filling_type
@@ -171,7 +172,7 @@ def submit_new_entry(
     request = OrderRequest(
         action=OrderAction.DEAL, symbol=broker_symbol, direction=direction, volume=volume,
         stop_loss=stop_loss, take_profit=take_profit, deviation_points=deviation_points,
-        magic=magic, comment=comment, filling_type=filling_type,
+        magic=magic, comment=embed_request_token(client_request_id, comment), filling_type=filling_type,
     )
 
     check = gateway.order_check(request)

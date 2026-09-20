@@ -1259,4 +1259,67 @@ Also fixed the stale `PROJECT_STATUS.md` "Current phase" section
 (round-2 finding #5) — it still claimed Phases 4-13 hadn't started and
 `order_send` didn't exist, both false since the round-1 checkpoint.
 
-Full suite: 837 passed, 0 failed, 0 skipped (up from 799).
+Full suite: 837 passed, 0 failed, 0 skipped (up from 799). Committed as
+`c0a40f2` and pushed to `origin/main`.
+
+Continued in the same session with the remaining 5 HIGH findings from
+the round-2 review:
+
+4. **Reconciliation `RECOVERED` now does real repair.**
+   `run_reconciliation()` calls new `find_closing_deal()` (queries
+   `history_deals_get()` for the exact position id, picks the latest
+   `entry==OUT` deal) and new `_recover_missing_local_position()`
+   (atomically marks the local row `CLOSED` with the real close time,
+   inserts the real `deals` row, all in one `BEGIN IMMEDIATE`
+   transaction). `POSITION_CLOSED` gets journaled under a per-position
+   sub-chain (`{chain_key}:position:{id}`) rather than the reconciliation
+   run's own chain_key — a chain_key maps to exactly one canonical_symbol
+   for its lifetime, and a reconciliation run is account-wide, so reusing
+   the same chain_key for a symbol-specific `POSITION_CLOSED` event would
+   have violated that invariant. `LocalPositionRecord` gained
+   `opened_at_utc`/`entry_order_id` fields (needed to search a sensible
+   history window and link the repair). If no closing deal is found,
+   status stays `BLOCKING_MISMATCH` with an incident recorded — never
+   silently relabeled. 4 new tests including one proving an unrepairable
+   position is left untouched (`status='OPEN'`, no fabricated close).
+5. **New `portfolio.exposure.evaluate_portfolio_risk_gate()`.**
+   Simulates adding the proposed position to current open+pending
+   exposure via the existing `compute_exposure()`/
+   `correlated_cluster_exposure()` helpers, then checks total/per-symbol/
+   net-currency-direction/correlated-cluster risk in a fixed order
+   against a new `PortfolioRiskLimits` dataclass. New
+   `portfolio_risk_limits_from_risk_limits()` convenience constructor
+   sets every sub-ceiling equal to the existing global
+   `max_total_open_risk_pct` (directive: "bounded by," never
+   independently higher, not an arbitrary invented number). Wired into
+   `core/final_permission.py` as `BLOCK_PORTFOLIO_RISK`, between the
+   correlation and risk gates (matching the mission's stated check
+   order). `FinalPermissionInput` gained `open_positions`/
+   `pending_positions`/`portfolio_risk_limits` fields. 13 new tests.
+6. **New `execution/request_token.py` + UNKNOWN secondary correlation.**
+   `execution/service.py` now embeds a compact, deterministic
+   `client_request_id`-derived token in every `OrderRequest.comment` it
+   sends (MT5-comment-length-safe). New
+   `execution.unknown.resolve_unknown_order_without_broker_id()` handles
+   the case `resolve_unknown_order()` structurally cannot: a send that
+   lost broker acknowledgement entirely, so `broker_order_id` was never
+   recorded. Correlates on the token (narrowed by broker symbol) across
+   current positions/pending orders/history orders/history deals,
+   resolving ONLY when every matching candidate agrees on both state and
+   position id — any disagreement is `conflict=True`, never guessed. 5
+   new tests in `test_request_token.py`, 8 new in
+   `test_execution_unknown.py`.
+7. **New `position_management/expectancy.py`.**
+   `evaluate_position_expectancy()` — the actual "if I were flat right
+   now, would I still open roughly this exposure?" decision core
+   directive section 17 asks for, producing the `thesis_valid`/
+   `regime_reversed` evidence `adaptive_exit.evaluate_adaptive_exit()`
+   consumes (no longer a caller-fabricated boolean, as flagged in
+   BUG_BACKLOG.md item 6, now closed). Deliberately keeps RAG/ML evidence
+   advisory-only — `rag_advisory_negative`/`model_advisory_negative` are
+   recorded in `reasons` but can never, by themselves, flip
+   `thesis_valid`, consistent with `rag/service.py`'s and `learning/`'s
+   own established contracts (neither is authoritative). 12 tests.
+
+Full suite: 880 passed, 0 failed, 0 skipped (up from 837). All 8 round-2
+execution-safety findings are now fixed.

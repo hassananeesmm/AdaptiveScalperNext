@@ -6,14 +6,30 @@ USD-related exposure, and correlated-cluster exposure.
 order with a known monetary risk and direction" — the real execution/
 position-management layer (not yet built) will supply these values from
 actual broker state; this module only aggregates whatever it's given.
+
+`evaluate_portfolio_risk_gate()` (execution-safety review round 2 finding
+#6) is the deterministic PORTFOLIO HEAT policy `core.final_permission`'s
+`BLOCK_PORTFOLIO_RISK` integrates — distinct from `risk.governor
+.evaluate_risk_gate()`'s aggregate open+pending+proposed ceiling and from
+`portfolio.correlation.evaluate_correlation_gate()`'s pairwise N/A-fails-
+closed check: this gate looks at what adding the PROPOSED position would
+do to per-symbol exposure, net currency-direction exposure, and
+correlated-cluster exposure, each independently bounded by a
+`PortfolioRiskLimits` ceiling that — per directive — must never exceed
+the existing global `max_total_open_risk_pct` and is never raisable by
+ML/RAG (this module imports neither).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS
 from adaptive_scalper.portfolio.correlation import CorrelationResult
+
+ALLOW = "ALLOW"
+BLOCK_PORTFOLIO_RISK = "BLOCK_PORTFOLIO_RISK"
 
 # The CONCEPTUAL currency pair used for portfolio accounting — distinct
 # from gateway/symbol_validation.py's EXPECTED_IDENTITY, which verifies
@@ -111,3 +127,91 @@ def correlated_cluster_exposure(
             key = frozenset({a, b})
             clusters[key] = exposure.symbol_exposure[a] + exposure.symbol_exposure[b]
     return clusters
+
+
+@dataclass(frozen=True)
+class PortfolioRiskLimits:
+    max_total_open_risk_pct: float
+    max_symbol_risk_pct: float
+    max_currency_direction_risk_pct: float
+    max_correlated_cluster_risk_pct: float
+
+
+def portfolio_risk_limits_from_risk_limits(max_total_open_risk_pct: float) -> PortfolioRiskLimits:
+    """Conservative default per directive: every portfolio-heat
+    sub-ceiling equals the SAME global `max_total_open_risk_pct` already
+    enforced by `risk.governor.evaluate_risk_gate()` — never
+    independently higher, and not an arbitrary invented number. A
+    deployment wanting STRICTER per-symbol/currency/cluster ceilings
+    constructs `PortfolioRiskLimits` directly instead of using this
+    convenience constructor."""
+    return PortfolioRiskLimits(
+        max_total_open_risk_pct=max_total_open_risk_pct,
+        max_symbol_risk_pct=max_total_open_risk_pct,
+        max_currency_direction_risk_pct=max_total_open_risk_pct,
+        max_correlated_cluster_risk_pct=max_total_open_risk_pct,
+    )
+
+
+def evaluate_portfolio_risk_gate(
+    *,
+    proposed_symbol: str,
+    proposed_direction: str,
+    proposed_monetary_risk: float,
+    equity: float,
+    open_positions: list[PositionExposure],
+    pending_positions: list[PositionExposure],
+    correlation_matrix: dict[tuple[str, str], CorrelationResult],
+    limits: PortfolioRiskLimits,
+    high_correlation_threshold: float = 0.7,
+) -> tuple[str, str]:
+    """Deterministic portfolio-heat policy (execution-safety review round
+    2 finding #6). Simulates adding the PROPOSED position to current
+    open/pending exposure, then checks total/per-symbol/net-currency-
+    direction/correlated-cluster risk against `limits`, each
+    independently. Checked in a fixed order; returns the FIRST breached
+    ceiling. Fail-closed on invalid equity/risk inputs, exactly like
+    `risk.governor.evaluate_risk_gate()`."""
+    if equity <= 0 or not math.isfinite(equity):
+        return BLOCK_PORTFOLIO_RISK, f"equity must be a positive, finite number, got {equity!r}"
+    if proposed_monetary_risk <= 0 or not math.isfinite(proposed_monetary_risk):
+        return BLOCK_PORTFOLIO_RISK, f"proposed_monetary_risk must be a positive, finite number, got {proposed_monetary_risk!r}"
+
+    proposed = PositionExposure(proposed_symbol, proposed_direction, proposed_monetary_risk)
+    exposure_after = compute_exposure([*open_positions, proposed], pending_positions)
+
+    max_total = equity * (limits.max_total_open_risk_pct / 100.0)
+    total_after = exposure_after.total_open_risk + exposure_after.total_pending_risk
+    if total_after > max_total:
+        return BLOCK_PORTFOLIO_RISK, (
+            f"total portfolio risk after this trade ({total_after:.2f}) would exceed "
+            f"{max_total:.2f} ({limits.max_total_open_risk_pct}% of equity)"
+        )
+
+    max_symbol = equity * (limits.max_symbol_risk_pct / 100.0)
+    symbol_risk_after = exposure_after.symbol_exposure.get(proposed_symbol, 0.0)
+    if symbol_risk_after > max_symbol:
+        return BLOCK_PORTFOLIO_RISK, (
+            f"per-symbol risk for {proposed_symbol} after this trade ({symbol_risk_after:.2f}) would "
+            f"exceed {max_symbol:.2f} ({limits.max_symbol_risk_pct}% of equity)"
+        )
+
+    max_currency = equity * (limits.max_currency_direction_risk_pct / 100.0)
+    for currency in CANONICAL_CURRENCY_PAIR[proposed_symbol]:
+        net = exposure_after.currency_direction_exposure.get(currency, 0.0)
+        if abs(net) > max_currency:
+            return BLOCK_PORTFOLIO_RISK, (
+                f"net {currency} exposure after this trade ({net:.2f}) would exceed the {max_currency:.2f} "
+                f"({limits.max_currency_direction_risk_pct}% of equity) ceiling"
+            )
+
+    max_cluster = equity * (limits.max_correlated_cluster_risk_pct / 100.0)
+    clusters = correlated_cluster_exposure(exposure_after, correlation_matrix, high_correlation_threshold)
+    for pair, combined in sorted(clusters.items(), key=lambda kv: sorted(kv[0])):
+        if proposed_symbol in pair and combined > max_cluster:
+            return BLOCK_PORTFOLIO_RISK, (
+                f"correlated-cluster risk for {sorted(pair)} after this trade ({combined:.2f}) would "
+                f"exceed {max_cluster:.2f} ({limits.max_correlated_cluster_risk_pct}% of equity)"
+            )
+
+    return ALLOW, "within all portfolio heat limits"

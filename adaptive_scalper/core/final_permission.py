@@ -17,13 +17,22 @@ correlation matrix, current open positions) immediately beforehand and
 pass the results in — this keeps the actual decision logic fully
 testable without a live gateway or database.
 
-Execution-safety review finding #5 (see PROJECT_STATUS.md/BUG_BACKLOG.md):
-this gate now integrates real evidence for `BLOCK_RECONCILIATION`
-(reconciliation status is not CLEAN), `BLOCK_UNKNOWN_ORDER` (a dangerous
-unresolved UNKNOWN order exists), `BLOCK_DUPLICATE` (an active order
-already exists for this same logical proposal), and `BLOCK_REENTRY_CHURN`
-(the safe re-entry hysteresis — `position_management.re_entry` — blocked
-this candidate). All four are REQUIRED, non-optional inputs: there is no
+Execution-safety review round 1 finding #5 (see PROJECT_STATUS.md/
+BUG_BACKLOG.md): this gate integrates real evidence for
+`BLOCK_RECONCILIATION` (reconciliation status is not CLEAN),
+`BLOCK_UNKNOWN_ORDER` (a dangerous unresolved UNKNOWN order exists),
+`BLOCK_DUPLICATE` (an active order already exists for this same logical
+proposal), and `BLOCK_REENTRY_CHURN` (the safe re-entry hysteresis —
+`position_management.re_entry` — blocked this candidate).
+
+Round 2 finding #6: `BLOCK_PORTFOLIO_RISK` is now also integrated,
+via `portfolio.exposure.evaluate_portfolio_risk_gate()` — a deterministic
+per-symbol/net-currency-direction/correlated-cluster heat policy, every
+ceiling bounded by (never independently higher than) the same
+`max_total_open_risk_pct` `risk.governor.evaluate_risk_gate()` already
+enforces.
+
+Every one of these is a REQUIRED, non-optional input: there is no
 "always clean" default for any of them, so a caller that cannot actually
 prove reconciliation is clean, or that a dangerous UNKNOWN doesn't exist,
 must pass the conservative (blocking) value rather than skip the check.
@@ -39,9 +48,6 @@ being an ALLOW is therefore necessary but not sufficient to submit an
 order — `execution.service` re-runs this ENTIRE gate fresh immediately
 before every `order_send`, plus `order_check`, plus margin/broker-
 constraint evaluation, before anything is actually sent.
-`BLOCK_PORTFOLIO_RISK` remains a genuine gap: no distinct cluster-level
-portfolio-heat ceiling exists yet beyond what `BLOCK_RISK`/
-`BLOCK_CORRELATION` already cover — not fabricated here either.
 
 `order_send` exists in `gateway/`, but nothing outside `execution.service`
 may call it directly for a NEW entry (enforced by
@@ -75,6 +81,8 @@ from adaptive_scalper.news.blocking import ALLOW as _NEWS_ALLOW
 from adaptive_scalper.news.blocking import NewsBlockResult
 from adaptive_scalper.portfolio.correlation import ALLOW as _CORRELATION_ALLOW
 from adaptive_scalper.portfolio.correlation import CorrelationResult, evaluate_correlation_gate
+from adaptive_scalper.portfolio.exposure import ALLOW as _PORTFOLIO_RISK_ALLOW
+from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits, PositionExposure, evaluate_portfolio_risk_gate
 from adaptive_scalper.risk.governor import ALLOW as _RISK_ALLOW
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits, evaluate_risk_gate
 from adaptive_scalper.strategies.base import StrategySignal
@@ -89,6 +97,7 @@ BLOCK_RECONCILIATION = "BLOCK_RECONCILIATION"
 BLOCK_UNKNOWN_ORDER = "BLOCK_UNKNOWN_ORDER"
 BLOCK_DUPLICATE = "BLOCK_DUPLICATE"
 BLOCK_REENTRY_CHURN = "BLOCK_REENTRY_CHURN"
+BLOCK_PORTFOLIO_RISK = "BLOCK_PORTFOLIO_RISK"
 BLOCK_OTHER = "BLOCK_OTHER"
 
 
@@ -110,6 +119,9 @@ class FinalPermissionInput:
     correlation_matrix: dict[tuple[str, str], CorrelationResult]
     risk_gate_input: RiskGateInput
     risk_limits: RiskLimits
+    open_positions: list[PositionExposure]          # per-position breakdown for portfolio-heat evaluation
+    pending_positions: list[PositionExposure]
+    portfolio_risk_limits: PortfolioRiskLimits
     min_net_edge_price: float = 0.0
     # (decision, reason) from position_management.re_entry.evaluate_reentry,
     # or None when this proposal is not a re-entry scenario (no relevant
@@ -193,6 +205,19 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
     )
     if corr_decision != _CORRELATION_ALLOW:
         return FinalPermissionResult(corr_decision, corr_reason)
+
+    portfolio_decision, portfolio_reason = evaluate_portfolio_risk_gate(
+        proposed_symbol=inp.signal.canonical_symbol,
+        proposed_direction=inp.signal.direction,
+        proposed_monetary_risk=inp.risk_gate_input.proposed_monetary_risk,
+        equity=inp.risk_gate_input.equity,
+        open_positions=inp.open_positions,
+        pending_positions=inp.pending_positions,
+        correlation_matrix=inp.correlation_matrix,
+        limits=inp.portfolio_risk_limits,
+    )
+    if portfolio_decision != _PORTFOLIO_RISK_ALLOW:
+        return FinalPermissionResult(portfolio_decision, portfolio_reason)
 
     risk_decision, risk_reason = evaluate_risk_gate(inp.risk_gate_input, inp.risk_limits)
     if risk_decision != _RISK_ALLOW:

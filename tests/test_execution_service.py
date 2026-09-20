@@ -38,6 +38,7 @@ from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.news.blocking import ALLOW as NEWS_ALLOW
 from adaptive_scalper.news.blocking import BLOCK_NEWS, NewsBlockResult
 from adaptive_scalper.persistence import connect, migrate
+from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits
 from adaptive_scalper.strategies.base import StrategySignal
 
@@ -96,6 +97,11 @@ def _permission_input(**overrides) -> FinalPermissionInput:
         risk_limits=RiskLimits(
             risk_per_trade_pct=0.25, max_total_open_risk_pct=0.75, max_daily_loss_pct=2.0,
             max_drawdown_pct=5.0, max_open_positions=2, max_positions_per_symbol=1,
+        ),
+        open_positions=[], pending_positions=[],
+        portfolio_risk_limits=PortfolioRiskLimits(
+            max_total_open_risk_pct=5.0, max_symbol_risk_pct=5.0,
+            max_currency_direction_risk_pct=5.0, max_correlated_cluster_risk_pct=5.0,
         ),
     )
     defaults.update(overrides)

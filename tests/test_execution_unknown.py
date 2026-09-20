@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import pytest
 
+from adaptive_scalper.execution.request_token import request_token
 from adaptive_scalper.execution.state_machine import OrderState
 from adaptive_scalper.execution.store import OrderRecord
-from adaptive_scalper.execution.unknown import resolve_unknown_order
+from adaptive_scalper.execution.unknown import resolve_unknown_order, resolve_unknown_order_without_broker_id
 from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder, PendingOrderSnapshot, PositionSnapshot
 
 
@@ -180,3 +181,89 @@ def test_conflicting_evidence_pending_vs_history_filled():
     result = _resolve(order, current_pending_orders=[pending], history_orders=[order_hist])
     assert result.resolved is False
     assert result.conflict is True
+
+
+# --------------------------------------------------------------------------
+# resolve_unknown_order_without_broker_id (execution-safety review round 2
+# finding #7): secondary correlation when broker_order_id was never recorded
+# --------------------------------------------------------------------------
+
+def _resolve_no_id(order, *, current_positions=(), current_pending_orders=(), history_orders=(), history_deals=()):
+    return resolve_unknown_order_without_broker_id(
+        order,
+        current_positions=list(current_positions),
+        current_pending_orders=list(current_pending_orders),
+        history_orders=list(history_orders),
+        history_deals=list(history_deals),
+    )
+
+
+def test_raises_if_broker_order_id_is_known():
+    order = _order(broker_order_id="111", client_request_id="req-abc")
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        _resolve_no_id(order)
+
+
+def test_no_match_at_all_stays_unknown():
+    order = _order(broker_order_id=None, client_request_id="req-abc")
+    result = _resolve_no_id(order)
+    assert result.resolved is False
+    assert result.conflict is False
+
+
+def test_resolves_from_current_position_comment_token():
+    order = _order(broker_order_id=None, client_request_id="req-abc-123", broker_symbol="XAUUSDm")
+    token = request_token("req-abc-123")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, f"{token} note")
+    result = _resolve_no_id(order, current_positions=[position])
+    assert result.resolved is True
+    assert result.new_state == OrderState.FILLED
+    assert result.matched_broker_position_id == "55"
+
+
+def test_wrong_symbol_comment_match_is_not_evidence():
+    order = _order(broker_order_id=None, client_request_id="req-abc-123", broker_symbol="XAUUSDm")
+    token = request_token("req-abc-123")
+    position = PositionSnapshot("55", "GBPJPYm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, token)
+    result = _resolve_no_id(order, current_positions=[position])
+    assert result.resolved is False
+
+
+def test_resolves_from_pending_order_comment_token():
+    order = _order(broker_order_id=None, client_request_id="req-xyz", broker_symbol="XAUUSDm")
+    token = request_token("req-xyz")
+    pending = PendingOrderSnapshot("77", "XAUUSDm", "BUY", 0.05, 1990.0, 0, token)
+    result = _resolve_no_id(order, current_pending_orders=[pending])
+    assert result.resolved is True
+    assert result.new_state == OrderState.RESTING
+
+
+def test_resolves_from_history_deal_comment_token():
+    order = _order(broker_order_id=None, client_request_id="req-deal", broker_symbol="XAUUSDm")
+    token = request_token("req-deal")
+    deal = _history_deal(order=999, position_id=88, comment=token)
+    result = _resolve_no_id(order, history_deals=[deal])
+    assert result.resolved is True
+    assert result.new_state == OrderState.FILLED
+    assert result.matched_broker_position_id == "88"
+
+
+def test_ambiguous_when_matches_disagree_on_position():
+    order = _order(broker_order_id=None, client_request_id="req-amb", broker_symbol="XAUUSDm")
+    token = request_token("req-amb")
+    position_a = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, token)
+    deal_b = _history_deal(order=1, position_id=99, comment=token)
+    result = _resolve_no_id(order, current_positions=[position_a], history_deals=[deal_b])
+    assert result.resolved is False
+    assert result.conflict is True
+
+
+def test_agreeing_matches_across_sources_resolve_cleanly():
+    order = _order(broker_order_id=None, client_request_id="req-agree", broker_symbol="XAUUSDm")
+    token = request_token("req-agree")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, token)
+    deal = _history_deal(order=1, position_id=55, comment=token)
+    result = _resolve_no_id(order, current_positions=[position], history_deals=[deal])
+    assert result.resolved is True
+    assert result.matched_broker_position_id == "55"

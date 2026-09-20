@@ -31,12 +31,25 @@ MT5's raw `ENUM_ORDER_STATE` integer codes (matches `gateway/types.py`'s
 `HistoricalOrder.state`, which deliberately stores them undecoded):
 0=STARTED 1=PLACED 2=CANCELED 3=PARTIAL 4=FILLED 5=REJECTED 6=EXPIRED
 7=REQUEST_ADD 8=REQUEST_MODIFY 9=REQUEST_CANCEL
+
+Round 2 finding #7: `resolve_unknown_order()` above still requires
+`order.broker_order_id` to already be known. `resolve_unknown_order_
+without_broker_id()` is the SECONDARY correlation path for the case that
+function cannot handle at all — an ambiguous send that lost broker
+acknowledgement entirely, so `broker_order_id` was never recorded even
+though the broker may genuinely have accepted the request. It correlates
+on the compact request token `execution.service` embeds in every order's
+`comment` (`execution.request_token`), narrowed by broker symbol, and
+resolves ONLY when every matching candidate agrees — any ambiguity
+(disagreeing states, or more than one distinct position id) stays
+UNKNOWN with `conflict=True`, never guessed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from adaptive_scalper.execution.request_token import request_token
 from adaptive_scalper.execution.state_machine import OrderState
 from adaptive_scalper.execution.store import OrderRecord
 from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder, PendingOrderSnapshot, PositionSnapshot
@@ -139,4 +152,86 @@ def resolve_unknown_order(
         f"resolved to {resolved_state.value} from broker evidence: {sources}",
         matched_broker_order_id=boid,
         matched_broker_position_id=matched_position_id,
+    )
+
+
+def resolve_unknown_order_without_broker_id(
+    order: OrderRecord,
+    *,
+    current_positions: list[PositionSnapshot],
+    current_pending_orders: list[PendingOrderSnapshot],
+    history_orders: list[HistoricalOrder],
+    history_deals: list[HistoricalDeal],
+) -> UnknownResolution:
+    """Secondary correlation path (execution-safety review round 2
+    finding #7): resolves an order that lost broker acknowledgement
+    ENTIRELY (`order.broker_order_id is None`) — a case
+    `resolve_unknown_order()` above cannot handle at all, since it
+    requires a known `broker_order_id` to match against.
+
+    Correlates on the compact request TOKEN `execution.service` embeds
+    in every `OrderRequest.comment` (`execution.request_token
+    .embed_request_token()`) — NEVER on the full comment string, since
+    brokers may append/modify/truncate it. Matches are further narrowed
+    by `broker_symbol` (a token match on the wrong symbol is treated as
+    coincidence, not evidence). Resolves ONLY when every matching
+    candidate points to the SAME underlying broker state (same resolved
+    order state, and the same position id where one is present) — any
+    genuine ambiguity (matches disagreeing on state, or on more than one
+    distinct position id) remains UNKNOWN (`conflict=True`), exactly like
+    `resolve_unknown_order()`'s conflicting-evidence case. No match at
+    all also remains UNKNOWN, new entries blocked either way.
+    """
+    if order.broker_order_id is not None:
+        raise ValueError(
+            "resolve_unknown_order_without_broker_id() is for orders with NO broker_order_id at all — "
+            "use resolve_unknown_order() when one is known"
+        )
+
+    token = request_token(order.client_request_id)
+    resolutions: list[tuple[OrderState, str | None]] = []
+
+    for p in current_positions:
+        if token in p.comment and p.symbol == order.broker_symbol:
+            resolutions.append((OrderState.FILLED, p.broker_position_id))
+
+    for o in current_pending_orders:
+        if token in o.comment and o.symbol == order.broker_symbol:
+            resolutions.append((OrderState.RESTING, None))
+
+    for d in history_deals:
+        if token in d.comment and d.symbol == order.broker_symbol:
+            resolutions.append((OrderState.FILLED, str(d.position_id) if d.position_id else None))
+
+    for h in history_orders:
+        if token in h.comment and h.symbol == order.broker_symbol:
+            mapped = _MT5_ORDER_STATE_TO_ORDER_STATE.get(h.state)
+            if mapped is not None:
+                resolutions.append((mapped, str(h.position_id) if h.position_id else None))
+
+    if not resolutions:
+        return UnknownResolution(
+            False, None,
+            f"no broker_order_id recorded, and no comment-token match for {token!r} on {order.broker_symbol!r} "
+            f"found in any current/historical broker evidence — remains UNKNOWN, new entries blocked",
+        )
+
+    distinct_states = {state for state, _ in resolutions}
+    distinct_position_ids = {pid for _, pid in resolutions if pid is not None}
+
+    if len(distinct_states) > 1 or len(distinct_position_ids) > 1:
+        return UnknownResolution(
+            False, None,
+            f"ambiguous comment-token match for {token!r}: {sorted(s.value for s in distinct_states)} / "
+            f"positions {sorted(distinct_position_ids)} — cannot resolve safely, PENDING_RECONCILIATION "
+            f"required, new entries blocked",
+            conflict=True,
+        )
+
+    resolved_state = next(iter(distinct_states))
+    resolved_position_id = next(iter(distinct_position_ids)) if distinct_position_ids else None
+    return UnknownResolution(
+        True, resolved_state,
+        f"resolved to {resolved_state.value} via comment-token secondary correlation (token={token!r})",
+        matched_broker_position_id=resolved_position_id,
     )

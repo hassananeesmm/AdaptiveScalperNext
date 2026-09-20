@@ -14,6 +14,7 @@ from adaptive_scalper.execution.reconciliation import (
     BrokerPositionSnapshot,
     LocalPositionRecord,
     classify_reconciliation,
+    find_closing_deal,
     get_unresolved_incidents,
     has_dangerous_unresolved_unknown,
     reconcile_positions,
@@ -22,7 +23,7 @@ from adaptive_scalper.execution.reconciliation import (
     run_reconciliation,
 )
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
-from adaptive_scalper.gateway.types import PositionSnapshot
+from adaptive_scalper.gateway.types import HistoricalDeal, PositionSnapshot
 from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.persistence import connect, migrate
 
@@ -31,9 +32,20 @@ def _local(**overrides) -> LocalPositionRecord:
     defaults = dict(
         id=1, broker_position_id="pos-1", canonical_symbol="XAUUSD", direction="BUY",
         volume=0.05, entry_price=2000.0, initial_monetary_risk=20.0, strategy_key="momentum_continuation",
+        opened_at_utc=1000,
     )
     defaults.update(overrides)
     return LocalPositionRecord(**defaults)
+
+
+def _closing_deal(**overrides) -> HistoricalDeal:
+    defaults = dict(
+        ticket=900, order=800, time=4500, type=1, entry=1, magic=0, position_id=1,
+        volume=0.05, price=2010.0, commission=-0.5, swap=0.0, profit=10.0, fee=0.0,
+        symbol="XAUUSDm", comment="", external_id="",
+    )
+    defaults.update(overrides)
+    return HistoricalDeal(**defaults)
 
 
 def _broker(**overrides) -> BrokerPositionSnapshot:
@@ -214,13 +226,63 @@ def test_run_reconciliation_blocking_records_incident_and_journals(db):
     assert events[0].payload["status"] == BLOCKING_MISMATCH
 
 
-def test_run_reconciliation_recovered_does_not_record_incident(db):
-    _insert_local_position(db)
-    gw = FakeGateway()  # broker reports nothing — position must have closed
+def test_run_reconciliation_recovers_from_real_closing_deal(db):
+    # broker_position_id must be numeric-string, matching a real MT5
+    # ticket, since HistoricalDeal.position_id is compared against it.
+    _insert_local_position(db, broker_position_id="1", opened_at_utc=1000)
+    gw = FakeGateway(historical_deals=[_closing_deal(position_id=1, ticket=900, time=4500, price=2010.0)])
 
     report = run_reconciliation(db, gw, "recon-3", now_utc=5000)
     assert report.status == RECOVERED
+    assert report.recovered_position_ids == ["1"]
     assert get_unresolved_incidents(db) == []
+
+    # Local state is ACTUALLY repaired, not merely relabeled:
+    row = db.execute("SELECT status, closed_at_utc FROM positions WHERE broker_position_id = '1'").fetchone()
+    assert row["status"] == "CLOSED"
+    assert row["closed_at_utc"] == 4500
+
+    deal_row = db.execute("SELECT * FROM deals WHERE broker_deal_id = '900'").fetchone()
+    assert deal_row is not None
+    assert deal_row["price"] == 2010.0
+    assert deal_row["profit"] == 10.0
+
+    events = [e for e in get_chain_events(db, "recon-3:position:1") if e.event_type == "POSITION_CLOSED"]
+    assert len(events) == 1
+    assert events[0].payload["price"] == 2010.0
+
+
+def test_run_reconciliation_never_uses_current_price_when_no_closing_deal_found(db):
+    # No matching historical deal exists -- must NOT be labeled RECOVERED,
+    # must NOT fabricate a close price, and must block new entries.
+    _insert_local_position(db, broker_position_id="1", opened_at_utc=1000)
+    gw = FakeGateway()  # no historical deals at all
+
+    report = run_reconciliation(db, gw, "recon-3b", now_utc=5000)
+    assert report.status == BLOCKING_MISMATCH
+    assert report.recovered_position_ids == []
+    assert report.unrepaired_position_ids == ["1"]
+
+    incidents = get_unresolved_incidents(db)
+    assert len(incidents) == 1
+    assert incidents[0]["incident_type"] == MISSING_LOCAL_POSITION
+
+    row = db.execute("SELECT status FROM positions WHERE broker_position_id = '1'").fetchone()
+    assert row["status"] == "OPEN"  # untouched -- never marked closed without real evidence
+
+
+def test_find_closing_deal_ignores_opening_deals():
+    opening = _closing_deal(entry=0, ticket=100, position_id=1)  # entry=0 -> IN, not a close
+    gw = FakeGateway(historical_deals=[opening])
+    assert find_closing_deal(gw, "1", 0, 9999999999) is None
+
+
+def test_find_closing_deal_picks_the_latest_when_multiple_match():
+    early = _closing_deal(entry=1, ticket=100, position_id=1, time=1000)
+    late = _closing_deal(entry=1, ticket=200, position_id=1, time=2000)
+    gw = FakeGateway(historical_deals=[early, late])
+    result = find_closing_deal(gw, "1", 0, 9999999999)
+    assert result.ticket == 200
 
 
 def test_run_reconciliation_is_idempotent_across_repeated_calls(db):

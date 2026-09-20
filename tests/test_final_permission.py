@@ -12,6 +12,7 @@ from adaptive_scalper.core.final_permission import (
     BLOCK_DATA_QUALITY,
     BLOCK_DUPLICATE,
     BLOCK_MODE,
+    BLOCK_PORTFOLIO_RISK,
     BLOCK_RECONCILIATION,
     BLOCK_STALE_QUOTE,
     BLOCK_STRATEGY_RETIRED,
@@ -38,6 +39,7 @@ from adaptive_scalper.news.blocking import ALLOW as NEWS_ALLOW
 from adaptive_scalper.news.blocking import BLOCK_NEWS, NewsBlockResult
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.portfolio.correlation import CorrelationResult
+from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits, PositionExposure
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits
 from adaptive_scalper.strategies.base import StrategySignal
 
@@ -93,6 +95,15 @@ def _risk_limits(**overrides) -> RiskLimits:
     return RiskLimits(**defaults)
 
 
+def _portfolio_risk_limits(**overrides) -> PortfolioRiskLimits:
+    defaults = dict(
+        max_total_open_risk_pct=5.0, max_symbol_risk_pct=5.0,
+        max_currency_direction_risk_pct=5.0, max_correlated_cluster_risk_pct=5.0,
+    )
+    defaults.update(overrides)
+    return PortfolioRiskLimits(**defaults)
+
+
 def _risk_input(**overrides) -> RiskGateInput:
     defaults = dict(
         proposed_symbol="XAUUSD", proposed_monetary_risk=20.0, equity=10000,
@@ -114,6 +125,7 @@ def _full_allow_input(**overrides) -> FinalPermissionInput:
         news_result=_news_ok(), cost_estimate=_good_cost(),
         open_symbols=[], correlation_matrix={},
         risk_gate_input=_risk_input(), risk_limits=_risk_limits(),
+        open_positions=[], pending_positions=[], portfolio_risk_limits=_portfolio_risk_limits(),
     )
     defaults.update(overrides)
     return FinalPermissionInput(**defaults)
@@ -232,9 +244,43 @@ def test_blocks_on_na_correlation_with_open_position_by_default():
     assert result.decision == "BLOCK_CORRELATION"
 
 
+def test_blocks_on_portfolio_risk_before_risk_gate():
+    # tight per-symbol portfolio ceiling breached, while the ordinary
+    # risk gate's own ceiling (0.25% of equity) is nowhere near it --
+    # proves BLOCK_PORTFOLIO_RISK is checked BEFORE BLOCK_RISK.
+    tight_portfolio = _portfolio_risk_limits(max_symbol_risk_pct=0.01)
+    result = evaluate_final_permission(_full_allow_input(portfolio_risk_limits=tight_portfolio))
+    assert result.decision == BLOCK_PORTFOLIO_RISK
+
+
+def test_blocks_on_correlated_cluster_via_final_permission():
+    matrix = {
+        ("XAUUSD", "BTCUSD"): CorrelationResult(0.9, 100), ("BTCUSD", "XAUUSD"): CorrelationResult(0.9, 100),
+    }
+    result = evaluate_final_permission(_full_allow_input(
+        open_positions=[PositionExposure("BTCUSD", "BUY", 15.0)],
+        correlation_matrix=matrix,
+        portfolio_risk_limits=_portfolio_risk_limits(max_correlated_cluster_risk_pct=0.1),
+    ))
+    assert result.decision == BLOCK_PORTFOLIO_RISK
+
+
+def test_allows_when_portfolio_risk_within_limits():
+    result = evaluate_final_permission(_full_allow_input())
+    assert result.decision == ALLOW
+
+
 def test_blocks_on_risk_limit():
     over_limit_risk = _risk_input(proposed_monetary_risk=1000.0)  # way over 0.25% of 10000
-    result = evaluate_final_permission(_full_allow_input(risk_gate_input=over_limit_risk))
+    # Generous portfolio ceiling so THIS test isolates the risk gate specifically
+    # (BLOCK_PORTFOLIO_RISK is now checked earlier and would otherwise catch it first).
+    generous_portfolio = _portfolio_risk_limits(
+        max_total_open_risk_pct=100.0, max_symbol_risk_pct=100.0,
+        max_currency_direction_risk_pct=100.0, max_correlated_cluster_risk_pct=100.0,
+    )
+    result = evaluate_final_permission(
+        _full_allow_input(risk_gate_input=over_limit_risk, portfolio_risk_limits=generous_portfolio)
+    )
     assert result.decision == "BLOCK_RISK"
 
 

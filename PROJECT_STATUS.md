@@ -1116,6 +1116,53 @@ being worked next.
 
 Full suite: 837 passed, 0 failed, 0 skipped (up from 799).
 
+## Execution-safety review round 2 — 5 HIGH findings also fixed
+
+The remaining 5 HIGH findings from the same round-2 review are now also
+fixed, completing all 8:
+
+4. **Reconciliation `RECOVERED` now performs real repair.**
+   `execution/reconciliation.run_reconciliation()` queries
+   `history_deals_get()` for each `MISSING_LOCAL_POSITION`'s exact
+   authoritative closing deal and atomically writes the real close
+   price/time/volume/commission/swap/profit into local state, marks the
+   position `CLOSED`, and journals `POSITION_CLOSED` — `RECOVERED` only
+   appears once that repair genuinely happened. An unrepairable case
+   (no closing deal found in broker history) stays `BLOCKING_MISMATCH`
+   with an incident recorded, never silently relabeled or given a
+   fabricated close price.
+6. **`BLOCK_PORTFOLIO_RISK` implemented.** New
+   `portfolio.exposure.evaluate_portfolio_risk_gate()`: simulates adding
+   the proposed position to current open/pending exposure, then checks
+   total/per-symbol/net-currency-direction/correlated-cluster risk
+   against a `PortfolioRiskLimits`, every sub-ceiling bounded by (never
+   independently higher than) the same `max_total_open_risk_pct`
+   `risk.governor.evaluate_risk_gate()` enforces. Wired into
+   `core/final_permission.py` between the correlation and risk gates.
+7. **UNKNOWN resolution covers lost-acknowledgement sends.** New
+   `execution/request_token.py`: a compact, deterministic token derived
+   from `client_request_id`, embedded in every `OrderRequest.comment` by
+   `execution/service.py`. New `execution.unknown
+   .resolve_unknown_order_without_broker_id()`: the secondary
+   correlation path for when `broker_order_id` was never recorded at
+   all — matches on that token (narrowed by broker symbol) across
+   current positions/pending orders/history, resolving ONLY when every
+   match agrees on both state and position id; any ambiguity stays
+   UNKNOWN (`conflict=True`), never guessed.
+8. **Continuous position expectancy engine.** New
+   `position_management/expectancy.py`
+   (`evaluate_position_expectancy()`): the "if I were flat right now,
+   would I still open roughly this exposure?" decision core, producing
+   the `thesis_valid`/`regime_reversed` evidence `adaptive_exit
+   .evaluate_adaptive_exit()` consumes — no longer a caller-fabricated
+   boolean. RAG/ML advisory signals are recorded in `reasons` but
+   deliberately cannot, by themselves, flip `thesis_valid` — consistent
+   with RAG's and ML's own established advisory-only/observer-only
+   contracts elsewhere in this codebase.
+
+Full suite: 880 passed, 0 failed, 0 skipped (up from 837). All 8
+round-2 execution-safety findings are now fixed.
+
 ## Execution-safety review round 1 fixes (prior checkpoint)
 
 An external review of the Phase 4 execution-layer building blocks found
@@ -1239,23 +1286,28 @@ FULL_CLOSE and the re-entry cooldown/hysteresis. `re_entry.py`'s output
 is wired into `core/final_permission.py`'s `BLOCK_REENTRY_CHURN` via the
 `reentry_check` field.
 
-Local RAG (`adaptive_scalper/rag/`, advisory-only) is also now
-implemented — see the "Local RAG" section below.
+Local RAG (`adaptive_scalper/rag/`, advisory-only) and ML/self-learning
+observer-stage machinery are also implemented — see their respective
+sections below. A second external review then found 8 more execution-
+safety issues; all 8 are now fixed (see the two "Execution-safety review
+round 2" sections above), including a real continuous position-
+expectancy engine (`position_management/expectancy.py`) and a real
+portfolio-heat gate (`portfolio.exposure.evaluate_portfolio_risk_gate()`,
+wired into `core/final_permission.py` as `BLOCK_PORTFOLIO_RISK`).
 
-NOT yet done: a `position_management/expectancy.py` continuous-position-
-expectancy re-evaluator (directive section 17's "would I still open this
-now?" question) is a named gap — `evaluate_adaptive_exit()`'s
-`thesis_valid`/`regime_reversed` inputs are accepted as pre-computed
-evidence, but nothing yet COMPUTES that evidence from live position
-state. Also not yet done: actually WIRING the full pipeline into one
-real end-to-end runtime loop (market data → features → regime →
-strategies → selector → risk sizing → `execution.service
-.submit_new_entry` → position manager → adaptive exit → re-entry →
-result → RAG ingestion), ML/self-learning, backtest/walk-forward/OOS,
+NOT yet done: actually WIRING the full pipeline into one real end-to-end
+runtime loop (market data → features → regime → strategies → selector →
+risk sizing → `execution.service.submit_new_entry` → position manager →
+adaptive exit → re-entry → result → RAG ingestion), real ML model
+training (the lifecycle/registry/promotion/drift machinery exists, but
+nothing yet trains a real model — needs the backtest/walk-forward
+temporal-split infrastructure first), backtest/walk-forward/OOS itself,
 the complete dashboard, and the complete CLI/launchers — all before any
-real controlled-DEMO test can run. A live tick-bootstrap run (currently
-only fake-tested + individual live gateway-call verification) remains a
-smaller open item from Phase 2.
+real controlled-DEMO test can run. `execution/service.py`'s
+`order_check_success_retcodes` convention (`{0, 10009}`) also still needs
+live verification against the real terminal (BUG_BACKLOG.md item 5). A
+live tick-bootstrap run (currently only fake-tested + individual live
+gateway-call verification) remains a smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -1366,10 +1418,13 @@ has no code path that produces a real trained artifact yet. 51 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 837 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
-added `test_gateway_retcodes.py` and substantially rewrote
-`test_execution_service.py`/`test_execution_close.py`/
-`test_execution_state_machine.py`; up from 799) (up from 616 at the start of this
+entry: 880 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
+added `test_gateway_retcodes.py`, `test_request_token.py`,
+`test_position_expectancy.py`, and substantially rewrote/extended
+`test_execution_service.py`, `test_execution_close.py`,
+`test_execution_state_machine.py`, `test_execution_reconciliation.py`,
+`test_execution_unknown.py`, `test_portfolio_exposure.py`,
+`test_final_permission.py`; up from 799) (up from 616 at the start of this
 checkpoint — the execution-safety review fixes and position-management
 work added `test_position_resolution.py`, `test_execution_close.py`,
 `test_broker_constraints.py`, `test_execution_service.py`,
