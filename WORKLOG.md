@@ -1152,4 +1152,45 @@ advisory memory):
   `rag *` commands exist — both are part of the still-pending
   runtime-wiring and CLI-completion tasks.
 
-Full suite: 748 passed, 0 failed, 0 skipped.
+Full suite: 748 passed, 0 failed, 0 skipped. Committed as `91e9700` and
+pushed to `origin/main`.
+
+Then built ML/self-learning observer-stage machinery
+(`adaptive_scalper/learning/`, directive: observer stage first, no
+source self-modification, no eval/exec):
+
+- Migration `0011_learning.sql`: `models` + `model_lifecycle_transitions`
+  tables. Schema version now 11.
+- `learning/lifecycle.py`: `ModelLifecycleState` 8-state enum +
+  `ALLOWED_TRANSITIONS`, mirroring `execution.state_machine`'s design
+  exactly (broker-acknowledgement-is-not-a-fill's ML analogue: a
+  `CHALLENGER` promotion is not conflated with actually becoming
+  `CURRENT`).
+- `learning/registry.py`: `register_model()`/`transition_model_state()`,
+  auto-incrementing versions (never caller-supplied, avoids races), full
+  lifecycle history. Retired strategy keys refused at BOTH registration
+  and promotion-to-CURRENT independently (defense in depth, directive
+  section 8's established pattern) — regression test simulates a key
+  being retired AFTER a model was registered for it, proving the
+  promotion-time check isn't redundant.
+- `learning/promotion.py`: `evaluate_promotion_gate()` — pure,
+  fail-closed, every directive-named requirement (min samples, causal
+  features, temporal/purged split, walk-forward, untouched OOS,
+  realistic costs, calibration, subgroup stability, artifact checksum,
+  rollback availability) is a REQUIRED evidence field with no default.
+  Does not itself run training/evaluation — that's the backtest/
+  walk-forward subsystem's job, still pending; this is the decision core
+  its results feed into.
+- `learning/drift.py`: `apply_drift_response()` — structurally guarantees
+  drift only ever lowers influence, verified by a property-style test
+  across a 7×2×7 grid of weight/detected/severity combinations, not just
+  a couple of examples.
+- `test_learning_structural_safety.py`: AST-level checks — no
+  `eval`/`exec`/`compile`/`__import__` anywhere in `learning/`, no
+  import of `gateway`/`core.kill_switch`/`execution`, and
+  `learning.registry`'s functions carry no risk-sizing-shaped parameter.
+- NOT yet implemented: actual model training (needs the backtest/
+  walk-forward subsystem's temporal-split machinery first — directive's
+  own dependency order, not skipped by oversight).
+
+Full suite: 799 passed, 0 failed, 0 skipped.

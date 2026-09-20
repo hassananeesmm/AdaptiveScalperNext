@@ -1200,9 +1200,10 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-10 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+11 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
-`0007_news`, `0008_costs`, `0009_execution`, `0010_rag`).
+`0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
+`0011_learning`).
 
 ## Local RAG (advisory-only)
 
@@ -1246,15 +1247,53 @@ commands exist yet (both are part of the still-pending runtime-wiring
 and CLI-completion tasks). 33 tests
 (`test_rag_store.py`/`test_rag_index.py`/`test_rag_service.py`).
 
-## Model state
+## Model state / ML self-learning (observer stage)
 
-None yet — no ML models implemented (Stage 0, directive §61).
+`adaptive_scalper/learning/` implements the OBSERVER-stage machinery
+(migration `0011_learning`, schema now 11):
+
+- `learning/lifecycle.py`: `ModelLifecycleState` (`BASELINE`/
+  `CHALLENGER`/`CURRENT`/`PREVIOUS_STABLE`/`REJECTED`/`DEGRADED`/
+  `ROLLED_BACK`/`INSUFFICIENT_DATA`) and its `ALLOWED_TRANSITIONS` state
+  machine — mirrors `execution.state_machine`'s design exactly.
+- `learning/registry.py`: persisted model registry (`register_model()`/
+  `transition_model_state()`, auto-incrementing versions, full lifecycle
+  history). Retired strategy keys refused at BOTH registration
+  (`RetiredStrategyModelError`) AND promotion-to-`CURRENT` (re-checked
+  independently in case a key is retired after a model was already
+  registered for it) — directive section 8's defense-in-depth pattern.
+- `learning/promotion.py`: `evaluate_promotion_gate()` — pure,
+  fail-closed evaluation of every directive-named promotion requirement
+  (minimum samples, causal features, temporal/purged split, walk-forward,
+  untouched OOS, realistic costs, calibration, subgroup stability,
+  artifact checksum, rollback availability) as REQUIRED evidence fields,
+  no defaults. Does NOT itself run a walk-forward/OOS evaluation — that
+  is the backtest/walk-forward subsystem's job (still pending); this is
+  the deterministic decision core its verified results feed into.
+- `learning/drift.py`: `apply_drift_response()` — structurally guarantees
+  drift can only ever LOWER a model's influence weight, never raise it;
+  proven by a property-style test across a grid of weight/severity
+  combinations (`test_learning_drift.py`
+  ::`test_never_raises_influence_property_across_many_inputs`).
+- Structural safety verified by `test_learning_structural_safety.py`:
+  no `eval`/`exec`/`compile`/`__import__` anywhere in `learning/`, no
+  import of `gateway`/`core.kill_switch`/`execution`, and
+  `learning.registry`'s functions carry no risk-sizing-shaped parameter.
+
+NOT yet implemented: actual model TRAINING (a real CPU-friendly
+classifier/regressor fit on causal features) — that requires the
+backtest/walk-forward subsystem's temporal-split/purged-CV machinery to
+exist first (directive's own dependency order), so `learning/` currently
+has no code path that produces a real trained artifact yet. 51 tests
+(`test_learning_lifecycle.py`, `test_learning_registry.py`,
+`test_learning_promotion.py`, `test_learning_drift.py`,
+`test_learning_structural_safety.py`).
 
 ## Tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 748 passed, 0 failed, 0 skipped (up from 616 at the start of this
+entry: 799 passed, 0 failed, 0 skipped (up from 616 at the start of this
 checkpoint — the execution-safety review fixes and position-management
 work added `test_position_resolution.py`, `test_execution_close.py`,
 `test_broker_constraints.py`, `test_execution_service.py`,
@@ -1264,7 +1303,10 @@ work added `test_position_resolution.py`, `test_execution_close.py`,
 `test_execution_reconciliation.py`, `test_execution_store.py`,
 `test_mt5_request_builder.py`, and `test_final_permission.py`; the local
 RAG subsystem then added `test_rag_store.py`, `test_rag_index.py`, and
-`test_rag_service.py`), across
+`test_rag_service.py`; the ML/learning observer-stage subsystem then
+added `test_learning_lifecycle.py`, `test_learning_registry.py`,
+`test_learning_promotion.py`, `test_learning_drift.py`, and
+`test_learning_structural_safety.py`), across
 `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
