@@ -25,10 +25,20 @@ C:\AdaptiveScalperNext (GitHub: `hassananeesmm/AdaptiveScalperNext`, branch `mai
 
 ## Current phase
 
-Directive §117 PHASE 2 (HISTORY) is substantially complete and
-live-verified. PHASE 3 (CORE TRADING — features/regimes/strategies/cost/
-correlation/portfolio/risk/final permission) has not started. PHASE 1
-(FOUNDATION) is complete. Phases 4-13 have not started.
+Directive §117 PHASE 1 (FOUNDATION) and PHASE 2 (HISTORY) are complete
+and live-verified. PHASE 3 (CORE TRADING) is now substantially complete
+and live-verified end to end: feature engine, regime classifier, six
+active strategies + retirement firewall, the immutable decision journal,
+the keyless news system, the cost/expected-net-edge gate, correlation/
+portfolio exposure tracking, the risk governor, and the COMPOSED final
+permission gate (directive §36) all exist and were verified together in
+one real pipeline run against the live DEMO account and real market
+data (see "Composed final permission gate" below). Phases 4-13
+(execution, position management, RAG, ML, backtesting, full dashboard,
+release) have not started — `order_send` does not exist anywhere in
+this codebase and remains deliberately locked until Phase 4's
+dependencies (execution state machine, idempotency, UNKNOWN handling,
+reconciliation) exist.
 
 ## Completed components
 
@@ -55,13 +65,16 @@ Hard safety constants (`ALLOWED_CANONICAL_SYMBOLS`, `RETIRED_STRATEGY_KEYS`,
 ### `adaptive_scalper/persistence/` (IMPLEMENTED, CONNECTED, TESTED (fake))
 
 SQLite connection helper (WAL, foreign_keys ON) and a transactional,
-idempotent migration runner. Schema at version 5 — see "Schema version"
-below for the migration list. `tests/test_persistence.py` (7 tests).
+idempotent migration runner. Schema at version 8 — see "Schema version"
+below for the migration list. `tests/test_persistence.py` (7 tests) +
+`tests/test_migration_parser.py` (12 tests).
 
-**KNOWN DEFECT** (tracked, not yet fixed): `_split_statements()` is a
-naive `;`/`--`-comment-aware splitter, not a real SQL tokenizer. Fine for
-today's plain-DDL migrations; would mis-split a migration containing a
-string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
+`_split_statements()` is now built on `sqlite3.complete_statement()` —
+SQLite's own statement-boundary oracle — rather than a naive `;`-split;
+this is what let migration `0006_journal.sql` add a `CREATE TRIGGER ...
+BEGIN ... END` immutability guard at all. The previously-tracked "naive
+splitter" defect is fully fixed; see BUG_BACKLOG.md's "Fixed" section for
+the exact implementation and test list.
 
 ### `adaptive_scalper/core/` — kill switch, operator authority, permission slice
 
@@ -88,18 +101,13 @@ string literal or trigger body with an embedded `;`. See BUG_BACKLOG.md.
   authenticated operator-action endpoint). Documented as such in the
   module docstring; future hardening (session/token verification inside
   `__init__`) is a drop-in upgrade that doesn't change any caller.
-- `permission.py` — **kill-switch slice ONLY** of the eventual final
-  trade-permission gate (directive §36). Composes `kill_switch.py`'s
-  fail-closed state: blocks `NEW_ENTRY` with `BLOCK_KILL_SWITCH` for
-  anything except `DISENGAGED`; always allows `POSITION_MANAGEMENT`/
-  `RECONCILIATION`. **This is not the complete gate** — news, cost,
-  correlation, portfolio, risk, symbol identity/direction, and the
-  retired-strategy firewall exist as independent modules (see below) but
-  are NOT YET COMPOSED into one final gate. There is currently NO code
-  path that submits an order at all (no `order_send` anywhere in the
-  codebase — see gateway section), so this gap has no live exposure yet,
-  but full composition (task: "Compose full final permission gate") must
-  land before `order_send` is ever added.
+- `permission.py` — the kill-switch slice: blocks `NEW_ENTRY` with
+  `BLOCK_KILL_SWITCH` for anything except `DISENGAGED`; always allows
+  `POSITION_MANAGEMENT`/`RECONCILIATION`. Now COMPOSED, along with every
+  other independent gate, into `core/final_permission.py` — see that
+  section below for the actual complete final trade-permission gate
+  (directive §36). This file's own function remains a reusable building
+  block the composed gate calls, not a separate incomplete path.
 
 ### `adaptive_scalper/gateway/` (IMPLEMENTED, CONNECTED where noted)
 
@@ -730,6 +738,122 @@ $20.45 monetary risk (≈0.21% of equity after round-down, consistent with
 the 0.25% target), correctly `ALLOW`ed by the risk gate with zero prior
 open risk.
 
+### External-review hardening pass (risk/cost/correlation), this session
+
+Four findings from a further external review, addressed before composing
+the final permission gate:
+
+1. **Independent per-trade risk ceiling** (`risk/governor.py`).
+   `evaluate_risk_gate()` previously trusted that `proposed_monetary_risk`
+   had been correctly derived from `calculate_safe_volume()`. It now
+   independently re-verifies `proposed_monetary_risk` is positive,
+   finite, and `<= equity * risk_per_trade_pct / 100` — the FIRST check
+   in the gate, so a tampered or miscalculated proposal is rejected
+   regardless of how it reached the gate. `calculate_safe_volume()`
+   remains the sole function that may ever COMPUTE a size; this is
+   defense-in-depth verification, not a second sizing authority. 8 new
+   regression tests, including one that proposes a deliberately oversized
+   risk with an otherwise-pristine portfolio to prove this specific check
+   fires.
+2. **Pending risk counted in the total-risk ceiling** (`risk/governor.py`).
+   `RiskGateInput` gained `current_total_pending_risk`; the total-risk
+   check is now `open + pending + proposed <= max_total_open_risk_pct`
+   — a resting order that could still fill is real exposure, not
+   exposure that only counts once filled. Tested: pending alone reaching
+   the cap, open+pending within the cap, open+pending+proposal crossing
+   it.
+3. **Unknown cost can never silently become zero** (`costs/model.py`).
+   `estimate_cost()`'s three optional components (commission/slippage/
+   swap) previously defaulted to `0.0` — a caller that forgot to measure
+   one got "this cost is exactly zero" instead of an error. All four
+   components are now REQUIRED keyword arguments (a caller who omits one
+   gets a `TypeError`, immediately). The new
+   `estimate_cost_from_evidence()` is the required real-runtime entry
+   point: each component is `float | None`, and if ANY is `None` the
+   function returns `None` rather than ever calling `estimate_cost()`
+   with a guessed zero — `costs/edge.py`'s existing `evaluate_cost_gate()`
+   already treats a `None` estimate as `BLOCK_COST`, so this closes the
+   loop without needing a new block reason.
+4. **Correlation N/A is not proof of safety** (`portfolio/correlation.py`).
+   `evaluate_correlation_gate()` gained `treat_missing_as_blocking`
+   (default `True`, and what `core/final_permission.py` uses): when
+   another open/pending position exists and correlation against it is
+   genuinely unresolved (N/A), the gate now blocks with
+   `BLOCK_CORRELATION` conservatively, rather than treating unmeasured
+   correlation as evidence of safety. `compute_pairwise_correlation()`'s
+   own reporting is unchanged (still honestly `None`, never a fabricated
+   `0.0`) — this is purely about what the gate DOES with that honest
+   N/A. `treat_missing_as_blocking=False` preserves the old
+   informational-only behavior for non-decision-making callers (e.g.
+   offline analysis). When there are no open/pending positions at all,
+   missing data is never blocking (nothing to conflict with).
+
+Full suite after all four fixes: 498 passed, 0 failed, 0 skipped (17 new
+tests across the three modules' existing test files).
+
+### `adaptive_scalper/core/final_permission.py` — composed final trade-permission gate (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Directive section 36. The single point where every independent gate
+built this session — canonical symbol allow-list, retired-strategy
+firewall (independent final-gate defense, not just the strategy
+registry's own block), DEMO account verification, the kill switch, asset
+identity/directional trade mode, execution-grade quote freshness, news,
+cost/expected-net-edge, correlation, and the risk governor's hard
+ceilings — is wired into ONE deterministic `ALLOW`/`BLOCK_*` decision
+for a proposed NEW entry, in a fixed check order (mode → symbol
+allow-list → retired-strategy → DEMO → kill switch → asset identity →
+direction → quote freshness → news → cost/edge → correlation → risk).
+Deliberately a PURE function — every dependency is a pre-computed
+result, matching every other gate already built, so the decision logic
+is fully testable without a live gateway or database. No strategy, ML,
+RAG, dashboard, or CLI code path may bypass this function to reach an
+order.
+
+`evaluate_and_journal_final_permission()` wraps the pure check with a
+real journal write — `ENTRY_ALLOWED`/`ENTRY_BLOCKED`, directive sections
+54-56 — so every permission decision becomes part of the traceable
+decision chain, not computed and discarded.
+
+**Honestly named gaps, not fabricated "always clean" defaults**:
+`BLOCK_RECONCILIATION`/`BLOCK_UNKNOWN_ORDER` (no execution/reconciliation
+layer yet), `BLOCK_MARGIN`/`BLOCK_BROKER_CONSTRAINT` (no live broker
+order-validation call yet), `BLOCK_DUPLICATE`/`BLOCK_REENTRY_CHURN` (no
+idempotency/position-history layer yet), `BLOCK_PORTFOLIO_RISK` (no
+distinct cluster-level heat ceiling beyond what `BLOCK_RISK`/
+`BLOCK_CORRELATION` already cover). Each is added when its real
+subsystem is built — this function does not pretend they're already
+covered. `order_send` still does not exist anywhere in this codebase;
+an `ALLOW` from this gate is necessary but not yet sufficient to submit
+an order until Phase 4's execution/idempotency/reconciliation land too.
+
+`tests/test_final_permission.py` (23 tests): the happy path, every
+individual block reason (including the retired-strategy check firing
+even though the registry already independently blocks that path, and
+the N/A-correlation-blocks-by-default policy exercised end to end
+through the composed gate), a fixed-ordering check, and both journaling
+outcomes (`ENTRY_ALLOWED`/`ENTRY_BLOCKED`) including that the journaled
+event carries the strategy key.
+
+**TESTED (live)**: ran the COMPLETE real pipeline in one script — MT5
+DEMO verification, real symbol resolution/identity/direction/quote
+checks, a real strategy signal found by walking real M5 bar history,
+a real news check (ALLOW — no active blocking event), a real cost
+estimate from the live spread + a $7/lot commission assumption, a real
+correlation matrix from real aligned returns, and a real safe-volume
+calculation from the live account's actual equity — then ran BOTH
+through `evaluate_and_journal_final_permission()` against: (a) the REAL
+persistent kill switch state (`UNINITIALIZED`, since it has never been
+operator-bootstrapped in this database) — correctly returned
+`BLOCK_KILL_SWITCH`, proving the gate honestly respects real safety
+state rather than being bypassed for the test; and (b) a hypothetical
+`DISENGAGED` `KillSwitchState` constructed only in memory for this
+verification (never written to the real database — the real kill switch
+was not touched) — with that one hypothetical substitution, every other
+real gate passed and the result was `ALLOW`. This is the strongest
+verification done this session: the entire composed decision chain
+working correctly end to end against real broker/market/account data,
+with the real kill switch never bypassed.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -791,23 +915,18 @@ subsystem is built, not assumed safe by extension.
 
 ## Current next task
 
-Phase 2 (HISTORY) is substantially complete. Phase 3 (CORE TRADING)'s
-individual gate dependencies are now ALL built: feature engine, regime
-classifier, six active strategies + retirement firewall, the immutable
-decision journal, the keyless news system, the cost/expected-net-edge
-gate, correlation/portfolio exposure tracking, and the risk governor
-(see above). Immediately next: COMPOSE the full final permission gate
-(directive section 36) from everything above plus the existing
-kill-switch slice (`core/permission.py`) and symbol identity/direction
-checks (`gateway/symbol_validation.py`) — this is the first point where
-these independent modules get wired into one deterministic decision
-function using the complete `BLOCK_*` reason vocabulary, journaling
-every ENTRY_ALLOWED/ENTRY_BLOCKED decision. `order_send` remains locked
-(must not be added) until that composed gate, the execution state
-machine, idempotency, UNKNOWN handling, reconciliation, and a fresh DEMO
-interlock are ALL in place. A live tick-bootstrap run (currently only
-fake-tested + individual live gateway-call verification) remains a
-smaller open item from Phase 2.
+Phase 3 (CORE TRADING) is now substantially COMPLETE and live-verified
+end to end, including the composed final permission gate (directive
+section 36 — see `core/final_permission.py` above). Phase 4 (EXECUTION)
+is next: the strategy selector (combine the six strategies' signals into
+one proposal or FLAT — not simply highest raw confidence), the order
+state machine (PROPOSED → ... → FILLED/UNKNOWN), idempotency
+(client_request_id), UNKNOWN resolution (never blindly resend),
+reconciliation (broker truth authoritative), and only then extending the
+gateway with `order_send`/`order_check`/`positions_get`/`orders_get`.
+`order_send` remains deliberately locked until all of that exists. A
+live tick-bootstrap run (currently only fake-tested + individual live
+gateway-call verification) remains a smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -837,7 +956,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 481 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 521 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
@@ -848,9 +967,9 @@ entry: 481 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_news_providers.py`, `test_news_calendar_service.py`,
 `test_cost_model.py`, `test_cost_edge.py`, `test_cost_tracking.py`,
 `test_portfolio_correlation.py`, `test_portfolio_exposure.py`,
-`test_risk_governor.py`, and `test_mt5_gateway_live.py`
-(live-terminal-only, self-skipping — 7 tests, currently connected on
-this machine).
+`test_risk_governor.py`, `test_final_permission.py`, and
+`test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
+currently connected on this machine).
 
 ## Unverified components
 

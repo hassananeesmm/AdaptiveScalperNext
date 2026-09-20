@@ -18,7 +18,7 @@ def db(tmp_path):
 
 
 def test_record_estimated_cost_persists_all_components(db):
-    cost = estimate_cost(spread_price=1.0, commission_price_equivalent=0.5, uncertainty_margin_pct=0.1)
+    cost = estimate_cost(spread_price=1.0, commission_price_equivalent=0.5, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.1)
     obs_id = record_estimated_cost(db, "XAUUSD", cost, chain_key="chain-1", now_utc=1000)
     row = db.execute("SELECT * FROM cost_observations WHERE id = ?", (obs_id,)).fetchone()
     assert row["canonical_symbol"] == "XAUUSD"
@@ -29,7 +29,7 @@ def test_record_estimated_cost_persists_all_components(db):
 
 
 def test_record_realized_cost_computes_prediction_error(db):
-    cost = estimate_cost(spread_price=1.0, uncertainty_margin_pct=0.0)  # estimated total = 1.0
+    cost = estimate_cost(spread_price=1.0, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)  # estimated total = 1.0
     obs_id = record_estimated_cost(db, "XAUUSD", cost, now_utc=1000)
 
     error = record_realized_cost(
@@ -45,7 +45,7 @@ def test_record_realized_cost_computes_prediction_error(db):
 
 
 def test_record_realized_cost_negative_error_when_cheaper_than_estimated(db):
-    cost = estimate_cost(spread_price=1.0, uncertainty_margin_pct=0.0)
+    cost = estimate_cost(spread_price=1.0, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)
     obs_id = record_estimated_cost(db, "XAUUSD", cost, now_utc=1000)
     error = record_realized_cost(
         db, obs_id, realized_spread_cost=0.7, realized_commission_cost=0.0,
@@ -60,7 +60,7 @@ def test_record_realized_cost_raises_for_unknown_observation(db):
 
 
 def test_record_realized_cost_cannot_be_recorded_twice(db):
-    cost = estimate_cost(spread_price=1.0, uncertainty_margin_pct=0.0)
+    cost = estimate_cost(spread_price=1.0, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)
     obs_id = record_estimated_cost(db, "XAUUSD", cost, now_utc=1000)
     record_realized_cost(db, obs_id, realized_spread_cost=1.0, realized_commission_cost=0.0, realized_slippage_cost=0.0)
     with pytest.raises(ValueError):
@@ -71,7 +71,7 @@ def test_estimated_cost_persists_across_a_fresh_connection(tmp_path):
     path = tmp_path / "test.sqlite3"
     conn1 = connect(path)
     migrate(conn1)
-    cost = estimate_cost(spread_price=1.0)
+    cost = estimate_cost(spread_price=1.0, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0)
     obs_id = record_estimated_cost(conn1, "XAUUSD", cost, now_utc=1000)
     conn1.close()
 

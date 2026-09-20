@@ -116,9 +116,21 @@ def test_gate_allows_low_correlation():
     assert decision == ALLOW
 
 
-def test_gate_does_not_block_on_missing_correlation_data():
+def test_gate_blocks_conservatively_on_missing_correlation_data_by_default():
+    # External review: N/A is not proof of safety — the default policy
+    # (what the composed final permission gate uses) blocks rather than
+    # assumes no conflict.
     matrix = {("BTCUSD", "XAUUSD"): CorrelationResult(None, 5)}
     decision, reason = evaluate_correlation_gate("BTCUSD", ["XAUUSD"], matrix)
+    assert decision == BLOCK_CORRELATION
+    assert "unknown" in reason.lower() or "N/A" in reason
+
+
+def test_gate_missing_correlation_data_is_informational_only_when_opted_out():
+    matrix = {("BTCUSD", "XAUUSD"): CorrelationResult(None, 5)}
+    decision, reason = evaluate_correlation_gate(
+        "BTCUSD", ["XAUUSD"], matrix, treat_missing_as_blocking=False
+    )
     assert decision == ALLOW
 
 

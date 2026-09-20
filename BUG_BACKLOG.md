@@ -63,6 +63,51 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~[SEVERITY: HIGH, SUBSYSTEM: risk] `evaluate_risk_gate()` trusted that
+  `proposed_monetary_risk` had been correctly derived from
+  `calculate_safe_volume()`, with no independent verification of the
+  per-trade risk ceiling.~~ Fixed 2026-09-20 (external review, caught
+  before this had ever been composed into the final permission gate):
+  `evaluate_risk_gate()` now independently checks
+  `proposed_monetary_risk` is positive/finite and
+  `<= equity * risk_per_trade_pct / 100` as its FIRST check, regardless
+  of how the proposal was computed upstream. Regression test:
+  `test_risk_gate_blocks_a_tampered_oversized_proposal_even_with_room_elsewhere`.
+
+- ~~[SEVERITY: MEDIUM, SUBSYSTEM: risk] The total-open-risk ceiling
+  counted only `current_total_open_risk`, ignoring pending (resting,
+  not-yet-filled) orders — pending risk could accumulate without
+  counting toward the limit.~~ Fixed 2026-09-20: `RiskGateInput` gained
+  `current_total_pending_risk`; the ceiling is now
+  `open + pending + proposed <= max_total_open_risk_pct`. Regression
+  tests: `test_risk_gate_blocks_on_pending_risk_alone`,
+  `test_risk_gate_blocks_when_open_plus_pending_plus_proposal_crosses_limit`.
+
+- ~~[SEVERITY: HIGH, SUBSYSTEM: costs] `estimate_cost()` defaulted
+  commission/slippage/swap to `0.0` — a caller that simply forgot to
+  measure one of them got "this cost is exactly zero" instead of an
+  error, risking a silently underestimated cost bar.~~ Fixed 2026-09-20:
+  all four cost components are now required keyword arguments (omitting
+  one raises `TypeError` immediately). New `estimate_cost_from_evidence()`
+  is the required real-runtime entry point — `float | None` per
+  component, returns `None` (→ `BLOCK_COST`) if any is unknown, rather
+  than ever calling `estimate_cost()` with a guessed zero. Regression
+  tests: `tests/test_cost_model.py`'s `test_evidence_*` cases.
+
+- ~~[SEVERITY: MEDIUM, SUBSYSTEM: portfolio] `evaluate_correlation_gate()`
+  treated an N/A correlation against an open/pending position as "no
+  conflict" — unresolved correlation is not evidence of safety, but the
+  gate behaved as if it were.~~ Fixed 2026-09-20:
+  `evaluate_correlation_gate()` gained `treat_missing_as_blocking`
+  (default `True`): N/A against a real open/pending position now blocks
+  (`BLOCK_CORRELATION`) conservatively.
+  `compute_pairwise_correlation()`'s own reporting is unchanged (still
+  honestly `None`, never `0.0`) — this fix is entirely about what the
+  gate does with that honest N/A. Regression test:
+  `test_gate_blocks_conservatively_on_missing_correlation_data_by_default`,
+  exercised end-to-end through the composed gate in
+  `test_blocks_on_na_correlation_with_open_position_by_default`.
+
 - ~~[SEVERITY: HIGH, SUBSYSTEM: gateway/symbol_validation] First draft of
   the external-review "canonical asset identity" fix required an EXACT
   `currency_base` match (e.g. BTCUSD must report `currency_base="BTC"`)

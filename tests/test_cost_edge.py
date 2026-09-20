@@ -41,7 +41,7 @@ def test_expected_gross_edge_negative_for_a_poor_setup():
 
 def test_evaluate_expected_edge_sufficient_when_net_positive():
     signal = _signal(raw_confidence=0.6, stop_distance=1.0, target_distance=2.0)  # gross=0.8
-    cost = estimate_cost(spread_price=0.1, uncertainty_margin_pct=0.0)  # total_cost=0.1
+    cost = estimate_cost(spread_price=0.1, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)  # total_cost=0.1
     result = evaluate_expected_edge(signal, cost)
     assert result.expected_net_edge == pytest.approx(0.7)
     assert result.sufficient is True
@@ -49,7 +49,7 @@ def test_evaluate_expected_edge_sufficient_when_net_positive():
 
 def test_evaluate_expected_edge_insufficient_when_cost_exceeds_gross():
     signal = _signal(raw_confidence=0.55, stop_distance=1.0, target_distance=1.2)  # gross=0.55*1.2-0.45*1=0.21
-    cost = estimate_cost(spread_price=0.5, uncertainty_margin_pct=0.0)
+    cost = estimate_cost(spread_price=0.5, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)
     result = evaluate_expected_edge(signal, cost)
     assert result.expected_net_edge < 0
     assert result.sufficient is False
@@ -57,7 +57,7 @@ def test_evaluate_expected_edge_insufficient_when_cost_exceeds_gross():
 
 def test_evaluate_expected_edge_respects_min_net_edge_threshold():
     signal = _signal(raw_confidence=0.6, stop_distance=1.0, target_distance=2.0)  # gross=0.8
-    cost = estimate_cost(spread_price=0.1, uncertainty_margin_pct=0.0)  # net=0.7
+    cost = estimate_cost(spread_price=0.1, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)  # net=0.7
     assert evaluate_expected_edge(signal, cost, min_net_edge_price=0.5).sufficient is True
     assert evaluate_expected_edge(signal, cost, min_net_edge_price=0.75).sufficient is False
 
@@ -71,7 +71,7 @@ def test_evaluate_cost_gate_returns_block_cost_when_cost_is_none():
 
 def test_evaluate_cost_gate_returns_allow_for_sufficient_edge():
     signal = _signal(raw_confidence=0.6, stop_distance=1.0, target_distance=2.0)
-    cost = estimate_cost(spread_price=0.1, uncertainty_margin_pct=0.0)
+    cost = estimate_cost(spread_price=0.1, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)
     decision, evaluation = evaluate_cost_gate(signal, cost)
     assert decision == ALLOW
     assert evaluation.sufficient is True
@@ -79,7 +79,7 @@ def test_evaluate_cost_gate_returns_allow_for_sufficient_edge():
 
 def test_evaluate_cost_gate_returns_block_expected_edge_for_insufficient_edge():
     signal = _signal(raw_confidence=0.55, stop_distance=1.0, target_distance=1.2)
-    cost = estimate_cost(spread_price=0.5, uncertainty_margin_pct=0.0)
+    cost = estimate_cost(spread_price=0.5, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)
     decision, evaluation = evaluate_cost_gate(signal, cost)
     assert decision == BLOCK_EXPECTED_EDGE
     assert evaluation.sufficient is False
@@ -87,7 +87,7 @@ def test_evaluate_cost_gate_returns_block_expected_edge_for_insufficient_edge():
 
 def test_reason_string_is_specific_not_generic():
     signal = _signal(raw_confidence=0.6, stop_distance=1.0, target_distance=2.0)
-    cost = estimate_cost(spread_price=0.1, uncertainty_margin_pct=0.0)
+    cost = estimate_cost(spread_price=0.1, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)
     result = evaluate_expected_edge(signal, cost)
     assert "gross_edge=" in result.reason
     assert "total_cost=" in result.reason

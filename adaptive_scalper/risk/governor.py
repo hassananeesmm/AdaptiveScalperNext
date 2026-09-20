@@ -110,6 +110,7 @@ class RiskGateInput:
     proposed_monetary_risk: float
     equity: float
     current_total_open_risk: float
+    current_total_pending_risk: float
     current_positions_count: int
     current_positions_for_symbol: int
     daily_realized_pnl: float   # negative = net loss today
@@ -119,7 +120,33 @@ class RiskGateInput:
 def evaluate_risk_gate(inp: RiskGateInput, limits: RiskLimits) -> tuple[str, str]:
     """The hard portfolio ceilings (directive section 32). Checked in a
     fixed order so the reported reason is always the FIRST limit that
-    would be breached, not an arbitrary one."""
+    would be breached, not an arbitrary one.
+
+    Per external review: this gate must independently re-verify the
+    per-trade risk ceiling rather than trust that
+    `proposed_monetary_risk` was correctly derived from
+    `calculate_safe_volume()` — `calculate_safe_volume()` remains the
+    SOLE function that may compute a volume/monetary-risk figure in the
+    first place, but this gate is the last line of defense if a
+    tampered, miscalculated, or otherwise bypassed proposal ever reaches
+    it. Total open risk also now includes PENDING risk (resting orders
+    not yet filled) alongside open positions — a pending order is real
+    exposure the moment it could fill, not exposure that only counts
+    once filled.
+    """
+    if inp.proposed_monetary_risk <= 0 or not math.isfinite(inp.proposed_monetary_risk):
+        return BLOCK_RISK, f"proposed_monetary_risk must be a positive, finite number, got {inp.proposed_monetary_risk!r}"
+    if inp.equity <= 0 or not math.isfinite(inp.equity):
+        return BLOCK_RISK, f"equity must be a positive, finite number, got {inp.equity!r}"
+
+    max_per_trade_risk = inp.equity * (limits.risk_per_trade_pct / 100.0)
+    if inp.proposed_monetary_risk > max_per_trade_risk:
+        return BLOCK_RISK, (
+            f"proposed_monetary_risk ({inp.proposed_monetary_risk:.2f}) exceeds the independent "
+            f"per-trade ceiling ({max_per_trade_risk:.2f} = {limits.risk_per_trade_pct}% of equity) "
+            f"— rejected regardless of how it was computed upstream"
+        )
+
     if inp.current_positions_count >= limits.max_open_positions:
         return BLOCK_RISK, (
             f"max_open_positions reached ({inp.current_positions_count}/{limits.max_open_positions})"
@@ -131,11 +158,13 @@ def evaluate_risk_gate(inp: RiskGateInput, limits: RiskLimits) -> tuple[str, str
         )
 
     max_total_risk = inp.equity * (limits.max_total_open_risk_pct / 100.0)
-    total_risk_after = inp.current_total_open_risk + inp.proposed_monetary_risk
+    total_risk_after = inp.current_total_open_risk + inp.current_total_pending_risk + inp.proposed_monetary_risk
     if total_risk_after > max_total_risk:
         return BLOCK_RISK, (
-            f"total open risk after this trade ({total_risk_after:.2f}) would exceed "
-            f"max_total_open_risk_pct limit ({max_total_risk:.2f})"
+            f"total risk after this trade ({total_risk_after:.2f} = open "
+            f"{inp.current_total_open_risk:.2f} + pending {inp.current_total_pending_risk:.2f} + "
+            f"proposed {inp.proposed_monetary_risk:.2f}) would exceed max_total_open_risk_pct "
+            f"limit ({max_total_risk:.2f})"
         )
 
     if inp.daily_realized_pnl < 0 and inp.equity > 0:

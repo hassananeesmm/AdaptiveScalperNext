@@ -141,7 +141,8 @@ def test_safe_volume_scales_with_stop_distance():
 def test_risk_gate_allows_within_all_limits():
     inp = RiskGateInput(
         proposed_symbol="XAUUSD", proposed_monetary_risk=25.0, equity=10000,
-        current_total_open_risk=0.0, current_positions_count=0, current_positions_for_symbol=0,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
         daily_realized_pnl=0.0, peak_equity=10000,
     )
     decision, reason = evaluate_risk_gate(inp, _limits())
@@ -151,7 +152,8 @@ def test_risk_gate_allows_within_all_limits():
 def test_risk_gate_blocks_at_max_open_positions():
     inp = RiskGateInput(
         proposed_symbol="XAUUSD", proposed_monetary_risk=25.0, equity=10000,
-        current_total_open_risk=0.0, current_positions_count=2, current_positions_for_symbol=0,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=2, current_positions_for_symbol=0,
         daily_realized_pnl=0.0, peak_equity=10000,
     )
     decision, reason = evaluate_risk_gate(inp, _limits(max_open_positions=2))
@@ -162,7 +164,8 @@ def test_risk_gate_blocks_at_max_open_positions():
 def test_risk_gate_blocks_at_max_positions_per_symbol():
     inp = RiskGateInput(
         proposed_symbol="XAUUSD", proposed_monetary_risk=25.0, equity=10000,
-        current_total_open_risk=0.0, current_positions_count=0, current_positions_for_symbol=1,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=1,
         daily_realized_pnl=0.0, peak_equity=10000,
     )
     decision, reason = evaluate_risk_gate(inp, _limits(max_positions_per_symbol=1))
@@ -172,11 +175,14 @@ def test_risk_gate_blocks_at_max_positions_per_symbol():
 
 def test_risk_gate_blocks_when_total_open_risk_would_be_exceeded():
     inp = RiskGateInput(
-        proposed_symbol="XAUUSD", proposed_monetary_risk=50.0, equity=10000,
-        current_total_open_risk=50.0, current_positions_count=0, current_positions_for_symbol=0,
+        proposed_symbol="XAUUSD", proposed_monetary_risk=20.0, equity=10000,
+        current_total_open_risk=60.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
         daily_realized_pnl=0.0, peak_equity=10000,
     )
-    # max_total_open_risk_pct=0.75% of 10000 = $75; 50+50=100 > 75 -> block
+    # max_total_open_risk_pct=0.75% of 10000 = $75; 60+0+20=80 > 75 -> block.
+    # proposed_monetary_risk=20 stays within the independent per-trade
+    # ceiling ($25 = 0.25% of 10000) so THIS check, not that one, fires.
     decision, reason = evaluate_risk_gate(inp, _limits(max_total_open_risk_pct=0.75))
     assert decision == BLOCK_RISK
     assert "max_total_open_risk_pct" in reason
@@ -185,7 +191,8 @@ def test_risk_gate_blocks_when_total_open_risk_would_be_exceeded():
 def test_risk_gate_blocks_at_daily_loss_limit():
     inp = RiskGateInput(
         proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=9800,
-        current_total_open_risk=0.0, current_positions_count=0, current_positions_for_symbol=0,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
         daily_realized_pnl=-200.0, peak_equity=10000,
     )
     # daily loss 200/9800 ~= 2.04% >= max_daily_loss_pct=2.0
@@ -197,7 +204,8 @@ def test_risk_gate_blocks_at_daily_loss_limit():
 def test_risk_gate_allows_when_daily_pnl_is_positive():
     inp = RiskGateInput(
         proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=10500,
-        current_total_open_risk=0.0, current_positions_count=0, current_positions_for_symbol=0,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
         daily_realized_pnl=500.0, peak_equity=10500,
     )
     decision, _ = evaluate_risk_gate(inp, _limits())
@@ -207,7 +215,8 @@ def test_risk_gate_allows_when_daily_pnl_is_positive():
 def test_risk_gate_blocks_at_max_drawdown():
     inp = RiskGateInput(
         proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=9400,
-        current_total_open_risk=0.0, current_positions_count=0, current_positions_for_symbol=0,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
         daily_realized_pnl=0.0, peak_equity=10000,
     )
     # drawdown = (10000-9400)/10000 = 6% >= max_drawdown_pct=5.0
@@ -221,12 +230,125 @@ def test_risk_gate_checks_open_positions_before_other_limits():
     # the FIRST check (max_open_positions) must be the reported reason.
     inp = RiskGateInput(
         proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=9700,
-        current_total_open_risk=0.0, current_positions_count=2, current_positions_for_symbol=0,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=2, current_positions_for_symbol=0,
         daily_realized_pnl=-300.0, peak_equity=10000,
     )
     decision, reason = evaluate_risk_gate(inp, _limits(max_open_positions=2, max_daily_loss_pct=2.0))
     assert decision == BLOCK_RISK
     assert "max_open_positions" in reason
+
+
+# --------------------------------------------------------------------------
+# External review fix #1: independent per-trade risk ceiling — the gate
+# must not simply trust that proposed_monetary_risk was correctly derived
+# from calculate_safe_volume().
+# --------------------------------------------------------------------------
+
+def test_risk_gate_blocks_a_tampered_oversized_proposal_even_with_room_elsewhere():
+    # Everything else about the portfolio is pristine (no open positions,
+    # no daily loss, no drawdown) — only the proposal itself is too large
+    # relative to equity, as if calculate_safe_volume() was bypassed or
+    # its result was tampered with downstream.
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=500.0, equity=10000,  # 5% of equity, way over 0.25%
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=0.0, peak_equity=10000,
+    )
+    decision, reason = evaluate_risk_gate(inp, _limits(risk_per_trade_pct=0.25))
+    assert decision == BLOCK_RISK
+    assert "per-trade ceiling" in reason
+
+
+def test_risk_gate_allows_proposal_exactly_at_per_trade_ceiling():
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=25.0, equity=10000,  # exactly 0.25%
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=0.0, peak_equity=10000,
+    )
+    decision, _ = evaluate_risk_gate(inp, _limits(risk_per_trade_pct=0.25))
+    assert decision == ALLOW
+
+
+def test_risk_gate_blocks_non_positive_proposed_risk():
+    for bad_risk in (0.0, -10.0):
+        inp = RiskGateInput(
+            proposed_symbol="XAUUSD", proposed_monetary_risk=bad_risk, equity=10000,
+            current_total_open_risk=0.0, current_total_pending_risk=0.0,
+            current_positions_count=0, current_positions_for_symbol=0,
+            daily_realized_pnl=0.0, peak_equity=10000,
+        )
+        decision, reason = evaluate_risk_gate(inp, _limits())
+        assert decision == BLOCK_RISK
+        assert "proposed_monetary_risk" in reason
+
+
+def test_risk_gate_blocks_non_finite_proposed_risk():
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=float("inf"), equity=10000,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=0.0, peak_equity=10000,
+    )
+    decision, reason = evaluate_risk_gate(inp, _limits())
+    assert decision == BLOCK_RISK
+
+
+def test_risk_gate_blocks_non_positive_equity():
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=0.0,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=0.0, peak_equity=10000,
+    )
+    decision, reason = evaluate_risk_gate(inp, _limits())
+    assert decision == BLOCK_RISK
+    assert "equity" in reason
+
+
+# --------------------------------------------------------------------------
+# External review fix #2: pending risk must count toward the total-risk
+# ceiling alongside open risk — it must not "disappear" until filled.
+# --------------------------------------------------------------------------
+
+def test_risk_gate_blocks_on_pending_risk_alone():
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=10000,
+        current_total_open_risk=0.0, current_total_pending_risk=70.0,  # pending alone near the cap
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=0.0, peak_equity=10000,
+    )
+    # max_total_open_risk_pct=0.75% of 10000 = $75; 0+70+10=80 > 75 -> block
+    decision, reason = evaluate_risk_gate(inp, _limits(max_total_open_risk_pct=0.75))
+    assert decision == BLOCK_RISK
+    assert "pending" in reason
+
+
+def test_risk_gate_allows_when_open_plus_pending_plus_proposal_stays_under_limit():
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=10000,
+        current_total_open_risk=30.0, current_total_pending_risk=30.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=0.0, peak_equity=10000,
+    )
+    # 30+30+10=70 <= 75 -> allow
+    decision, _ = evaluate_risk_gate(inp, _limits(max_total_open_risk_pct=0.75))
+    assert decision == ALLOW
+
+
+def test_risk_gate_blocks_when_open_plus_pending_plus_proposal_crosses_limit():
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=20.0, equity=10000,
+        current_total_open_risk=30.0, current_total_pending_risk=30.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=0.0, peak_equity=10000,
+    )
+    # 30+30+20=80 > 75 -> block
+    decision, reason = evaluate_risk_gate(inp, _limits(max_total_open_risk_pct=0.75))
+    assert decision == BLOCK_RISK
+    assert "max_total_open_risk_pct" in reason
 
 
 # --------------------------------------------------------------------------

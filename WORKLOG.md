@@ -815,3 +815,88 @@ Chronological, factual record of initialization events. Append only.
   live-verified: features, regime, strategies, journal, news, cost/edge,
   correlation/portfolio, risk. Next task is composing the full final
   permission gate (directive section 36) from all of them.
+
+## 2026-09-20 (new session, continued)
+
+- Resumed from a fresh session. Confirmed local working tree had one
+  uncommitted file beyond the last push (`5e61a45`):
+  `adaptive_scalper/core/final_permission.py`, work in progress from the
+  previous session's final minutes composing the final permission gate.
+- Before finishing composition, addressed 4 further external-review
+  findings on the risk/cost/correlation modules:
+  1. `risk/governor.py`'s `evaluate_risk_gate()` now independently
+     re-verifies the per-trade risk ceiling
+     (`proposed_monetary_risk <= equity * risk_per_trade_pct/100`,
+     plus positive/finite/positive-equity checks) as its FIRST check,
+     rather than trusting `calculate_safe_volume()` was correctly used
+     upstream. `RiskGateInput` gained `current_total_pending_risk`, and
+     the total-risk ceiling is now `open + pending + proposed`. 8 new
+     tests, including a deliberately-oversized-proposal case with an
+     otherwise pristine portfolio.
+  2. `costs/model.py`'s `estimate_cost()` lost its `0.0` defaults for
+     commission/slippage/swap — all four components are now required
+     keyword arguments, so a caller who forgets one gets an immediate
+     `TypeError` instead of a silent "this is exactly zero." New
+     `estimate_cost_from_evidence()` is the required real-runtime entry
+     point: `float | None` per component, returns `None` (→ `BLOCK_COST`
+     via the existing `evaluate_cost_gate()`) if anything is unknown.
+     8 new tests. Updated ~15 existing test call sites across
+     `test_cost_edge.py`/`test_cost_tracking.py` that relied on the old
+     defaults (scripted via a small Python regex pass rather than
+     hand-editing each one, then verified by running the suite).
+  3. `portfolio/correlation.py`'s `evaluate_correlation_gate()` gained
+     `treat_missing_as_blocking` (default `True`): when another open/
+     pending position exists and correlation against it is genuinely
+     N/A, the gate now blocks (`BLOCK_CORRELATION`) rather than treating
+     unresolved correlation as evidence of safety — `compute_pairwise_
+     correlation()`'s own honest N/A reporting is unchanged, this is
+     purely about what the GATE does with that honest N/A.
+     `treat_missing_as_blocking=False` preserves the old behavior for
+     non-decision-making callers. Updated the one existing test that
+     assumed the old default; added 1 new test for the opt-out path.
+  4. Cleaned real staleness in `PROJECT_STATUS.md` flagged by the
+     review: "Current phase" still said Phase 3 hadn't started (it was
+     essentially complete by the previous session's end); the
+     persistence section still said "schema at version 5" (actually 8)
+     and described the migration splitter as a tracked, unfixed defect
+     (it was fully fixed two sessions ago); `core/permission.py`'s
+     description still said no composed gate existed. All rewritten to
+     match current reality rather than left as contradictions.
+  - Full suite after all 4 fixes: 498 passed, 0 failed, 0 skipped (17
+    new tests).
+- Finished and tested `adaptive_scalper/core/final_permission.py`
+  (directive section 36): `evaluate_final_permission()` composes canonical
+  symbol allow-list, retired-strategy firewall (independent final-gate
+  defense per directive section 8, not just relying on the strategy
+  registry's own block), DEMO verification, kill switch, asset identity/
+  direction, execution-grade quote freshness, news, cost/edge,
+  correlation, and risk — in one fixed-order deterministic function, pure
+  (no I/O, matching every other gate already built).
+  `evaluate_and_journal_final_permission()` wraps it with a real
+  `ENTRY_ALLOWED`/`ENTRY_BLOCKED` journal write. Honestly documented
+  named gaps for subsystems that don't exist yet
+  (`BLOCK_RECONCILIATION`/`BLOCK_UNKNOWN_ORDER`/`BLOCK_MARGIN`/
+  `BLOCK_BROKER_CONSTRAINT`/`BLOCK_DUPLICATE`/`BLOCK_REENTRY_CHURN`/
+  `BLOCK_PORTFOLIO_RISK`) rather than fabricated always-clean defaults.
+  `tests/test_final_permission.py` (23 tests, all passed on first run):
+  happy path, every individual block reason, fixed-order verification,
+  both journaling outcomes.
+  Full suite: 521 passed, 0 failed, 0 skipped.
+- **TESTED (live) — capstone verification**: ran the COMPLETE real
+  pipeline in one script against the live DEMO account and real market
+  data: MT5 DEMO verification, real symbol resolution/identity/
+  direction/quote checks, a real strategy signal found by walking real
+  M5 bar history (microstructure_acceleration, confidence 0.698), a real
+  news check (ALLOW), a real cost estimate from the live spread + a
+  $7/lot commission assumption, a real correlation matrix from real
+  aligned returns, and a real safe-volume calculation from the live
+  account's actual equity ($9,707.85 → 0.06 lots / $22.46 risk) — then
+  ran the composed gate twice: once against the REAL persistent kill
+  switch state (`UNINITIALIZED`, never operator-bootstrapped in this
+  database), which correctly returned `BLOCK_KILL_SWITCH` — proving the
+  gate honestly respects real safety state and was not bypassed for the
+  test — and once against a hypothetical `DISENGAGED` `KillSwitchState`
+  constructed only in memory for this verification (never written to the
+  real database), under which every other real gate passed and the
+  result was `ALLOW`. The real runtime kill switch was NOT cleared or
+  bootstrapped at any point.

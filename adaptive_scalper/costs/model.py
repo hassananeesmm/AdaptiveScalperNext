@@ -45,16 +45,34 @@ def price_equivalent_of_monetary_cost(monetary_cost_per_lot: float, tick_size: f
 def estimate_cost(
     *,
     spread_price: float,
-    commission_price_equivalent: float = 0.0,
-    expected_slippage_price: float = 0.0,
-    swap_price_equivalent: float = 0.0,
+    commission_price_equivalent: float,
+    expected_slippage_price: float,
+    swap_price_equivalent: float,
     uncertainty_margin_pct: float = 0.10,
 ) -> CostEstimate:
-    """Combine every cost component into one estimate. `uncertainty_margin_pct`
-    (directive section 34's "uncertainty_margin") is applied as a percentage
-    buffer on top of the summed known costs — conservative by construction:
-    the margin can only ever increase the effective cost bar a trade must
-    clear, never reduce it."""
+    """Combine every cost component into one estimate.
+
+    Per external review: every component is a REQUIRED keyword argument,
+    with no default of `0.0` — a caller must always make an explicit,
+    deliberate choice for each one. A prior version defaulted commission/
+    slippage/swap to `0.0`, which meant a caller that simply forgot to
+    measure or pass one of them would silently get "this cost is known
+    to be exactly zero" instead of an error — exactly the "unknown cost
+    becomes zero" failure mode directive section 34 exists to prevent.
+    Passing an explicit `0.0` remains correct when a component is
+    genuinely, verifiably zero (e.g. a broker documented as commission-
+    free) — that is a real fact the caller asserts, not a default this
+    function assumes on the caller's behalf.
+
+    For the common real-world case of "I don't yet know some of these
+    values," use `estimate_cost_from_evidence()` instead, which returns
+    `None` rather than ever calling this function with a guessed zero.
+
+    `uncertainty_margin_pct` (directive section 34's "uncertainty_margin")
+    is applied as a percentage buffer on top of the summed known costs —
+    conservative by construction: the margin can only ever increase the
+    effective cost bar a trade must clear, never reduce it.
+    """
     for name, value in (
         ("spread_price", spread_price),
         ("commission_price_equivalent", commission_price_equivalent),
@@ -77,4 +95,41 @@ def estimate_cost(
         swap_cost=swap_price_equivalent,
         uncertainty_margin=uncertainty_margin,
         total_cost=total_cost,
+    )
+
+
+def estimate_cost_from_evidence(
+    *,
+    spread_price: float | None,
+    commission_price_equivalent: float | None,
+    expected_slippage_price: float | None,
+    swap_price_equivalent: float | None,
+    uncertainty_margin_pct: float = 0.10,
+) -> CostEstimate | None:
+    """The REQUIRED real-runtime entry point for cost estimation
+    (external review: "never silently underestimate costs"). Each
+    component is `float | None` — `None` means "not currently known,"
+    e.g. no live quote to derive spread from, or no confirmed commission
+    schedule for this account. If ANY component is `None`, this returns
+    `None` rather than ever calling `estimate_cost()` with a guessed
+    `0.0` substituted in. The composed final permission gate treats a
+    `None` cost estimate as `BLOCK_COST` (`costs/edge.py`'s
+    `evaluate_cost_gate`) — unknown cost blocks the trade, it never
+    silently becomes free.
+
+    Swap deliberately gets NO special-cased default either, even though
+    it is often genuinely negligible for short-duration scalp holds:
+    "genuinely negligible" must be an explicit, measured `0.0` the
+    caller asserts (e.g. "this broker charges no swap on positions held
+    under 24h, confirmed against its published schedule") passed in
+    deliberately — never a parameter simply left out.
+    """
+    if spread_price is None or commission_price_equivalent is None or expected_slippage_price is None or swap_price_equivalent is None:
+        return None
+    return estimate_cost(
+        spread_price=spread_price,
+        commission_price_equivalent=commission_price_equivalent,
+        expected_slippage_price=expected_slippage_price,
+        swap_price_equivalent=swap_price_equivalent,
+        uncertainty_margin_pct=uncertainty_margin_pct,
     )
