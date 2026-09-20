@@ -54,12 +54,39 @@ def test_deal_order_send_fills_and_opens_a_position():
     assert result.retcode == FAKE_RETCODE_DONE
     assert result.volume_filled == 0.05
     assert result.price_filled == 2000.0
-    assert result.broker_position_id is not None
+    # execution-safety review finding #1: MqlTradeResult carries NO
+    # position ticket — this must never be invented from the order/deal
+    # ticket. The true position ticket is only discoverable afterward via
+    # positions_get()/history_deals_get().
+    assert result.broker_position_id is None
+    assert result.broker_order_id is not None
+    assert result.broker_deal_id is not None
 
     positions = gw.positions_get()
     assert len(positions) == 1
     assert positions[0].symbol == "XAUUSDm"
     assert positions[0].direction == "BUY"
+
+
+def test_deal_order_send_position_ticket_differs_from_order_and_deal_ticket():
+    """Regression for finding #1: order ticket, deal ticket, and position
+    ticket must be three DISTINCT identifiers, proving no code path could
+    accidentally treat one as another."""
+    gw = FakeGateway()
+    result = gw.order_send(_deal_request())
+    position = gw.positions_get()[0]
+    assert result.broker_order_id != position.broker_position_id
+    assert result.broker_deal_id != position.broker_position_id
+    assert result.broker_order_id != result.broker_deal_id
+
+
+def test_position_id_resolvable_from_history_deals():
+    gw = FakeGateway()
+    result = gw.order_send(_deal_request())
+    deals = gw.history_deals_get(0, 999999999)
+    match = next(d for d in deals if str(d.ticket) == result.broker_deal_id)
+    position = gw.positions_get()[0]
+    assert str(match.position_id) == position.broker_position_id
 
 
 def test_deal_order_send_records_the_call():
@@ -83,8 +110,11 @@ def test_two_deals_open_two_distinct_positions():
     gw = FakeGateway()
     r1 = gw.order_send(_deal_request())
     r2 = gw.order_send(_deal_request())
-    assert r1.broker_position_id != r2.broker_position_id
-    assert len(gw.positions_get()) == 2
+    assert r1.broker_order_id != r2.broker_order_id
+    assert r1.broker_deal_id != r2.broker_deal_id
+    positions = gw.positions_get()
+    assert len(positions) == 2
+    assert positions[0].broker_position_id != positions[1].broker_position_id
 
 
 # --------------------------------------------------------------------------
@@ -93,8 +123,8 @@ def test_two_deals_open_two_distinct_positions():
 
 def test_sltp_updates_matching_position():
     gw = FakeGateway()
-    fill = gw.order_send(_deal_request())
-    ticket = int(fill.broker_position_id)
+    gw.order_send(_deal_request())
+    ticket = int(gw.positions_get()[0].broker_position_id)
 
     result = gw.order_send(OrderRequest(
         action=OrderAction.SLTP, symbol="XAUUSDm", direction="BUY", volume=0.0,
@@ -173,3 +203,24 @@ def test_order_check_returns_ok_by_default():
     gw = FakeGateway()
     result = gw.order_check(_deal_request())
     assert result.retcode == FAKE_RETCODE_DONE
+
+
+# --------------------------------------------------------------------------
+# DEAL with position_ticket set = a CLOSE, never a new open (finding #2)
+# --------------------------------------------------------------------------
+
+def test_deal_with_position_ticket_closes_not_opens():
+    gw = FakeGateway()
+    gw.order_send(_deal_request())
+    ticket = int(gw.positions_get()[0].broker_position_id)
+
+    result = gw.order_send(_deal_request(direction="SELL", position_ticket=ticket))
+    assert result.retcode == FAKE_RETCODE_DONE
+    assert gw.positions_get() == []  # closed, not left open, and no new position opened
+
+
+def test_deal_with_unknown_position_ticket_fails_not_found():
+    gw = FakeGateway()
+    result = gw.order_send(_deal_request(position_ticket=99999))
+    assert result.retcode == FAKE_RETCODE_NOT_FOUND
+    assert gw.positions_get() == []  # never opens a new position as a side effect of a failed close

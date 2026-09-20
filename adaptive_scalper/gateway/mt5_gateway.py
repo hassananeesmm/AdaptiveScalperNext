@@ -103,6 +103,7 @@ def _symbol_spec(raw) -> SymbolSpec:
         spread=raw.spread,
         visible=bool(raw.visible),
         trade_mode=SymbolTradeMode(raw.trade_mode),
+        filling_mode=raw.filling_mode,
     )
 
 
@@ -239,6 +240,11 @@ _ORDER_ACTION_TO_MT5_ATTR = {
     OrderAction.REMOVE: "TRADE_ACTION_REMOVE",
 }
 
+_FILLING_TYPE_TO_MT5_ATTR = {
+    "IOC": "ORDER_FILLING_IOC",
+    "FOK": "ORDER_FILLING_FOK",
+}
+
 
 def _build_mt5_request(mt5mod, req: OrderRequest) -> dict:
     """Translate our broker-independent `OrderRequest` into MetaTrader5's
@@ -257,7 +263,15 @@ def _build_mt5_request(mt5mod, req: OrderRequest) -> dict:
         request["type"] = mt5mod.ORDER_TYPE_BUY if req.direction == "BUY" else mt5mod.ORDER_TYPE_SELL
         request["volume"] = req.volume
         request["type_time"] = mt5mod.ORDER_TIME_GTC
-        request["type_filling"] = mt5mod.ORDER_FILLING_IOC
+        # execution-safety review finding #7: IOC is used here ONLY as the
+        # literal request default for callers that never resolved a
+        # broker-supported filling type. execution/service.py — the sole
+        # real NEW-ENTRY caller — always resolves this via
+        # gateway.broker_constraints.derive_filling_type() first and sets
+        # OrderRequest.filling_type explicitly; it never relies on this
+        # fallback.
+        filling_type = req.filling_type or "IOC"
+        request["type_filling"] = getattr(mt5mod, _FILLING_TYPE_TO_MT5_ATTR[filling_type])
         request["deviation"] = req.deviation_points
         if req.price is not None:
             request["price"] = req.price
@@ -265,6 +279,14 @@ def _build_mt5_request(mt5mod, req: OrderRequest) -> dict:
             request["sl"] = req.stop_loss
         if req.take_profit is not None:
             request["tp"] = req.take_profit
+        if req.position_ticket is not None:
+            # execution-safety review finding #2: a DEAL with a
+            # position_ticket set is a CLOSE of that exact broker
+            # position, not an ordinary new-entry market order — MT5
+            # requires the `position` field to target it precisely
+            # (critical on hedging accounts, where symbol+direction alone
+            # cannot disambiguate which position to reduce).
+            request["position"] = req.position_ticket
 
     elif req.action == OrderAction.SLTP:
         if req.position_ticket is None:
@@ -295,10 +317,15 @@ def _order_send_result(raw, retcode_on_none: tuple[int, str] | None = None) -> O
         comment=raw.comment,
         broker_order_id=str(raw.order) if raw.order else None,
         broker_deal_id=str(raw.deal) if raw.deal else None,
-        # MT5 sets `order` to the position ticket for a market DEAL fill;
-        # `deal`/`order` disambiguation for SLTP/REMOVE happens at the
-        # caller level, which knows which action it sent.
-        broker_position_id=str(raw.order) if raw.order else None,
+        # execution-safety review finding #1: MqlTradeResult carries NO
+        # authoritative position ticket. Treating `raw.order` (the ORDER
+        # ticket) as the position ticket is unsafe and was a prior defect
+        # here — MT5 does not guarantee they are the same value. The true
+        # position ticket must be established from broker truth
+        # afterward, via `execution.position_resolution.resolve_opened_
+        # position_id()` (deal.position_id / order.position_id from
+        # history_deals_get/history_orders_get), never invented here.
+        broker_position_id=None,
         volume_filled=raw.volume,
         price_filled=raw.price if raw.price else None,
         raw={

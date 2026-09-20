@@ -10,16 +10,20 @@ import pytest
 from adaptive_scalper.core.final_permission import (
     ALLOW,
     BLOCK_DATA_QUALITY,
+    BLOCK_DUPLICATE,
     BLOCK_MODE,
+    BLOCK_RECONCILIATION,
     BLOCK_STALE_QUOTE,
     BLOCK_STRATEGY_RETIRED,
     BLOCK_SYMBOL_NOT_ALLOWED,
+    BLOCK_UNKNOWN_ORDER,
     FinalPermissionInput,
     evaluate_and_journal_final_permission,
     evaluate_final_permission,
 )
 from adaptive_scalper.core.kill_switch import KillSwitchState, KillSwitchStatus
 from adaptive_scalper.costs.model import estimate_cost
+from adaptive_scalper.execution.reconciliation import BLOCKING_MISMATCH, CLEAN
 from adaptive_scalper.gateway.demo_gate import BLOCK_ACCOUNT_NOT_DEMO, DemoVerificationResult
 from adaptive_scalper.gateway.symbol_validation import (
     EXECUTION_STALE_QUOTE,
@@ -103,7 +107,9 @@ def _risk_input(**overrides) -> RiskGateInput:
 def _full_allow_input(**overrides) -> FinalPermissionInput:
     defaults = dict(
         mode="DEMO", signal=_signal(), kill_switch_state=_kill_switch(),
-        demo_verification=_demo_ok(), asset_identity=_identity_ok(),
+        demo_verification=_demo_ok(), reconciliation_status=CLEAN,
+        has_dangerous_unknown_order=False, duplicate_active_order=False,
+        asset_identity=_identity_ok(),
         direction_check=_direction_ok(), execution_quote=_quote_ok(),
         news_result=_news_ok(), cost_estimate=_good_cost(),
         open_symbols=[], correlation_matrix={},
@@ -230,6 +236,59 @@ def test_blocks_on_risk_limit():
     over_limit_risk = _risk_input(proposed_monetary_risk=1000.0)  # way over 0.25% of 10000
     result = evaluate_final_permission(_full_allow_input(risk_gate_input=over_limit_risk))
     assert result.decision == "BLOCK_RISK"
+
+
+# --------------------------------------------------------------------------
+# execution-safety review finding #5: reconciliation/unknown/duplicate/re-entry
+# --------------------------------------------------------------------------
+
+def test_blocks_on_reconciliation_not_clean():
+    result = evaluate_final_permission(_full_allow_input(reconciliation_status=BLOCKING_MISMATCH))
+    assert result.decision == BLOCK_RECONCILIATION
+
+
+def test_recovered_status_still_blocks_until_re_reconciled_clean():
+    # RECOVERED means "locally resolvable" (e.g. a stale local OPEN record
+    # needs updating to CLOSED from broker truth) — it is intentionally
+    # NOT treated as equivalent to CLEAN here. The caller must apply the
+    # recovery and re-run reconciliation to CLEAN before new entries
+    # resume; this gate never takes RECOVERED as sufficient on its own.
+    from adaptive_scalper.execution.reconciliation import RECOVERED
+    result = evaluate_final_permission(_full_allow_input(reconciliation_status=RECOVERED))
+    assert result.decision == BLOCK_RECONCILIATION
+
+
+def test_blocks_on_dangerous_unknown_order():
+    result = evaluate_final_permission(_full_allow_input(has_dangerous_unknown_order=True))
+    assert result.decision == BLOCK_UNKNOWN_ORDER
+
+
+def test_blocks_on_duplicate_active_order():
+    result = evaluate_final_permission(_full_allow_input(duplicate_active_order=True))
+    assert result.decision == BLOCK_DUPLICATE
+
+
+def test_blocks_on_reentry_churn():
+    result = evaluate_final_permission(_full_allow_input(reentry_check=("BLOCK_REENTRY_CHURN", "cooldown active")))
+    assert result.decision == "BLOCK_REENTRY_CHURN"
+
+
+def test_allows_when_reentry_check_allows():
+    result = evaluate_final_permission(_full_allow_input(reentry_check=("ALLOW", "new setup")))
+    assert result.decision == ALLOW
+
+
+def test_reentry_check_none_means_not_applicable_and_still_allows():
+    result = evaluate_final_permission(_full_allow_input(reentry_check=None))
+    assert result.decision == ALLOW
+
+
+def test_reconciliation_checked_before_asset_identity():
+    bad_identity = SymbolValidationResult("XAUUSD", "XAUUSD", False, "asset_identity_mismatch", "mismatch")
+    result = evaluate_final_permission(
+        _full_allow_input(reconciliation_status=BLOCKING_MISMATCH, asset_identity=bad_identity)
+    )
+    assert result.decision == BLOCK_RECONCILIATION
 
 
 # --------------------------------------------------------------------------

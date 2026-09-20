@@ -1,4 +1,6 @@
-"""Tests for UNKNOWN order-outcome resolution (directive section 30)."""
+"""Tests for UNKNOWN order-outcome resolution (directive section 30,
+execution-safety review finding #3: full resolution against current
+positions/orders AND history)."""
 
 from __future__ import annotations
 
@@ -7,7 +9,7 @@ import pytest
 from adaptive_scalper.execution.state_machine import OrderState
 from adaptive_scalper.execution.store import OrderRecord
 from adaptive_scalper.execution.unknown import resolve_unknown_order
-from adaptive_scalper.gateway.types import HistoricalOrder
+from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder, PendingOrderSnapshot, PositionSnapshot
 
 
 def _order(**overrides) -> OrderRecord:
@@ -31,21 +33,45 @@ def _history_order(ticket: int, state: int, position_id: int = 0, **overrides) -
     return HistoricalOrder(**defaults)
 
 
+def _history_deal(order: int, position_id: int = 0, **overrides) -> HistoricalDeal:
+    defaults = dict(
+        ticket=500, order=order, time=1000, type=0, entry=0, magic=0, position_id=position_id,
+        volume=0.05, price=2000.0, commission=0.0, swap=0.0, profit=0.0, fee=0.0,
+        symbol="XAUUSDm", comment="", external_id="",
+    )
+    defaults.update(overrides)
+    return HistoricalDeal(**defaults)
+
+
+def _resolve(order, *, current_positions=(), current_pending_orders=(), history_orders=(), history_deals=()):
+    return resolve_unknown_order(
+        order,
+        current_positions=list(current_positions),
+        current_pending_orders=list(current_pending_orders),
+        history_orders=list(history_orders),
+        history_deals=list(history_deals),
+    )
+
+
 def test_no_broker_order_id_cannot_be_resolved():
     order = _order(broker_order_id=None)
-    result = resolve_unknown_order(order, history_orders=[])
+    result = _resolve(order)
     assert result.resolved is False
+    assert result.conflict is False
 
 
-def test_broker_order_id_not_found_in_history_stays_unresolved():
+def test_no_evidence_anywhere_stays_unresolved():
     order = _order(broker_order_id="999")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=4)])
+    result = _resolve(order, history_orders=[_history_order(111, state=4)])
     assert result.resolved is False
+    assert result.conflict is False
 
 
-def test_resolves_to_filled():
+# -- historical-order-only resolution (legacy coverage, still supported) --
+
+def test_resolves_to_filled_from_history_order():
     order = _order(broker_order_id="111")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=4, position_id=55)])
+    result = _resolve(order, history_orders=[_history_order(111, state=4, position_id=55)])
     assert result.resolved is True
     assert result.new_state == OrderState.FILLED
     assert result.matched_broker_position_id == "55"
@@ -53,43 +79,104 @@ def test_resolves_to_filled():
 
 def test_resolves_to_rejected():
     order = _order(broker_order_id="111")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=5)])
+    result = _resolve(order, history_orders=[_history_order(111, state=5)])
     assert result.new_state == OrderState.REJECTED
 
 
 def test_resolves_to_cancelled():
     order = _order(broker_order_id="111")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=2)])
+    result = _resolve(order, history_orders=[_history_order(111, state=2)])
     assert result.new_state == OrderState.CANCELLED
 
 
 def test_resolves_to_expired():
     order = _order(broker_order_id="111")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=6)])
+    result = _resolve(order, history_orders=[_history_order(111, state=6)])
     assert result.new_state == OrderState.EXPIRED
 
 
 def test_resolves_to_partial():
     order = _order(broker_order_id="111")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=3)])
+    result = _resolve(order, history_orders=[_history_order(111, state=3)])
     assert result.new_state == OrderState.PARTIAL
 
 
 def test_resolves_to_resting_when_still_placed():
     order = _order(broker_order_id="111")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=1)])
+    result = _resolve(order, history_orders=[_history_order(111, state=1)])
     assert result.new_state == OrderState.RESTING
 
 
 @pytest.mark.parametrize("transient_state", [0, 7, 8, 9])
 def test_transient_broker_internal_states_do_not_resolve(transient_state):
     order = _order(broker_order_id="111")
-    result = resolve_unknown_order(order, history_orders=[_history_order(111, state=transient_state)])
+    result = _resolve(order, history_orders=[_history_order(111, state=transient_state)])
     assert result.resolved is False
 
 
 def test_matches_by_ticket_not_position():
     order = _order(broker_order_id="111")
     # A different order (ticket 222) with the same position_id must NOT match.
-    result = resolve_unknown_order(order, history_orders=[_history_order(222, state=4, position_id=999)])
+    result = _resolve(order, history_orders=[_history_order(222, state=4, position_id=999)])
     assert result.resolved is False
+
+
+# -- new: current broker state (positions_get/orders_get) --
+
+def test_resolves_to_filled_from_current_open_position():
+    order = _order(broker_order_id="111", broker_position_id="55")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, "")
+    result = _resolve(order, current_positions=[position])
+    assert result.resolved is True
+    assert result.new_state == OrderState.FILLED
+    assert result.matched_broker_position_id == "55"
+
+
+def test_resolves_to_resting_from_current_pending_order():
+    order = _order(broker_order_id="111")
+    pending = PendingOrderSnapshot("111", "XAUUSDm", "BUY", 0.05, 1990.0, 0, "")
+    result = _resolve(order, current_pending_orders=[pending])
+    assert result.resolved is True
+    assert result.new_state == OrderState.RESTING
+
+
+def test_resolves_to_filled_from_history_deal():
+    order = _order(broker_order_id="111")
+    deal = _history_deal(order=111, position_id=77)
+    result = _resolve(order, history_deals=[deal])
+    assert result.resolved is True
+    assert result.new_state == OrderState.FILLED
+    assert result.matched_broker_position_id == "77"
+
+
+def test_agreeing_evidence_across_multiple_sources_resolves_cleanly():
+    order = _order(broker_order_id="111", broker_position_id="55")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, "")
+    deal = _history_deal(order=111, position_id=55)
+    order_hist = _history_order(111, state=4, position_id=55)
+    result = _resolve(order, current_positions=[position], history_deals=[deal], history_orders=[order_hist])
+    assert result.resolved is True
+    assert result.new_state == OrderState.FILLED
+
+
+# -- new: conflicting evidence -> PENDING_RECONCILIATION, never guessed --
+
+def test_conflicting_evidence_is_never_resolved():
+    """History says REJECTED, but the broker currently reports an open
+    position for the same order id — must NOT be silently resolved
+    either way; requires PENDING_RECONCILIATION."""
+    order = _order(broker_order_id="111", broker_position_id="55")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, "")
+    order_hist = _history_order(111, state=5)  # REJECTED
+    result = _resolve(order, current_positions=[position], history_orders=[order_hist])
+    assert result.resolved is False
+    assert result.conflict is True
+
+
+def test_conflicting_evidence_pending_vs_history_filled():
+    order = _order(broker_order_id="111")
+    pending = PendingOrderSnapshot("111", "XAUUSDm", "BUY", 0.05, 1990.0, 0, "")
+    order_hist = _history_order(111, state=4)  # FILLED
+    result = _resolve(order, current_pending_orders=[pending], history_orders=[order_hist])
+    assert result.resolved is False
+    assert result.conflict is True

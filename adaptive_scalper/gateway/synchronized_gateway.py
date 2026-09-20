@@ -24,6 +24,11 @@ from adaptive_scalper.gateway.types import (
     Bar,
     HistoricalDeal,
     HistoricalOrder,
+    OrderCheckResult,
+    OrderRequest,
+    OrderSendResult,
+    PendingOrderSnapshot,
+    PositionSnapshot,
     SymbolSpec,
     TerminalSnapshot,
     Tick,
@@ -87,6 +92,22 @@ class SynchronizedGateway:
     def history_deals_get(self, date_from_utc: int, date_to_utc: int) -> list[HistoricalDeal]:
         with self._lock:
             return self._inner.history_deals_get(date_from_utc, date_to_utc)
+
+    def positions_get(self) -> list[PositionSnapshot]:
+        with self._lock:
+            return self._inner.positions_get()
+
+    def orders_get(self) -> list[PendingOrderSnapshot]:
+        with self._lock:
+            return self._inner.orders_get()
+
+    def order_check(self, request: OrderRequest) -> OrderCheckResult:
+        with self._lock:
+            return self._inner.order_check(request)
+
+    def order_send(self, request: OrderRequest) -> OrderSendResult:
+        with self._lock:
+            return self._inner.order_send(request)
 
     def last_error(self) -> tuple[int, str]:
         with self._lock:

@@ -17,23 +17,37 @@ correlation matrix, current open positions) immediately beforehand and
 pass the results in — this keeps the actual decision logic fully
 testable without a live gateway or database.
 
-NOT YET INTEGRATED (named gaps, not fabricated "always clean" defaults):
-directive's full `BLOCK_*` vocabulary includes reasons for subsystems
-that do not exist in this codebase yet —
-`BLOCK_RECONCILIATION`/`BLOCK_UNKNOWN_ORDER` (no execution/reconciliation
-layer), `BLOCK_MARGIN`/`BLOCK_BROKER_CONSTRAINT` (no live broker
-order-validation call), `BLOCK_DUPLICATE`/`BLOCK_REENTRY_CHURN` (no
-idempotency/position-history layer), `BLOCK_PORTFOLIO_RISK` (no
-distinct cluster-level heat ceiling beyond what `BLOCK_RISK`/
-`BLOCK_CORRELATION` already cover). Each is added when its real
-subsystem exists — this function does not pretend they're already
-covered.
+Execution-safety review finding #5 (see PROJECT_STATUS.md/BUG_BACKLOG.md):
+this gate now integrates real evidence for `BLOCK_RECONCILIATION`
+(reconciliation status is not CLEAN), `BLOCK_UNKNOWN_ORDER` (a dangerous
+unresolved UNKNOWN order exists), `BLOCK_DUPLICATE` (an active order
+already exists for this same logical proposal), and `BLOCK_REENTRY_CHURN`
+(the safe re-entry hysteresis — `position_management.re_entry` — blocked
+this candidate). All four are REQUIRED, non-optional inputs: there is no
+"always clean" default for any of them, so a caller that cannot actually
+prove reconciliation is clean, or that a dangerous UNKNOWN doesn't exist,
+must pass the conservative (blocking) value rather than skip the check.
 
-`order_send` does not exist anywhere in this codebase. This gate exists
-ahead of it deliberately, but an `ALLOW` from this function is not yet
-sufficient on its own to submit an order — the execution state machine,
-idempotency, UNKNOWN handling, and reconciliation this docstring lists
-as gaps must also exist first (see PROJECT_STATUS.md).
+STILL NOT YET INTEGRATED (named gaps, not fabricated "always clean"
+defaults):
+`BLOCK_MARGIN`/`BLOCK_BROKER_CONSTRAINT` are evaluated one step LATER
+than this function, in `execution.service` — they depend on the EXACT
+broker request and a fresh `order_check()` call, which by construction
+cannot happen until after this gate's ALLOW produces that exact request
+(see the execution flow diagram in `execution/service.py`). This gate
+being an ALLOW is therefore necessary but not sufficient to submit an
+order — `execution.service` re-runs this ENTIRE gate fresh immediately
+before every `order_send`, plus `order_check`, plus margin/broker-
+constraint evaluation, before anything is actually sent.
+`BLOCK_PORTFOLIO_RISK` remains a genuine gap: no distinct cluster-level
+portfolio-heat ceiling exists yet beyond what `BLOCK_RISK`/
+`BLOCK_CORRELATION` already cover — not fabricated here either.
+
+`order_send` exists in `gateway/`, but nothing outside `execution.service`
+may call it directly for a NEW entry (enforced by
+`tests/test_architecture_execution_boundary.py`). This gate is the
+single point every such call must pass through fresh, immediately before
+submission.
 """
 
 from __future__ import annotations
@@ -48,6 +62,7 @@ from adaptive_scalper.core.permission import ActionKind, evaluate_kill_switch_pe
 from adaptive_scalper.costs.edge import ALLOW as _COST_ALLOW
 from adaptive_scalper.costs.edge import evaluate_cost_gate
 from adaptive_scalper.costs.model import CostEstimate
+from adaptive_scalper.execution.reconciliation import CLEAN as _RECONCILIATION_CLEAN
 from adaptive_scalper.gateway.demo_gate import DemoVerificationResult
 from adaptive_scalper.gateway.symbol_validation import (
     EXECUTION_STALE_QUOTE,
@@ -70,6 +85,10 @@ BLOCK_SYMBOL_NOT_ALLOWED = "BLOCK_SYMBOL_NOT_ALLOWED"
 BLOCK_STRATEGY_RETIRED = "BLOCK_STRATEGY_RETIRED"
 BLOCK_DATA_QUALITY = "BLOCK_DATA_QUALITY"
 BLOCK_STALE_QUOTE = "BLOCK_STALE_QUOTE"
+BLOCK_RECONCILIATION = "BLOCK_RECONCILIATION"
+BLOCK_UNKNOWN_ORDER = "BLOCK_UNKNOWN_ORDER"
+BLOCK_DUPLICATE = "BLOCK_DUPLICATE"
+BLOCK_REENTRY_CHURN = "BLOCK_REENTRY_CHURN"
 BLOCK_OTHER = "BLOCK_OTHER"
 
 
@@ -79,6 +98,9 @@ class FinalPermissionInput:
     signal: StrategySignal
     kill_switch_state: KillSwitchState
     demo_verification: DemoVerificationResult
+    reconciliation_status: str                # execution.reconciliation.{CLEAN,BLOCKING_MISMATCH,RECOVERED}
+    has_dangerous_unknown_order: bool          # execution.reconciliation.has_dangerous_unresolved_unknown()
+    duplicate_active_order: bool               # True if an active order already exists for this proposal
     asset_identity: SymbolValidationResult
     direction_check: DirectionCheck
     execution_quote: ExecutionQuoteCheck
@@ -89,6 +111,10 @@ class FinalPermissionInput:
     risk_gate_input: RiskGateInput
     risk_limits: RiskLimits
     min_net_edge_price: float = 0.0
+    # (decision, reason) from position_management.re_entry.evaluate_reentry,
+    # or None when this proposal is not a re-entry scenario (no relevant
+    # prior exit exists) and the check is simply not applicable.
+    reentry_check: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +155,20 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
             kill_result.block_reason, f"kill switch status={inp.kill_switch_state.status.value}"
         )
 
+    if inp.reconciliation_status != _RECONCILIATION_CLEAN:
+        return FinalPermissionResult(
+            BLOCK_RECONCILIATION,
+            f"reconciliation status={inp.reconciliation_status!r} (not CLEAN) — possible unaccounted "
+            f"broker exposure; new entries blocked until resolved",
+        )
+
+    if inp.has_dangerous_unknown_order:
+        return FinalPermissionResult(
+            BLOCK_UNKNOWN_ORDER,
+            "a dangerous unresolved UNKNOWN order exists — duplicate exposure cannot be ruled out; "
+            "new entries blocked until resolved (directive section 30)",
+        )
+
     if not inp.asset_identity.valid:
         return FinalPermissionResult(BLOCK_DATA_QUALITY, inp.asset_identity.detail)
 
@@ -157,6 +197,18 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
     risk_decision, risk_reason = evaluate_risk_gate(inp.risk_gate_input, inp.risk_limits)
     if risk_decision != _RISK_ALLOW:
         return FinalPermissionResult(risk_decision, risk_reason)
+
+    if inp.duplicate_active_order:
+        return FinalPermissionResult(
+            BLOCK_DUPLICATE,
+            "an active (non-terminal) order already exists for this same logical proposal — refusing "
+            "to submit a second one",
+        )
+
+    if inp.reentry_check is not None:
+        reentry_decision, reentry_reason = inp.reentry_check
+        if reentry_decision != "ALLOW":
+            return FinalPermissionResult(reentry_decision, reentry_reason)
 
     return FinalPermissionResult(ALLOW, "passed every composed gate")
 

@@ -6,6 +6,7 @@ import pytest
 
 from adaptive_scalper.execution.state_machine import InvalidTransitionError, OrderState
 from adaptive_scalper.execution.store import (
+    IdempotencyConflictError,
     create_order,
     get_order_by_client_request_id,
     get_order_state_history,
@@ -37,13 +38,69 @@ def test_create_order_is_idempotent(db):
     assert count == 1
 
 
-def test_create_order_idempotent_even_with_different_params(db):
-    # Same client_request_id must return the EXISTING order regardless
-    # of what the (presumably retried) caller passes this time.
-    order1 = create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05)
-    order2 = create_order(db, "req-1", "GBPJPY", "GBPJPYm", "SELL", 99.0)
+def test_create_order_idempotent_on_exact_retry(db):
+    # An EXACT retry (same client_request_id, same immutable fields) is
+    # the only safe case — returns the existing row unchanged, never a
+    # second order.
+    order1 = create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, stop_loss=1990.0, take_profit=2020.0)
+    order2 = create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, stop_loss=1990.0, take_profit=2020.0)
     assert order1.id == order2.id
-    assert order2.canonical_symbol == "XAUUSD"  # original, not the second call's params
+    count = db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+    assert count == 1
+
+
+# execution-safety review finding #6: a client_request_id collision with
+# DIFFERENT immutable fields must raise loudly, not silently return the
+# stale row — that would hide a real caller bug. No second order may be
+# created in any of these cases either.
+
+def test_idempotency_conflict_changed_symbol_raises(db):
+    create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05)
+    with pytest.raises(IdempotencyConflictError):
+        create_order(db, "req-1", "GBPJPY", "GBPJPYm", "BUY", 0.05)
+    assert db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_idempotency_conflict_changed_direction_raises(db):
+    create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05)
+    with pytest.raises(IdempotencyConflictError):
+        create_order(db, "req-1", "XAUUSD", "XAUUSDm", "SELL", 0.05)
+    assert db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_idempotency_conflict_changed_volume_raises(db):
+    create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05)
+    with pytest.raises(IdempotencyConflictError):
+        create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.10)
+    assert db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_idempotency_conflict_changed_stop_loss_raises(db):
+    create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, stop_loss=1990.0)
+    with pytest.raises(IdempotencyConflictError):
+        create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, stop_loss=1980.0)
+    assert db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_idempotency_conflict_changed_take_profit_raises(db):
+    create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, take_profit=2020.0)
+    with pytest.raises(IdempotencyConflictError):
+        create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, take_profit=2030.0)
+    assert db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_idempotency_conflict_changed_broker_symbol_raises(db):
+    create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05)
+    with pytest.raises(IdempotencyConflictError):
+        create_order(db, "req-1", "XAUUSD", "XAUUSD.raw", "BUY", 0.05)
+    assert db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_idempotency_conflict_changed_chain_key_raises(db):
+    create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, chain_key="chain-a")
+    with pytest.raises(IdempotencyConflictError):
+        create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, chain_key="chain-b")
+    assert db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
 
 
 def test_get_order_by_client_request_id_returns_none_for_unknown(db):

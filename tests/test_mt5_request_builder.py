@@ -19,7 +19,7 @@ def _fake_mt5_module() -> SimpleNamespace:
     return SimpleNamespace(
         TRADE_ACTION_DEAL=1, TRADE_ACTION_SLTP=2, TRADE_ACTION_REMOVE=3,
         ORDER_TYPE_BUY=10, ORDER_TYPE_SELL=11,
-        ORDER_TIME_GTC=20, ORDER_FILLING_IOC=30,
+        ORDER_TIME_GTC=20, ORDER_FILLING_IOC=30, ORDER_FILLING_FOK=31,
     )
 
 
@@ -112,6 +112,40 @@ def test_remove_request_maps_order_ticket():
 
 
 # --------------------------------------------------------------------------
+# DEAL + position_ticket = a CLOSE (execution-safety review finding #2)
+# --------------------------------------------------------------------------
+
+def test_deal_request_with_position_ticket_sets_position_field():
+    req = OrderRequest(
+        action=OrderAction.DEAL, symbol="XAUUSDm", direction="SELL", volume=0.05, position_ticket=54321,
+    )
+    mt5_request = _build_mt5_request(_fake_mt5_module(), req)
+    assert mt5_request["position"] == 54321
+
+
+def test_deal_request_without_position_ticket_omits_position_field():
+    req = OrderRequest(action=OrderAction.DEAL, symbol="XAUUSDm", direction="BUY", volume=0.05)
+    mt5_request = _build_mt5_request(_fake_mt5_module(), req)
+    assert "position" not in mt5_request
+
+
+# --------------------------------------------------------------------------
+# filling type resolution (execution-safety review finding #7)
+# --------------------------------------------------------------------------
+
+def test_deal_request_defaults_to_ioc_when_filling_type_unset():
+    req = OrderRequest(action=OrderAction.DEAL, symbol="XAUUSDm", direction="BUY", volume=0.05)
+    mt5_request = _build_mt5_request(_fake_mt5_module(), req)
+    assert mt5_request["type_filling"] == 30  # ORDER_FILLING_IOC
+
+
+def test_deal_request_honors_explicit_fok_filling_type():
+    req = OrderRequest(action=OrderAction.DEAL, symbol="XAUUSDm", direction="BUY", volume=0.05, filling_type="FOK")
+    mt5_request = _build_mt5_request(_fake_mt5_module(), req)
+    assert mt5_request["type_filling"] == 31  # ORDER_FILLING_FOK
+
+
+# --------------------------------------------------------------------------
 # _order_send_result
 # --------------------------------------------------------------------------
 
@@ -148,3 +182,13 @@ def test_order_send_result_preserves_raw_fields():
     result = _order_send_result(_raw_result())
     assert result.raw["retcode"] == 10009
     assert result.raw["comment"] == "Request executed"
+
+
+def test_order_send_result_never_invents_a_position_id():
+    """Execution-safety review finding #1 regression: MqlTradeResult
+    carries no position ticket, and this must NEVER be filled in from
+    `raw.order` (or anything else) — it must always be None here."""
+    result = _order_send_result(_raw_result(order=777, deal=555))
+    assert result.broker_position_id is None
+    assert result.broker_order_id == "777"
+    assert result.broker_deal_id == "555"

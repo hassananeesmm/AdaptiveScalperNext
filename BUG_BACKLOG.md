@@ -51,6 +51,39 @@ delete) once fixed, with the fixing commit/date noted.
    already-bootstrapped symbol, this needs a real design (e.g. a second job
    walking backward from the original start), not a workaround.
 
+5. [SEVERITY: MEDIUM, SUBSYSTEM: execution] `execution/service.py`'s
+   `order_check_success_retcodes` default (`{0, 10009}`) has NOT been
+   live-verified against the real DEMO terminal's actual `order_check()`
+   return value — MT5 broker implementations are inconsistent about
+   whether a "no error" `order_check()` returns `0` or the same
+   `TRADE_RETCODE_DONE=10009` used for `order_send`. `order_check()` was
+   deliberately NOT invoked live this checkpoint (CLAUDE.md: only
+   read-only gateway calls may be exercised live; `order_check`, though
+   non-executing, is a dry-run TRADE request and was treated
+   conservatively as out of scope). Must be live-verified with a real
+   (never-sent) `order_check()` call before controlled DEMO validation —
+   tracked here so it isn't silently assumed correct.
+
+6. [SEVERITY: LOW, SUBSYSTEM: position_management] No
+   `position_management/expectancy.py` exists yet — `adaptive_exit
+   .evaluate_adaptive_exit()`'s `thesis_valid`/`regime_reversed` inputs
+   are accepted as pre-computed evidence (directive section 17's
+   continuous-position-expectancy re-evaluation), but nothing yet
+   COMPUTES that evidence from live position/regime state. Scoped out of
+   this checkpoint for time; the pure decision function is complete and
+   tested, but has no real caller yet.
+
+7. [SEVERITY: LOW, SUBSYSTEM: execution] `execution/reconciliation
+   .run_reconciliation()`'s `BrokerPositionSnapshot` construction passes
+   the broker's raw `symbol` string (e.g. `"XAUUSDm"`) directly as
+   `canonical_symbol`, without translating it through the broker-name
+   resolver (`gateway/symbol_resolver.py`). Works today only because
+   `reconcile_positions()` never actually compares `canonical_symbol`
+   values against each other — it keys entirely on `broker_position_id`
+   — but this is fragile if that function's contract ever changes. Needs
+   a real translation step once reconciliation is wired into the runtime
+   loop.
+
 4. [SEVERITY: LOW, SUBSYSTEM: history] Tick history storage
    (`adaptive_scalper/history/store.py`) dedupes on
    `(canonical_symbol, time_msc)`. A future MT5 build/broker whose tick feed
@@ -62,6 +95,32 @@ delete) once fixed, with the fixing commit/date noted.
    volume.
 
 ## Fixed
+
+- ~~[SEVERITY: CRITICAL, SUBSYSTEM: execution] 9 execution-safety issues
+  found by external review of the Phase 4 execution layer, before
+  controlled-DEMO execution could be considered: (1) order ticket treated
+  as position ticket; (2) no dedicated safe-close path (risked reverse
+  exposure); (3) `execution/unknown.py` stale, resolved only against
+  order history; (4) `execution/reconciliation.py` stale, no real
+  gateway-truth orchestration; (5) `core/final_permission.py` missing
+  real `BLOCK_RECONCILIATION`/`BLOCK_UNKNOWN_ORDER`/`BLOCK_DUPLICATE`/
+  `BLOCK_REENTRY_CHURN` evidence; (6) idempotency collision on a
+  DIFFERENT request silently returned the stale row; (7) filling type
+  hardcoded to `ORDER_FILLING_IOC` regardless of broker support; (8)
+  `order_check` not enforced as mandatory before `order_send`; (9) no
+  guarantee of a fresh pre-send recheck.~~ Fixed 2026-09-20 — see
+  PROJECT_STATUS.md's "Execution-safety review fixes" section for full
+  detail per item. New: `execution/position_resolution.py`,
+  `execution/close.py`, `execution/service.py`,
+  `gateway/broker_constraints.py`,
+  `tests/test_architecture_execution_boundary.py`. Rewrote:
+  `execution/unknown.py`, `execution/reconciliation.py`. Hardened:
+  `execution/store.py` (`IdempotencyConflictError`),
+  `core/final_permission.py` (4 new integrated gates),
+  `gateway/mt5_gateway.py`/`gateway/fake_gateway.py` (position-id
+  never invented; filling type resolved, not hardcoded).
+  Live-verified (read-only): real DEMO terminal filling_mode/
+  positions_get/orders_get — see PROJECT_STATUS.md.
 
 - ~~[SEVERITY: HIGH, SUBSYSTEM: risk] `evaluate_risk_gate()` trusted that
   `proposed_monetary_risk` had been correctly derived from

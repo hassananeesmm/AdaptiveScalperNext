@@ -144,33 +144,43 @@ class FakeGateway:
 
         return self._default_order_send(request)
 
+    def _next_distinct_ticket(self) -> int:
+        ticket = self._next_ticket
+        self._next_ticket += 1
+        return ticket
+
+    def _fill_price_for(self, request: OrderRequest) -> float:
+        if request.price is not None:
+            return request.price
+        tick = self._ticks.get(request.symbol)
+        if tick is None:
+            return 0.0
+        return tick.ask if request.direction == "BUY" else tick.bid
+
     def _default_order_send(self, request: OrderRequest) -> OrderSendResult:
-        """Simple, deterministic auto-fill simulation: a DEAL always
-        fills immediately and opens a position; SLTP modifies a matching
-        open position; REMOVE cancels a matching pending order. Good
-        enough for tests exercising the caller's handling of a
-        successful path — tests needing a reject/partial/UNKNOWN outcome
-        should pass `order_send_responses` instead."""
+        """Simple, deterministic auto-fill simulation: a DEAL without a
+        `position_ticket` opens a NEW position; a DEAL WITH one CLOSES
+        that exact position (execution-safety review finding #2); SLTP
+        modifies a matching open position; REMOVE cancels a matching
+        pending order. Good enough for tests exercising the caller's
+        handling of a successful path — tests needing a reject/partial/
+        UNKNOWN outcome should pass `order_send_responses` instead.
+
+        Deliberately uses THREE DISTINCT tickets (order/deal/position) for
+        every fill, and always reports `broker_position_id=None` in the
+        `OrderSendResult` — exactly mirroring real MT5's `MqlTradeResult`,
+        which carries no position ticket at all. This is a direct fix for
+        a prior defect where this simulator taught callers/tests that
+        order ticket == position ticket (execution-safety review finding
+        #1); the true position ticket is only discoverable afterward via
+        `history_deals_get()`/`history_orders_get()`, exactly like the
+        real gateway.
+        """
+        if request.action == OrderAction.DEAL and request.position_ticket is not None:
+            return self._simulate_close_deal(request)
+
         if request.action == OrderAction.DEAL:
-            ticket = str(self._next_ticket)
-            self._next_ticket += 1
-            tick = self._ticks.get(request.symbol)
-            if request.price is not None:
-                fill_price = request.price
-            elif tick is not None:
-                fill_price = tick.ask if request.direction == "BUY" else tick.bid
-            else:
-                fill_price = 0.0
-            self._open_positions[ticket] = PositionSnapshot(
-                broker_position_id=ticket, symbol=request.symbol, direction=request.direction,
-                volume=request.volume, price_open=fill_price, stop_loss=request.stop_loss or 0.0,
-                take_profit=request.take_profit or 0.0, profit=0.0, magic=request.magic, comment=request.comment,
-            )
-            return OrderSendResult(
-                retcode=FAKE_RETCODE_DONE, comment="fake: filled", broker_order_id=ticket,
-                broker_deal_id=ticket, broker_position_id=ticket, volume_filled=request.volume,
-                price_filled=fill_price, raw={},
-            )
+            return self._simulate_open_deal(request)
 
         if request.action == OrderAction.SLTP:
             key = str(request.position_ticket)
@@ -201,6 +211,59 @@ class FakeGateway:
             )
 
         raise ValueError(f"unhandled OrderAction: {request.action!r}")
+
+    def _simulate_open_deal(self, request: OrderRequest) -> OrderSendResult:
+        order_ticket = self._next_distinct_ticket()
+        deal_ticket = self._next_distinct_ticket()
+        position_ticket = self._next_distinct_ticket()
+        fill_price = self._fill_price_for(request)
+        position_key = str(position_ticket)
+        self._open_positions[position_key] = PositionSnapshot(
+            broker_position_id=position_key, symbol=request.symbol, direction=request.direction,
+            volume=request.volume, price_open=fill_price, stop_loss=request.stop_loss or 0.0,
+            take_profit=request.take_profit or 0.0, profit=0.0, magic=request.magic, comment=request.comment,
+        )
+        self._historical_deals.append(HistoricalDeal(
+            ticket=deal_ticket, order=order_ticket, time=0, type=0 if request.direction == "BUY" else 1,
+            entry=0, magic=request.magic, position_id=position_ticket, volume=request.volume,
+            price=fill_price, commission=0.0, swap=0.0, profit=0.0, fee=0.0, symbol=request.symbol,
+            comment=request.comment, external_id="",
+        ))
+        return OrderSendResult(
+            retcode=FAKE_RETCODE_DONE, comment="fake: filled", broker_order_id=str(order_ticket),
+            broker_deal_id=str(deal_ticket),
+            # Deliberately None: real MqlTradeResult carries no position
+            # ticket (finding #1). Resolve via history_deals_get() /
+            # execution.position_resolution, exactly as with the real
+            # gateway.
+            broker_position_id=None,
+            volume_filled=request.volume, price_filled=fill_price, raw={},
+        )
+
+    def _simulate_close_deal(self, request: OrderRequest) -> OrderSendResult:
+        position_key = str(request.position_ticket)
+        pos = self._open_positions.get(position_key)
+        if pos is None:
+            return OrderSendResult(
+                retcode=FAKE_RETCODE_NOT_FOUND, comment="fake: no such position to close",
+                broker_order_id=None, broker_deal_id=None, broker_position_id=None,
+                volume_filled=0.0, price_filled=None, raw={},
+            )
+        order_ticket = self._next_distinct_ticket()
+        deal_ticket = self._next_distinct_ticket()
+        fill_price = self._fill_price_for(request)
+        del self._open_positions[position_key]
+        self._historical_deals.append(HistoricalDeal(
+            ticket=deal_ticket, order=order_ticket, time=0, type=0 if request.direction == "BUY" else 1,
+            entry=1, magic=request.magic, position_id=int(position_key), volume=request.volume,
+            price=fill_price, commission=0.0, swap=0.0, profit=0.0, fee=0.0, symbol=request.symbol,
+            comment=request.comment, external_id="",
+        ))
+        return OrderSendResult(
+            retcode=FAKE_RETCODE_DONE, comment="fake: closed", broker_order_id=str(order_ticket),
+            broker_deal_id=str(deal_ticket), broker_position_id=None,
+            volume_filled=request.volume, price_filled=fill_price, raw={},
+        )
 
     def last_error(self) -> tuple[int, str]:
         return self._last_error

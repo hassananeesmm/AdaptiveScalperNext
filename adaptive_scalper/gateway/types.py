@@ -100,6 +100,13 @@ class SymbolSpec:
     spread: int
     visible: bool
     trade_mode: SymbolTradeMode
+    # Raw MT5 ENUM_SYMBOL_TRADING_MODE_FILLING bitmask (SYMBOL_FILLING_FOK=1,
+    # SYMBOL_FILLING_IOC=2), deliberately undecoded here (see
+    # HistoricalOrder's docstring for why this layer doesn't interpret raw
+    # broker codes). Default of 3 (both bits set) is a permissive stand-in
+    # for tests that don't care about this dimension; Mt5Gateway always
+    # sets the broker's true value. See gateway/broker_constraints.py.
+    filling_mode: int = 3
 
 
 @dataclass(frozen=True)
@@ -212,8 +219,17 @@ class OrderRequest:
     deviation_points: int = 20           # max acceptable slippage, in points, for a DEAL
     magic: int = 0
     comment: str = ""                    # should embed the client_request_id for idempotency-by-comment
-    position_ticket: int | None = None   # required for SLTP (which open position to modify)
+    position_ticket: int | None = None   # SLTP: which position to modify. DEAL: when set, this is a CLOSE
+                                          # of that exact position (never an ordinary new-entry DEAL) —
+                                          # see execution/close.py (execution-safety review finding #2).
     order_ticket: int | None = None      # required for REMOVE (which pending order to cancel)
+    # Broker-supported fill policy for a DEAL, resolved by the caller from
+    # the symbol's advertised filling_mode bitmask (gateway/broker_constraints
+    # .derive_filling_type) — never blindly assumed. None falls back to IOC
+    # only for callers (tests, ad-hoc scripts) that haven't gone through
+    # that resolution; execution/service.py, the sole real NEW-ENTRY caller,
+    # always resolves and sets this explicitly (finding #7).
+    filling_type: str | None = None
 
 
 @dataclass(frozen=True)

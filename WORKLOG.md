@@ -991,3 +991,131 @@ Chronological, factual record of initialization events. Append only.
   conscious scope boundary: the code exists and is thoroughly tested
   against `FakeGateway`, but nothing in this codebase has invoked real
   `order_send` yet.
+
+## Session: execution-safety review fixes + position management
+
+Resumed from commit `ae14892` (pushed). An external execution-safety
+review of the Phase 4 building blocks found 9 issues that had to be
+fixed before controlled-DEMO execution could be considered. Fixed all
+nine, in order:
+
+1. **Order ticket ≠ position ticket.** `_order_send_result()` (both
+   `Mt5Gateway` and `FakeGateway`) no longer invents `broker_position_id`
+   from the order ticket — it's always `None` straight off `order_send()`,
+   matching real MT5's `MqlTradeResult`. New
+   `execution/position_resolution.resolve_opened_position_id()` recovers
+   the true position id from `history_deals_get()`/`history_orders_get()`
+   afterward (deal.position_id preferred, order.position_id fallback).
+   `FakeGateway` now mints three distinct tickets (order/deal/position)
+   per fill and records a matching `HistoricalDeal` so the simulation
+   can't teach tests order-id == position-id. Regression:
+   `test_deal_order_send_position_ticket_differs_from_order_and_deal_ticket`,
+   `test_position_id_resolvable_from_history_deals`,
+   `test_order_send_result_never_invents_a_position_id`, and all of
+   `tests/test_position_resolution.py` (6 tests, including an
+   end-to-end round trip through `FakeGateway`'s own simulation).
+2. **Safe position close path.** New `execution/close.py`
+   (`close_position_safely()`): fresh `positions_get()` immediately
+   before send; `ALREADY_CLOSED` if the position is gone (never sends an
+   opposite trade against nothing); `VOLUME_MISMATCH` if broker
+   direction/volume disagree with the caller's expectation (partial
+   close stays disabled — this only ever closes the broker's exact
+   current volume). `OrderRequest.position_ticket` on a DEAL now means
+   "close this exact position" — `_build_mt5_request` sets MT5's
+   `position` field; `FakeGateway._simulate_close_deal` mirrors it
+   without opening a new position. 8 tests in
+   `tests/test_execution_close.py`, including the exact race condition
+   (broker-side SL close between decision and send) and a broad
+   regression proving open-position count can never increase across any
+   outcome.
+3. **UNKNOWN resolution upgraded.** `execution/unknown.py` rewritten to
+   resolve against `positions_get`/`orders_get`/`history_orders_get`/
+   `history_deals_get` together, not order history alone. Agreeing
+   evidence resolves; CONFLICTING evidence (e.g. history says REJECTED
+   but a live broker position exists for the same order) is never
+   guessed away — `conflict=True`, unresolved, forces
+   PENDING_RECONCILIATION. `tests/test_execution_unknown.py` rewritten
+   (19 tests) with new coverage for current-state evidence and both
+   conflict scenarios.
+4. **Reconciliation upgraded to real gateway truth.**
+   `execution/reconciliation.run_reconciliation()`: fetches
+   `positions_get()`, compares to local OPEN positions, classifies to
+   one deterministic status (`CLEAN`/`BLOCKING_MISMATCH`/`RECOVERED`)
+   via new `classify_reconciliation()`, records `execution_incidents`
+   for blocking findings, journals `RECONCILIATION_ACTION` every run.
+   10 new tests.
+5. **Final permission gate integrates execution safety.**
+   `FinalPermissionInput` gained `reconciliation_status`,
+   `has_dangerous_unknown_order`, `duplicate_active_order`,
+   `reentry_check` — all REQUIRED (no fake-clean default). New gate
+   checks: `BLOCK_RECONCILIATION`, `BLOCK_UNKNOWN_ORDER`,
+   `BLOCK_DUPLICATE`, `BLOCK_REENTRY_CHURN`. Docstring rewritten — no
+   longer describes execution/gateway pieces as nonexistent.
+   `BLOCK_MARGIN`/`BLOCK_BROKER_CONSTRAINT` deliberately live one step
+   later (`execution/service.py`, needs the exact request + fresh
+   `order_check`) — documented, not silently missing.
+   `BLOCK_PORTFOLIO_RISK` remains an honest, still-open gap. 10 new
+   tests including gate-ordering checks.
+6. **Idempotency collision fails loudly.** `execution/store.py` gained
+   `IdempotencyConflictError` — a `client_request_id` collision on a
+   DIFFERENT immutable field (symbol, direction, volume, SL, TP,
+   chain_key, broker symbol) now raises instead of silently returning
+   the stale row. 7 new tests, one per field.
+7. **Broker filling-mode constraints.** New
+   `gateway/broker_constraints.derive_filling_type()` reads the new
+   `SymbolSpec.filling_mode` bitmask and picks a broker-supported policy
+   (IOC preferred, FOK fallback) instead of hardcoding
+   `ORDER_FILLING_IOC`; returns `None` if neither is supported.
+   `OrderRequest.filling_type` threads the resolved value through
+   `_build_mt5_request`.
+8-9. **`execution/service.py`** (NEW) — the ONE execution orchestration
+   service: idempotent PROPOSED order → FRESH
+   `evaluate_and_journal_final_permission` (never cached) → resolve
+   filling type → exact `OrderRequest` → mandatory `order_check` →
+   SUBMITTED → `order_send` (same unmutated request) → interpret result
+   through the state machine → resolve position via
+   `position_resolution` → FILLED/UNKNOWN/REJECTED → full journal
+   lifecycle. New architectural regression test
+   `tests/test_architecture_execution_boundary.py` scans
+   `strategies/`/`selector/`/`learning/`/`rag/`/`dashboard/`/`cli/` for
+   direct `.order_send(` references and fails the build if found — only
+   `execution/` and `gateway/` may reference it. 9 tests in
+   `test_execution_service.py` covering the happy path, every block
+   branch, broker rejection, and unresolvable-UNKNOWN.
+- **TESTED (live), READ-ONLY ONLY**: real DEMO terminal (login number
+  withheld per precedent — account-identifying info, not committed;
+  server `ICMarketsSC-Demo`, `trade_allowed=True`, `trade_expert=True`,
+  `account_info().trade_mode == DEMO`). Confirmed all three canonical
+  symbols report `filling_mode=2` (IOC-only on this broker) and
+  `derive_filling_type()` correctly resolves `IOC` for each through the
+  real `Mt5Gateway.symbol_info()`. Confirmed `positions_get()`/
+  `orders_get()` both still return empty through the real gateway.
+  Deliberately did NOT call `order_check()`/`order_send()` live — tracked
+  as BUG_BACKLOG.md item 5 (the `order_check` success-retcode convention
+  needs live verification before controlled DEMO).
+
+Then built `position_management/adaptive_exit.py` and `re_entry.py`
+(directive sections 17-23, 26-28):
+
+- `adaptive_exit.py`: `evaluate_adaptive_exit()` — fixed priority order
+  (max holding time → thesis invalidated → regime reversed → early take
+  profit → profit-giveback protection → breakeven advancement → HOLD),
+  directive's exact default parameters, `resolve_new_stop_price()`
+  enforcing "never move a protective stop backward." Found and fixed a
+  real float-precision bug during testing: `peak_r - current_r` at exact
+  threshold boundaries (e.g. `0.85 - 0.65`) evaluates to
+  `0.19999999999999996` in binary floating point, not `0.20` — the
+  giveback comparison needed the same epsilon-tolerance pattern already
+  used in `risk/governor.py`'s volume-step rounding. 23 tests.
+- `re_entry.py`: `evaluate_reentry()` — cooldown first, then same-
+  direction (elevated confidence bar, `max(same_direction_threshold,
+  original + min_improvement)`) vs. different-direction (treated as a
+  genuinely new setup, only the normal bar applies). Wired into
+  `core/final_permission.py` via the new `reentry_check` field. 10 tests.
+- `expectancy.py` (continuous position expectancy re-evaluation,
+  directive section 17) is explicitly scoped OUT this session — tracked
+  as BUG_BACKLOG.md item 6. `evaluate_adaptive_exit()`'s
+  `thesis_valid`/`regime_reversed` inputs are accepted as pre-computed
+  evidence; nothing yet computes that evidence from live state.
+
+Full suite: 723 passed, 0 failed, 0 skipped (up from 616).

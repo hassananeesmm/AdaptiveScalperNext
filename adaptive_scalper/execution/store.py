@@ -1,9 +1,19 @@
-"""Idempotent order persistence (directive section 29).
+"""Idempotent order persistence (directive section 29, execution-safety
+review finding #6).
 
 `create_order()` is idempotent on `client_request_id`: calling it twice
-with the same id returns the SAME row (never a second order), which is
-what makes a retried submission — e.g. after a network timeout where the
-caller doesn't know if the first attempt reached the broker — safe.
+with the same id and the SAME immutable request fields returns the SAME
+row (never a second order), which is what makes a retried submission —
+e.g. after a network timeout where the caller doesn't know if the first
+attempt reached the broker — safe.
+
+Per finding #6: a retry that repeats `client_request_id` but disagrees on
+any IMMUTABLE field (canonical symbol, broker symbol, direction, volume,
+SL, TP, or chain_key) is NOT treated as a safe retry — silently returning
+the old row unchanged in that case would hide a real caller bug (e.g. a
+stale/corrupted proposal reusing an old id). It raises
+`IdempotencyConflictError` instead, and no second order is ever created.
+
 `transition_order_state()` is the ONLY way this module changes an
 order's state, and it always goes through
 `execution.state_machine.apply_transition()` first, so an illegal jump
@@ -18,6 +28,13 @@ import time
 from dataclasses import dataclass
 
 from adaptive_scalper.execution.state_machine import OrderState, apply_transition
+
+
+class IdempotencyConflictError(ValueError):
+    """Raised by `create_order()` when `client_request_id` already exists
+    but with DIFFERENT immutable request fields than this call supplied.
+    Must never be caught and routed around into a resend — it means the
+    caller's own understanding of what it already submitted is wrong."""
 
 
 @dataclass(frozen=True)
@@ -70,12 +87,33 @@ def create_order(
     take_profit: float | None = None,
     now_utc: int | None = None,
 ) -> OrderRecord:
-    """Idempotent: if `client_request_id` already has a row, returns it
-    UNCHANGED rather than creating a duplicate or mutating it — a caller
-    that doesn't know whether its previous attempt succeeded can always
-    safely call this again with the same id."""
+    """Idempotent for a genuine retry: if `client_request_id` already has
+    a row with the SAME immutable fields, returns it UNCHANGED rather than
+    creating a duplicate or mutating it — a caller that doesn't know
+    whether its previous attempt succeeded can always safely call this
+    again with the same id and the same request.
+
+    Raises `IdempotencyConflictError` (finding #6) if `client_request_id`
+    already has a row but any immutable field DIFFERS — that is never a
+    safe retry, and no second order is created in this case either."""
     existing = get_order_by_client_request_id(conn, client_request_id)
     if existing is not None:
+        immutable_fields = {
+            "chain_key": (existing.chain_key, chain_key),
+            "canonical_symbol": (existing.canonical_symbol, canonical_symbol),
+            "broker_symbol": (existing.broker_symbol, broker_symbol),
+            "direction": (existing.direction, direction),
+            "requested_volume": (existing.requested_volume, requested_volume),
+            "stop_loss": (existing.stop_loss, stop_loss),
+            "take_profit": (existing.take_profit, take_profit),
+        }
+        mismatches = {k: v for k, v in immutable_fields.items() if v[0] != v[1]}
+        if mismatches:
+            raise IdempotencyConflictError(
+                f"client_request_id={client_request_id!r} already exists (order id={existing.id}) with "
+                f"DIFFERENT immutable fields: {mismatches} — this is not a safe retry; refusing to send, "
+                f"no second order created"
+            )
         return existing
 
     now = now_utc if now_utc is not None else int(time.time())
