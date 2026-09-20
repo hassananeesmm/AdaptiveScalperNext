@@ -85,6 +85,19 @@ delete) once fixed, with the fixing commit/date noted.
    live tick-bootstrap run ever reports suspiciously low counts vs. known
    volume.
 
+8. [SEVERITY: MEDIUM, SUBSYSTEM: position_management] `position_management
+   /manager.py`'s `review_position_once()` triggers a real reconciliation
+   pass on `FULL_CLOSE` (via `close_position_safely(conn=...,
+   reconciliation_chain_key=...)`), which can repair `positions`/`deals`
+   local state from the authoritative closing deal — but it never calls
+   `state_store.record_exit_fill()`, so `position_management_state`'s
+   `fill_r`/`giveback_fill`/`realized_slippage`/`broker_response_at_utc`
+   fields stay unset even after a successful close. Needs a follow-up
+   (either inside `review_position_once()` after a `SENT`/reconciliation-
+   confirmed close, or a separate reconciliation-driven job) that computes
+   `fill_r` from the real closing deal's price and calls
+   `record_exit_fill()`.
+
 ## Fixed
 
 - ~~[SEVERITY: HIGH, SUBSYSTEM: execution/core/position_management]

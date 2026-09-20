@@ -104,6 +104,8 @@ def _symbol_spec(raw) -> SymbolSpec:
         visible=bool(raw.visible),
         trade_mode=SymbolTradeMode(raw.trade_mode),
         filling_mode=raw.filling_mode,
+        trade_stops_level=raw.trade_stops_level,
+        trade_freeze_level=raw.trade_freeze_level,
     )
 
 

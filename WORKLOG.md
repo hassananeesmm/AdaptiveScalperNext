@@ -1322,4 +1322,56 @@ the round-2 review:
    own established contracts (neither is authoritative). 12 tests.
 
 Full suite: 880 passed, 0 failed, 0 skipped (up from 837). All 8 round-2
-execution-safety findings are now fixed.
+execution-safety findings are now fixed. Committed as `4109c37` and
+pushed to `origin/main`.
+
+## Session: position persistence, protective stop service, position manager loop
+
+Continued from `4109c37` per the mission's next-step list ("Build
+continuous position expectancy/persistence" / "PROTECTIVE STOP
+EXECUTION" sections):
+
+- Added `trade_stops_level`/`trade_freeze_level` to `SymbolSpec`
+  (defaults 0, permissive for existing tests), populated by
+  `Mt5Gateway._symbol_spec()`. **TESTED (live)**: real DEMO terminal
+  reports `trade_stops_level=0`/`trade_freeze_level=0` for all three
+  canonical symbols on this IC Markets account — no broker-side minimum-
+  distance restriction here; the enforcement code path is still
+  exercised by tests using a non-zero value.
+- New `position_management/state_store.py` (migration
+  `0012_position_management.sql`, schema now 12): durable
+  `position_management_state`. `initial_monetary_risk`/`entry_regime`
+  written once, never updated (directive section 21). `peak_r`
+  monotonic and persisted — verified to survive a fresh `sqlite3.Connection`
+  (the process-restart-equivalent test). Full exit-timeline tracking
+  (`decision_r`/`fill_r`/giveback-at-decision/giveback-at-fill/expected-
+  vs-realized slippage). 11 tests.
+- New `execution/stop_modification.py`: the safe protective-stop service.
+  Same two-round fresh-check pattern as `execution/close.py`. Reuses
+  `adaptive_exit.resolve_new_stop_price()` (no duplicated monotonic-
+  guarantee logic) — a stop that wouldn't advance protection sends
+  nothing (`NO_CHANGE`). Refuses a too-close-to-price stop using the new
+  `trade_stops_level` field. 15 tests, including a broker-already-
+  advanced-between-check-and-send race.
+- New `position_management/manager.py`: `review_position_once()` — the
+  real per-position review cycle wiring `expectancy.py` → `adaptive_exit
+  .py` → `state_store.py` → (`stop_modification.py` or `close.py`)
+  together, exercised end to end against a real `FakeGateway` + real
+  SQLite DB (not just isolated pure-function tests). Converts an
+  adaptive-exit `new_stop_r` back to a real price via `entry_price +/-
+  r * initial_stop_distance_price` (never re-derives risk distance from
+  a moved stop). 10 end-to-end tests: HOLD, breakeven stop-advance (BUY
+  and SELL), every FULL_CLOSE trigger (early-TP, thesis-invalidated,
+  regime-reversed, max-holding-time), peak-R persisting across
+  successive review calls, and the R-quarantine HOLD path. One test
+  incidentally proved `review_position_once()`'s triggered reconciliation
+  pass genuinely runs (traced through `FakeGateway`'s synthetic
+  zero-timestamp closing deal falling outside the reconciliation window —
+  a simulator artifact, not a code gap; documented precisely rather than
+  asserted vaguely).
+- Found and logged BUG_BACKLOG.md item 8: `review_position_once()`
+  never calls `state_store.record_exit_fill()` after a close, so the
+  exit-timeline's fill-side fields stay unset even on a successful
+  close — needs a reconciliation-driven follow-up.
+
+Full suite: 916 passed, 0 failed, 0 skipped (up from 880).

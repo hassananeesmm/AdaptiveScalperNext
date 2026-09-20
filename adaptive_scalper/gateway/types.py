@@ -107,6 +107,17 @@ class SymbolSpec:
     # for tests that don't care about this dimension; Mt5Gateway always
     # sets the broker's true value. See gateway/broker_constraints.py.
     filling_mode: int = 3
+    # MT5's trade_stops_level/trade_freeze_level (both in POINTS, not
+    # price) -- the broker's minimum distance a SL/TP may sit from the
+    # current price, and the distance inside which an existing order/
+    # position may not be modified at all. Defaults of 0 are a permissive
+    # stand-in for tests that don't care about this dimension; Mt5Gateway
+    # always sets the broker's true value. Used by
+    # execution/stop_modification.py to refuse a stop that would be
+    # rejected by the broker rather than discovering that only via a
+    # failed order_check/order_send.
+    trade_stops_level: int = 0
+    trade_freeze_level: int = 0
 
 
 @dataclass(frozen=True)

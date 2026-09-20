@@ -1163,6 +1163,56 @@ fixed, completing all 8:
 Full suite: 880 passed, 0 failed, 0 skipped (up from 837). All 8
 round-2 execution-safety findings are now fixed.
 
+## Position management runtime pieces (this checkpoint)
+
+Building on the round-2 fixes, three more pieces from the mission's
+"COMPLETE POSITION PERSISTENCE" / "PROTECTIVE STOP EXECUTION" sections
+are now implemented and tested:
+
+- **`position_management/state_store.py`** (migration `0012_position_
+  management`, schema now 12): durable `position_management_state` per
+  position. `initial_monetary_risk`/`entry_regime` are written ONCE at
+  `get_or_create_state()` and never updated afterward (directive section
+  21: moving a stop never redefines R). `peak_r` is monotonic and
+  persisted — `record_review()` only ever raises it, verified to survive
+  a fresh connection (process-restart equivalent). `record_exit_decision
+  ()`/`record_exit_request()`/`record_exit_fill()` track the full exit
+  timeline (threshold-cross/decision/request/broker-response timestamps,
+  decision_r/fill_r, giveback at decision vs. at fill, expected vs.
+  realized slippage). 11 tests.
+- **`execution/stop_modification.py`**: the safe protective-stop
+  modification service directive's "PROTECTIVE STOP EXECUTION" section
+  asks for. Same two-round fresh-check pattern as `execution/close.py`
+  (fresh DEMO verification + fresh position state, before `order_check`
+  and again before `order_send`). Reuses `adaptive_exit
+  .resolve_new_stop_price()` for the monotonic guarantee — a proposed
+  stop that wouldn't improve protection sends nothing (`NO_CHANGE`).
+  Refuses a stop closer to price than the broker's `trade_stops_level`
+  (new `SymbolSpec` fields, populated by `Mt5Gateway`, live-verified:
+  this account's IC Markets DEMO reports `trade_stops_level=0` /
+  `trade_freeze_level=0` for all three canonical symbols, i.e. no
+  broker-side minimum-distance restriction on this account — the code
+  path is exercised by tests with a non-zero value regardless). 15 tests.
+- **`position_management/manager.py`**: `review_position_once()` — the
+  actual per-position review cycle, wiring `expectancy.py` →
+  `adaptive_exit.py` → `state_store.py` → (`stop_modification.py` or
+  `close.py`) together end to end against a real `FakeGateway` and real
+  SQLite DB. 10 end-to-end tests covering HOLD, breakeven stop-advance
+  (both BUY and SELL), early-take-profit/thesis-invalidation/regime-
+  reversal/max-holding-time full closes, peak-R persistence across
+  calls, and the R-quarantine (invalid initial risk) HOLD path.
+
+NOT yet done (BUG_BACKLOG.md item 8): `review_position_once()` triggers
+real reconciliation on a close but never calls `state_store
+.record_exit_fill()` — the exit-timeline's fill_r/giveback_fill/
+realized_slippage fields stay unset even after a successful close.
+Also not yet done: the caller loop that actually INVOKES
+`review_position_once()` per open position on a real cadence (0.5-1s
+directive) — this module is the per-position decision core, not the
+scheduler; that's part of the still-pending full-runtime-wiring task.
+
+Full suite: 916 passed, 0 failed, 0 skipped (up from 880).
+
 ## Execution-safety review round 1 fixes (prior checkpoint)
 
 An external review of the Phase 4 execution-layer building blocks found
@@ -1325,10 +1375,10 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-11 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+12 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
-`0011_learning`).
+`0011_learning`, `0012_position_management`).
 
 ## Local RAG (advisory-only)
 
@@ -1418,13 +1468,16 @@ has no code path that produces a real trained artifact yet. 51 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 880 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
+entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended
 `test_execution_service.py`, `test_execution_close.py`,
 `test_execution_state_machine.py`, `test_execution_reconciliation.py`,
 `test_execution_unknown.py`, `test_portfolio_exposure.py`,
-`test_final_permission.py`; up from 799) (up from 616 at the start of this
+`test_final_permission.py`; the position-management runtime pieces then
+added `test_position_management_state_store.py`,
+`test_execution_stop_modification.py`, and
+`test_position_management_manager.py`; up from 799) (up from 616 at the start of this
 checkpoint — the execution-safety review fixes and position-management
 work added `test_position_resolution.py`, `test_execution_close.py`,
 `test_broker_constraints.py`, `test_execution_service.py`,
