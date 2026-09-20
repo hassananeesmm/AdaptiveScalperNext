@@ -913,6 +913,40 @@ correct `broker_position_id` — proving the resolution logic works
 against the real shape of broker history data, not just synthetic
 fixtures.
 
+### `adaptive_scalper/selector/` — strategy selector (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
+
+Combines the six strategies' candidate signals into one proposal, or
+FLAT. Deliberately NOT "pick the highest raw confidence": `select_proposal()`
+ranks qualifying candidates by cost-adjusted expected net edge
+(`costs.edge.expected_gross_edge_price()` minus the symbol's
+`CostEstimate.total_cost`) — a lower-confidence signal with a
+substantially better risk/reward ratio can have a higher expected net
+edge than a higher-confidence signal with a poor one, and a live test
+below exercises exactly that case. `cost_estimates` is keyed per
+`canonical_symbol` (candidates may span more than one of the three
+symbols in a cycle, and cost genuinely differs by symbol). Retired
+strategy keys are rejected independently (defense-in-depth, even though
+`strategies.registry.StrategyRegistry` already can't produce one).
+`select_and_journal_proposal()` journals every candidate's outcome —
+`SIGNAL_REJECTED` (filtered out), `PROPOSAL_REJECTED` (qualified but not
+the highest-edge candidate), or `PROPOSAL_CREATED` (the winner) — each
+to its own chain, since every candidate is its own decision lineage.
+Does NOT size money, clear the kill switch, override news/permission, or
+submit orders — strictly out of scope.
+
+`tests/test_selector.py` (13 tests): FLAT with no candidates, the
+higher-net-edge-over-higher-confidence case (hand-checked EV numbers),
+retired-key/low-confidence/unknown-cost/insufficient-edge rejection,
+per-symbol cost lookup independence, and all three journaling outcomes.
+
+**TESTED (live)**: walked real XAUUSD M5 bars looking for cycles where
+2+ strategies fired simultaneously — found several real cases, including
+one where the selector correctly returned FLAT because neither of two
+real qualifying-looking candidates actually cleared the cost/edge bar
+(a genuine, correct "zero trades" outcome, not a bug), and others where
+it correctly picked the higher-edge real candidate between two
+overlapping real signals.
+
 ## Live MT5 environment (this machine only, not guaranteed present)
 
 This development machine has a real MT5 terminal (IC Markets Global,
@@ -1019,7 +1053,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 573 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
+entry: 586 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
 `test_symbol_resolver.py`, `test_symbol_validation.py`,
@@ -1032,7 +1066,8 @@ entry: 573 passed, 0 failed, 0 skipped, across `tests/test_environment.py`,
 `test_portfolio_correlation.py`, `test_portfolio_exposure.py`,
 `test_risk_governor.py`, `test_final_permission.py`,
 `test_execution_state_machine.py`, `test_execution_store.py`,
-`test_execution_unknown.py`, `test_execution_reconciliation.py`, and
+`test_execution_unknown.py`, `test_execution_reconciliation.py`,
+`test_selector.py`, and
 `test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
 currently connected on this machine).
 

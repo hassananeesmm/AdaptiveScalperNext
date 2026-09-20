@@ -940,3 +940,22 @@ Chronological, factual record of initialization events. Append only.
   with the correct `broker_position_id` — the resolution logic works
   against the real shape of broker history data, not just synthetic
   fixtures.
+- Committed as `6876b73` and pushed to `origin/main`.
+- Built `adaptive_scalper/selector/` — the strategy selector, combining
+  the six strategies' candidate signals into one proposal or FLAT,
+  ranked by COST-ADJUSTED expected net edge rather than raw confidence
+  (the directive's explicit "do not simply choose the highest raw
+  confidence"). `cost_estimates` keyed per canonical_symbol, since
+  candidates may span more than one symbol in a cycle and cost genuinely
+  differs. Retired keys rejected independently (defense-in-depth).
+  `select_and_journal_proposal()` journals every candidate's outcome
+  (`SIGNAL_REJECTED`/`PROPOSAL_REJECTED`/`PROPOSAL_CREATED`) to its own
+  chain. 13 new tests, including a constructed higher-confidence-but-
+  worse-net-edge-loses case with hand-checked EV numbers.
+  Full suite: 586 passed, 0 failed, 0 skipped.
+- **TESTED (live)**: walked real XAUUSD M5 bars looking for cycles where
+  2+ strategies fired simultaneously — found several real cases,
+  including one genuine FLAT result (neither real candidate actually
+  cleared the cost/edge bar despite both looking plausible at a glance)
+  and others where the selector correctly picked the real higher-edge
+  candidate between two real overlapping signals.
