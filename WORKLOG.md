@@ -1118,4 +1118,38 @@ Then built `position_management/adaptive_exit.py` and `re_entry.py`
   `thesis_valid`/`regime_reversed` inputs are accepted as pre-computed
   evidence; nothing yet computes that evidence from live state.
 
-Full suite: 723 passed, 0 failed, 0 skipped (up from 616).
+Full suite: 723 passed, 0 failed, 0 skipped (up from 616). Committed as
+`60aa7d0` and pushed to `origin/main`.
+
+Then built local RAG (`adaptive_scalper/rag/`, directive: bounded
+advisory memory):
+
+- Migration `0010_rag.sql`: `rag_memories` table (8 memory types:
+  `TRADE_SETUP`/`TRADE_RESULT`/`REJECTION`/`EXIT_DECISION`/
+  `REENTRY_DECISION`/`EXECUTION_INCIDENT`/`STRATEGY_CONTEXT`/
+  `SYSTEM_EVENT`). Schema version now 10.
+- Installed `scikit-learn` (+ `scipy`/`joblib`/`threadpoolctl`/
+  `cloudpickle`/`narwhals` transitive deps) and pinned exact versions in
+  `requirements.txt`, per the project's own "add a dependency only when
+  its module actually lands" convention — RAG is the first real
+  consumer.
+- `rag/store.py`: plain-insert-only persistence, no update/delete API.
+- `rag/index.py`: `RagIndex` — a derived, REBUILDABLE, in-memory
+  TF-IDF/cosine-similarity index; no on-disk index file, so it can never
+  drift from the DB; `rebuild()` re-fits from scratch on demand.
+- `rag/service.py`: `RagService` — the intended public entry point.
+  Every failure mode degrades to `DEGRADED` (never an unhandled
+  exception reaching a real caller). Structurally advisory-only:
+  `record()`/`query_similar()` accept no `Gateway`/risk/kill-switch/
+  permission-authority parameter at all — verified by a signature-
+  inspection test (same pattern as `calculate_safe_volume()`'s
+  martingale-impossibility guarantee) and an AST-level import check
+  proving none of the three RAG modules import `gateway`/
+  `core.kill_switch`/`risk`.
+- 33 tests: `test_rag_store.py`, `test_rag_index.py`, `test_rag_service.py`.
+- NOT yet wired into the real pipeline: nothing calls `RagService
+  .record()` from the journal/selector/position-manager yet, and no CLI
+  `rag *` commands exist — both are part of the still-pending
+  runtime-wiring and CLI-completion tasks.
+
+Full suite: 748 passed, 0 failed, 0 skipped.

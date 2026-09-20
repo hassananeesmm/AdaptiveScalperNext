@@ -1166,6 +1166,9 @@ FULL_CLOSE and the re-entry cooldown/hysteresis. `re_entry.py`'s output
 is wired into `core/final_permission.py`'s `BLOCK_REENTRY_CHURN` via the
 `reentry_check` field.
 
+Local RAG (`adaptive_scalper/rag/`, advisory-only) is also now
+implemented — see the "Local RAG" section below.
+
 NOT yet done: a `position_management/expectancy.py` continuous-position-
 expectancy re-evaluator (directive section 17's "would I still open this
 now?" question) is a named gap — `evaluate_adaptive_exit()`'s
@@ -1175,10 +1178,10 @@ state. Also not yet done: actually WIRING the full pipeline into one
 real end-to-end runtime loop (market data → features → regime →
 strategies → selector → risk sizing → `execution.service
 .submit_new_entry` → position manager → adaptive exit → re-entry →
-result), RAG, ML/self-learning, backtest/walk-forward/OOS, the complete
-dashboard, and the complete CLI/launchers — all before any real
-controlled-DEMO test can run. A live tick-bootstrap run (currently only
-fake-tested + individual live gateway-call verification) remains a
+result → RAG ingestion), ML/self-learning, backtest/walk-forward/OOS,
+the complete dashboard, and the complete CLI/launchers — all before any
+real controlled-DEMO test can run. A live tick-bootstrap run (currently
+only fake-tested + individual live gateway-call verification) remains a
 smaller open item from Phase 2.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
@@ -1197,9 +1200,51 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-9 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+10 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
-`0007_news`, `0008_costs`, `0009_execution`).
+`0007_news`, `0008_costs`, `0009_execution`, `0010_rag`).
+
+## Local RAG (advisory-only)
+
+`adaptive_scalper/rag/` — SQLite-authoritative (`rag_memories` table,
+migration `0010_rag`), CPU-friendly TF-IDF retrieval
+(`scikit-learn`'s `TfidfVectorizer`/cosine similarity — added to
+`requirements.txt` this checkpoint since the RAG module is the first
+real consumer, per the project's own "add when the module lands"
+convention). `rag/index.py`'s `RagIndex` is a derived, REBUILDABLE,
+in-memory artifact — never itself authoritative, no separate on-disk
+index file to go stale; `rebuild()` re-fits from the current DB state on
+demand. `rag/service.py`'s `RagService` is the intended public entry
+point (`record()`/`rebuild_index()`/`query_similar()`/`status()`);
+nothing outside `adaptive_scalper/rag/` should import `rag.store`/
+`rag.index` directly.
+
+8 memory types: `TRADE_SETUP`, `TRADE_RESULT`, `REJECTION`,
+`EXIT_DECISION`, `REENTRY_DECISION`, `EXECUTION_INCIDENT`,
+`STRATEGY_CONTEXT`, `SYSTEM_EVENT`.
+
+Structurally advisory-only, not just by convention: `RagService.record()`
+and `RagService.query_similar()`'s signatures accept no `Gateway`, risk
+limits, kill-switch state, or permission authority — there is no
+parameter through which RAG could execute, raise risk, clear the kill
+switch, change the symbol universe, reactivate a retired strategy, or
+bypass final permission. Verified by
+`tests/test_rag_service.py::test_record_method_takes_no_execution_capable_parameters`
+(signature inspection, same pattern as `calculate_safe_volume()`'s
+martingale-impossibility test) and
+`test_rag_service_has_no_order_send_or_gateway_import` (AST-level import
+check — none of `rag/service.py`/`rag/index.py`/`rag/store.py` may
+import `gateway`/`core.kill_switch`/`risk`). Every RAG failure mode
+degrades to `DEGRADED` (empty results), never an unhandled exception
+that could take down a real caller — RAG was never entitled to be
+treated as load-bearing.
+
+NOT yet integrated into the real pipeline: nothing yet CALLS
+`RagService.record()` from the journal/selector/position-manager to
+actually populate memories from real decisions, and no CLI `rag *`
+commands exist yet (both are part of the still-pending runtime-wiring
+and CLI-completion tasks). 33 tests
+(`test_rag_store.py`/`test_rag_index.py`/`test_rag_service.py`).
 
 ## Model state
 
@@ -1209,7 +1254,7 @@ None yet — no ML models implemented (Stage 0, directive §61).
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. As of this
-entry: 723 passed, 0 failed, 0 skipped (up from 616 at the last
+entry: 748 passed, 0 failed, 0 skipped (up from 616 at the start of this
 checkpoint — the execution-safety review fixes and position-management
 work added `test_position_resolution.py`, `test_execution_close.py`,
 `test_broker_constraints.py`, `test_execution_service.py`,
@@ -1217,7 +1262,9 @@ work added `test_position_resolution.py`, `test_execution_close.py`,
 `test_re_entry.py`, plus substantial additions to
 `test_gateway_execution.py`, `test_execution_unknown.py`,
 `test_execution_reconciliation.py`, `test_execution_store.py`,
-`test_mt5_request_builder.py`, and `test_final_permission.py`), across
+`test_mt5_request_builder.py`, and `test_final_permission.py`; the local
+RAG subsystem then added `test_rag_store.py`, `test_rag_index.py`, and
+`test_rag_service.py`), across
 `tests/test_environment.py`,
 `test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
 `test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
