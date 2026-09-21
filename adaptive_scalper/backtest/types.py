@@ -58,6 +58,16 @@ class SimulatedTrade:
     realized_r: float | None = None
     realized_pnl: float | None = None
     total_cost: float = 0.0
+    # The CAUSAL feature vector the strategy actually used to decide this
+    # entry (directive section 64: entry model training input) -- captured
+    # from the SAME bar-close features `select_proposal()` was fed, never
+    # recomputed after the fact from later data. `None` when the caller
+    # didn't request feature capture (e.g. a lightweight run); a `None`
+    # value for one of the vector's fields means that field itself was
+    # unprovable at that point (insufficient lookback, etc.) -- honest
+    # N/A, never a fabricated number.
+    entry_features: dict[str, float | None] | None = None
+    entry_raw_confidence: float | None = None
 
     @property
     def is_closed(self) -> bool:

@@ -1589,14 +1589,64 @@ and CLI-completion tasks). 33 tests
   no `eval`/`exec`/`compile`/`__import__` anywhere in `learning/`, no
   import of `gateway`/`core.kill_switch`/`execution`, and
   `learning.registry`'s functions carry no risk-sizing-shaped parameter.
+- `learning/dataset.py`: `build_training_rows()` — assembles
+  `TrainingRow`s from REAL `backtest.types.SimulatedTrade`s (never
+  synthetic labels). `features/bar_features.py` gained
+  `numeric_feature_vector()`/`NUMERIC_FEATURE_FIELDS` (the stationary,
+  cross-time-comparable numeric subset of `FeatureSnapshot`), and
+  `backtest/engine.py`'s `run_backtest()` now CAPTURES that exact
+  causal snapshot at the moment of entry into `SimulatedTrade
+  .entry_features`/`.entry_raw_confidence` — the feature vector a model
+  trains on is the exact same one the strategy actually used to decide
+  the entry, never recomputed after the fact. A trade with no captured
+  features, or with ANY `None` feature value (insufficient lookback,
+  degenerate spread history, etc.), is EXCLUDED from the dataset rather
+  than imputed — `build_training_rows()` returns the excluded count
+  alongside the rows.
+- `learning/training.py`: `train_entry_outcome_model()` — fits a
+  `sklearn.linear_model.LogisticRegression` (directive section 64's
+  suggested CPU-friendly, auditable model family) to predict "probability
+  of a positive net outcome after costs" (directive section 64). Uses a
+  strictly TEMPORAL split (rows sorted by `entry_time_utc`; the latest
+  `validation_fraction` fraction validates, never a random/shuffled
+  split) with an optional `embargo_rows` purge gap — directive section
+  65's "temporal/purged split". Refuses to train below
+  `DEFAULT_MIN_TRAINING_SAMPLES=200` real closed trades (directive
+  section 62: "do not hard-code an unrealistically tiny 'learning
+  complete' sample") or when a split contains only one outcome class.
+  Reports validation accuracy/AUC/Brier-score (calibration) honestly —
+  proven on a deterministic separable synthetic task to actually learn
+  real structure (validation accuracy/AUC > 0.9), not just "doesn't
+  crash". `save_model_artifact()`/`load_model_artifact()` — joblib
+  serialize/deserialize with a SHA-256 checksum verified BEFORE
+  deserializing (the artifact is always this same codebase's own
+  training output, never an externally-supplied file).
+  `register_entry_model()`/`train_and_register_entry_model_from_trades()`
+  register a NEW model version at `INSUFFICIENT_DATA` (not enough
+  samples/single-class) or `BASELINE` (**never** `CURRENT` — see next
+  paragraph) via `learning.registry.register_model()`.
 
-NOT yet implemented: actual model TRAINING (a real CPU-friendly
-classifier/regressor fit on causal features) — that requires the
-backtest/walk-forward subsystem's temporal-split/purged-CV machinery to
-exist first (directive's own dependency order), so `learning/` currently
-has no code path that produces a real trained artifact yet. 51 tests
+**STAGE 1 MODEL OBSERVER ONLY** (directive section 61): training a model
+and registering it at `BASELINE` grants it ZERO execution/selector
+influence — nothing in `strategies/`, `selector/`, or
+`position_management/expectancy.py` consults `learning/` yet, and this
+checkpoint does not wire that. Promoting a model to `CURRENT` requires an
+independent, later `learning.promotion.evaluate_promotion_gate()` pass
+over a formal challenger validation (STAGE 3) — training success alone is
+never sufficient, and nothing here attempts it.
+
+NOT yet done: STAGE 2 (bounded selector influence for a validated
+`CURRENT`/promoted model) and STAGE 3 (formal challenger validation
+feeding `evaluate_promotion_gate()`) — both require running this training
+pipeline against REAL historical bars (not just synthetic test data) via
+`history/store.get_bars()` and `backtest/walk_forward.py`, and a
+scheduled/CLI-triggered retraining job, none of which exist yet; also
+drift MONITORING (comparing a `CURRENT` model's live predictions against
+realized outcomes to actually detect the degradation `learning/drift.py`
+responds to) is not wired to anything live. 71 tests
 (`test_learning_lifecycle.py`, `test_learning_registry.py`,
 `test_learning_promotion.py`, `test_learning_drift.py`,
+`test_learning_dataset.py`, `test_learning_training.py`,
 `test_learning_structural_safety.py`).
 
 ## Tests

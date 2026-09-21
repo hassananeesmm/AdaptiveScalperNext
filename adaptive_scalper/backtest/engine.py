@@ -47,7 +47,7 @@ from adaptive_scalper.backtest.dataset import build_dataset_snapshot
 from adaptive_scalper.backtest.types import BacktestConfig, BacktestMetrics, BacktestResult, SimulatedTrade
 from adaptive_scalper.costs.edge import BLOCK_COST as _COST_BLOCK
 from adaptive_scalper.costs.model import estimate_cost
-from adaptive_scalper.features.bar_features import compute_bar_features
+from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
 from adaptive_scalper.position_management.adaptive_exit import (
     FULL_CLOSE,
@@ -78,6 +78,7 @@ class _OpenTrade:
     __slots__ = (
         "strategy_key", "direction", "entry_time_utc", "entry_price", "volume", "initial_monetary_risk",
         "entry_regime", "stop_price", "target_price", "initial_stop_distance_price", "total_cost",
+        "entry_features", "entry_raw_confidence",
     )
 
     def __init__(self, **kwargs) -> None:
@@ -132,6 +133,7 @@ def run_backtest(
 
     open_trade: _OpenTrade | None = None
     pending_entry: StrategySignal | None = None
+    pending_entry_features: dict[str, float | None] | None = None
     trades: list[SimulatedTrade] = []
     equity_curve: list[tuple[int, float]] = []
 
@@ -144,7 +146,9 @@ def run_backtest(
         # THIS bar's open -- the earliest causal fill.
         if pending_entry is not None and open_trade is None:
             signal = pending_entry
+            signal_features = pending_entry_features
             pending_entry = None
+            pending_entry_features = None
             fill = simulate_fill(bar, signal.direction, symbol_spec.point, config.fill_assumptions)
             safe_volume = calculate_safe_volume(
                 equity=equity, risk_per_trade_pct=config.risk_per_trade_pct,
@@ -163,6 +167,7 @@ def run_backtest(
                         entry_cost_price, safe_volume.volume,
                         tick_size=symbol_spec.trade_tick_size, tick_value=symbol_spec.trade_tick_value,
                     ),
+                    entry_features=signal_features, entry_raw_confidence=signal.raw_confidence,
                 )
             continue  # this bar was "spent" on the entry decision
 
@@ -247,6 +252,7 @@ def run_backtest(
                 )
                 if selection.selected is not None:
                     pending_entry = selection.selected
+                    pending_entry_features = numeric_feature_vector(features)
 
     # Force-close any still-open trade at the final bar's close so
     # metrics are never computed over an artificially-truncated position.
@@ -323,6 +329,7 @@ def _close_trade(
         entry_price=trade.entry_price, volume=trade.volume, initial_monetary_risk=trade.initial_monetary_risk,
         entry_regime=trade.entry_regime, exit_time_utc=exit_time_utc, exit_price=exit_price, exit_reason=exit_reason,
         exit_regime=exit_regime, realized_r=realized_r, realized_pnl=net_pnl, total_cost=trade.total_cost,
+        entry_features=trade.entry_features, entry_raw_confidence=trade.entry_raw_confidence,
     )
 
 

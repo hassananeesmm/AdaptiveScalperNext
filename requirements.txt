@@ -11,7 +11,7 @@ uvicorn==0.53.0
 httpx==0.28.1
 MetaTrader5==5.0.6180  # Windows-only; import is confined to adaptive_scalper/gateway/mt5_gateway.py
 numpy==2.5.3
-scikit-learn==1.9.1  # local RAG (TF-IDF retrieval, adaptive_scalper/rag/) and future ML models — CPU-only
+scikit-learn==1.9.1  # local RAG (TF-IDF retrieval, adaptive_scalper/rag/) and learning/training.py's LogisticRegression entry model — CPU-only
 scipy==1.18.1
 joblib==1.6.0
 threadpoolctl==3.7.0

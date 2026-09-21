@@ -167,6 +167,20 @@ def test_run_backtest_downtrend_produces_only_sell_entries():
         assert trade.direction == "SELL"
 
 
+def test_run_backtest_captures_entry_features_for_ml_training():
+    bars = _trending_bars(200)
+    result = run_backtest(bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000)
+    assert len(result.trades) >= 1
+    for trade in result.trades:
+        assert trade.entry_features is not None
+        assert trade.entry_raw_confidence is not None
+        assert 0.0 <= trade.entry_raw_confidence <= 1.0
+        # A clean trend should yield a real (non-None) efficiency_ratio --
+        # proves the captured vector is the REAL features snapshot, not
+        # an empty/placeholder dict.
+        assert trade.entry_features["efficiency_ratio"] is not None
+
+
 def test_run_backtest_never_lets_a_trade_close_before_it_opens():
     bars = _trending_bars(200)
     result = run_backtest(bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000)

@@ -1664,3 +1664,78 @@ removed now that it exists.
 Full suite: 1062 passed, 0 failed, 0 skipped (up from 1024). No secrets,
 credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
 for commit (verified via `git status`/`git diff` before committing).
+
+## Session: real ML observer training (directive sections 60-66)
+
+Continued automatically per the mission's "do not stop" instruction into
+the next pending task: implementing real ML training (previously
+`learning/` had only the lifecycle/registry/promotion/drift machinery —
+no code path produced a real trained artifact).
+
+Wired causal feature capture into the backtest engine first, since real
+training needs the EXACT feature vector a strategy used to decide an
+entry, never a recomputation after the fact: `features/bar_features.py`
+gained `NUMERIC_FEATURE_FIELDS`/`numeric_feature_vector()` (the
+stationary, cross-time-comparable numeric subset of `FeatureSnapshot` --
+deliberately excludes absolute price levels and the categorical `session`
+string); `backtest/types.py`'s `SimulatedTrade` gained `entry_features`/
+`entry_raw_confidence`; `backtest/engine.py` now captures the features
+snapshot at the moment a signal is selected (`pending_entry_features`)
+and threads it through `_OpenTrade` into the closed `SimulatedTrade`. New
+`tests/test_backtest_engine.py::test_run_backtest_captures_entry_features_for_ml_training`
+proves a real backtest trade's captured vector has real (non-None) values.
+
+New `learning/dataset.py`: `build_training_rows()` assembles
+`TrainingRow`s from real `SimulatedTrade`s — a trade missing captured
+features, or with ANY `None` feature value, is EXCLUDED (returned
+separately as `excluded_row_count`) rather than imputed.
+
+New `learning/training.py`:
+- `train_entry_outcome_model()` — fits `sklearn.linear_model
+  .LogisticRegression` (directive section 64's suggested CPU-friendly,
+  auditable family) to predict "probability of positive net outcome
+  after costs". Uses a strictly TEMPORAL split (rows sorted by
+  `entry_time_utc`; latest `validation_fraction` validates, never
+  shuffled) with an optional `embargo_rows` purge gap (directive section
+  65's "temporal/purged split"). Refuses below
+  `DEFAULT_MIN_TRAINING_SAMPLES=200` (directive section 62) or when a
+  split has only one outcome class. Reports validation accuracy/AUC/
+  Brier-score (calibration).
+- `save_model_artifact()`/`load_model_artifact()` — joblib serialize/
+  deserialize with a SHA-256 checksum verified BEFORE deserializing
+  (documented why `joblib.load()`'s pickle-based deserialization is safe
+  here: exclusively this codebase's own prior training output, never an
+  externally-supplied file).
+- `register_entry_model()`/`train_and_register_entry_model_from_trades()`
+  — registers a NEW model version via `learning.registry.register_model()`
+  at `INSUFFICIENT_DATA` or `BASELINE`, **never** `CURRENT`. Module
+  docstring states plainly this is STAGE 1 MODEL OBSERVER ONLY (directive
+  section 61): zero execution/selector influence; promotion to `CURRENT`
+  requires a separate, later `evaluate_promotion_gate()` pass this module
+  does not attempt.
+
+Caught and fixed a real cross-platform bug during testing: `model_key`
+naturally contains `:` in this codebase's usual compound-key convention
+(e.g. `entry_model:XAUUSD`), but `:` is a reserved Windows filename
+character — `save_model_artifact()` raised `OSError: [Errno 22] Invalid
+argument` building the artifact path from a raw `model_key`. Fixed with
+`_safe_filename_component()` (replaces the full Windows-reserved
+character set, not just `:`) applied only to the FILENAME, never the
+`model_key` value stored in the registry. Regression test:
+`test_register_entry_model_sanitizes_a_model_key_containing_colons_for_the_filename`.
+
+New `tests/test_learning_dataset.py` (6 tests) and
+`tests/test_learning_training.py` (15 tests, including a deterministic
+separable synthetic task proving the model learns REAL structure --
+validation accuracy/AUC both >0.9, not just "doesn't crash" -- and an
+end-to-end test training against genuine `run_backtest()` output rather
+than hand-built fixtures). `requirements.txt`'s scikit-learn comment
+updated ("future ML models" -> the actual module that now uses it).
+
+PROJECT_STATUS.md's "Model state / ML self-learning (observer stage)"
+section rewritten to describe all of the above and explicitly restate the
+STAGE 1 observer-only boundary.
+
+Full suite: 1083 passed, 0 failed, 0 skipped (up from 1062). No secrets,
+credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
+for commit (verified via `git status`/`git diff` before committing).

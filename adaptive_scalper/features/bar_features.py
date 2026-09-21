@@ -280,3 +280,27 @@ def compute_multi_resolution_features(
         for resolution, bars in bars_by_resolution.items()
         if bars
     }
+
+
+# The stationary, cross-time-comparable numeric fields a CPU-friendly ML
+# model (directive section 64) can actually learn from -- deliberately
+# EXCLUDES absolute price levels (`close`/`recent_high`/`recent_low`,
+# which are not comparable across different price regimes/instruments)
+# and the categorical `session` string (would need its own encoding, not
+# added here to keep this v1 vector purely numeric). `hour_of_day_utc` is
+# included as a plain integer -- a simple, honest session-proxy a model
+# can learn structure from without a categorical encoder.
+NUMERIC_FEATURE_FIELDS: tuple[str, ...] = (
+    "return_1", "log_return_1", "realized_volatility", "atr", "normalized_range", "momentum",
+    "velocity", "acceleration", "efficiency_ratio", "directional_persistence", "range_expansion_ratio",
+    "body_ratio", "upper_wick_ratio", "lower_wick_ratio", "spread_percentile", "movement_to_cost",
+    "hour_of_day_utc",
+)
+
+
+def numeric_feature_vector(snapshot: FeatureSnapshot) -> dict[str, float | None]:
+    """`None` for any field the underlying snapshot couldn't compute
+    (insufficient lookback, missing spread data, etc.) -- never a
+    fabricated 0.0/mean-imputed stand-in. A training-dataset builder must
+    treat a `None` value as a reason to EXCLUDE that row, not to guess."""
+    return {name: getattr(snapshot, name) for name in NUMERIC_FEATURE_FIELDS}
