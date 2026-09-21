@@ -212,3 +212,52 @@ def get_order_state_history(conn: sqlite3.Connection, order_id: int) -> list[tup
         (order_id,),
     ).fetchall()
     return [(r["from_state"], r["to_state"], r["occurred_at_utc"]) for r in rows]
+
+
+def get_local_position_by_broker_id(conn: sqlite3.Connection, broker_position_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM positions WHERE broker_position_id = ?", (str(broker_position_id),)
+    ).fetchone()
+
+
+def create_local_position(
+    conn: sqlite3.Connection,
+    *,
+    broker_position_id: str,
+    canonical_symbol: str,
+    direction: str,
+    volume: float,
+    entry_price: float,
+    initial_monetary_risk: float,
+    strategy_key: str | None,
+    entry_order_id: int | None,
+    opened_at_utc: int,
+) -> int:
+    """Persists the LOCAL record of a position this process just opened
+    (fully or partially) — external review finding #9: a fill (partial or
+    complete) must immediately become accounted local exposure, not just
+    a journaled event with no row `portfolio`/`risk`/reconciliation code
+    can actually query. Idempotent on `broker_position_id` (the table's
+    UNIQUE constraint): a repeat call for the same broker position id
+    (e.g. a retried resolution after a transient failure) returns the
+    EXISTING row's id rather than raising or duplicating — it never
+    updates the existing row's fields, since a real position's own entry
+    price/volume/risk are set once, at open, exactly like
+    `position_management.state_store`'s immutable fields."""
+    existing = get_local_position_by_broker_id(conn, broker_position_id)
+    if existing is not None:
+        return existing["id"]
+    cursor = conn.execute(
+        """
+        INSERT INTO positions
+            (broker_position_id, canonical_symbol, direction, volume, entry_price,
+             initial_monetary_risk, strategy_key, entry_order_id, status, opened_at_utc)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
+        """,
+        (
+            str(broker_position_id), canonical_symbol, direction, volume, entry_price,
+            initial_monetary_risk, strategy_key, entry_order_id, opened_at_utc,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid

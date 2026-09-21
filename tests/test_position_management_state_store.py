@@ -7,12 +7,15 @@ import pytest
 
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.position_management.state_store import (
+    PositionStateConflictError,
     get_or_create_state,
     get_state,
+    has_unresolved_risk_incident,
     record_exit_decision,
     record_exit_fill,
     record_exit_request,
     record_review,
+    record_risk_incident,
 )
 
 
@@ -54,13 +57,49 @@ def test_get_or_create_state_starts_at_zero_peak(db):
     assert state.latest_regime == "TRENDING_UP"
 
 
-def test_get_or_create_state_is_idempotent(db):
+def test_get_or_create_state_is_idempotent_for_the_same_values(db):
     position_id = _insert_position(db)
     first = get_or_create_state(db, position_id, initial_monetary_risk=20.0, entry_regime="TRENDING_UP", now_utc=1000)
-    second = get_or_create_state(db, position_id, initial_monetary_risk=999.0, entry_regime="RANGE", now_utc=2000)
+    second = get_or_create_state(db, position_id, initial_monetary_risk=20.0, entry_regime="TRENDING_UP", now_utc=2000)
     assert second.id == first.id
-    assert second.initial_monetary_risk == 20.0  # never redefined
-    assert second.entry_regime == "TRENDING_UP"   # never redefined
+    assert second.initial_monetary_risk == 20.0
+    assert second.entry_regime == "TRENDING_UP"
+    assert second.created_at_utc == first.created_at_utc  # unchanged, no second row/write
+
+
+def test_get_or_create_state_raises_on_conflicting_immutable_values(db):
+    # External review finding #5: a repeat call with DIFFERENT
+    # initial_monetary_risk/entry_regime must raise, not silently keep
+    # the old row while pretending success.
+    position_id = _insert_position(db)
+    get_or_create_state(db, position_id, initial_monetary_risk=20.0, entry_regime="TRENDING_UP", now_utc=1000)
+    with pytest.raises(PositionStateConflictError):
+        get_or_create_state(db, position_id, initial_monetary_risk=999.0, entry_regime="RANGE", now_utc=2000)
+    with pytest.raises(PositionStateConflictError):
+        get_or_create_state(db, position_id, initial_monetary_risk=20.0, entry_regime="RANGE", now_utc=2000)
+    with pytest.raises(PositionStateConflictError):
+        get_or_create_state(db, position_id, initial_monetary_risk=999.0, entry_regime="TRENDING_UP", now_utc=2000)
+    # the original row is untouched by any of the rejected calls
+    unchanged = get_state(db, position_id)
+    assert unchanged.initial_monetary_risk == 20.0
+    assert unchanged.entry_regime == "TRENDING_UP"
+
+
+@pytest.mark.parametrize("bad_risk", [0.0, -5.0, float("nan"), float("inf"), float("-inf")])
+def test_get_or_create_state_rejects_non_positive_or_non_finite_risk(db, bad_risk):
+    position_id = _insert_position(db)
+    with pytest.raises(ValueError):
+        get_or_create_state(db, position_id, initial_monetary_risk=bad_risk, entry_regime="TRENDING_UP", now_utc=1000)
+    assert get_state(db, position_id) is None  # nothing was ever created
+
+
+def test_record_risk_incident_is_idempotent_while_unresolved(db):
+    position_id = _insert_position(db)
+    assert has_unresolved_risk_incident(db, position_id) is False
+    first_id = record_risk_incident(db, position_id, "bad risk", now_utc=1000)
+    assert has_unresolved_risk_incident(db, position_id) is True
+    second_id = record_risk_incident(db, position_id, "bad risk again", now_utc=1010)
+    assert second_id == first_id  # no duplicate row while unresolved
 
 
 def test_get_state_returns_none_for_unknown_position(db):

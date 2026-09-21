@@ -84,12 +84,23 @@ def _apply_currency_direction(exposure: dict[str, float], symbol: str, direction
 def compute_exposure(
     open_positions: list[PositionExposure], pending_positions: list[PositionExposure] = ()
 ) -> PortfolioExposure:
+    """A RESTING/PLACED order is still potential broker exposure (directive
+    section 30/external review finding #10) — until broker truth confirms
+    filled/cancelled/expired/rejected, it must participate in every heat
+    dimension exactly like an OPEN position: total risk, per-symbol heat,
+    currency-direction heat, USD heat, and (via `symbol_exposure`)
+    correlated-cluster heat. `total_open_risk`/`total_pending_risk` stay
+    separately reported (dashboard/observability needs to distinguish
+    filled from resting exposure), but every OTHER field below is the
+    combined OPEN + PENDING view — external review finding #11: a prior
+    version only ever folded `pending_positions` into the total-risk sum,
+    leaving per-symbol/currency/USD/cluster heat blind to resting orders."""
     symbol_exposure: dict[str, float] = {}
     currency_direction: dict[str, float] = {}
     positions_per_symbol: dict[str, int] = {}
     usd_related = 0.0
 
-    for pos in open_positions:
+    for pos in (*open_positions, *pending_positions):
         symbol_exposure[pos.canonical_symbol] = symbol_exposure.get(pos.canonical_symbol, 0.0) + pos.monetary_risk
         positions_per_symbol[pos.canonical_symbol] = positions_per_symbol.get(pos.canonical_symbol, 0) + 1
         _apply_currency_direction(currency_direction, pos.canonical_symbol, pos.direction, pos.monetary_risk)
@@ -114,13 +125,15 @@ def correlated_cluster_exposure(
     correlation_matrix: dict[tuple[str, str], CorrelationResult],
     high_correlation_threshold: float = 0.7,
 ) -> dict[frozenset[str], float]:
-    """Combined open-risk exposure for every pair of symbols BOTH
-    currently open AND measurably highly correlated (|corr| >= threshold,
-    N/A pairs excluded — never assumed correlated or uncorrelated)."""
-    open_symbols = [s for s, risk in exposure.symbol_exposure.items() if risk > 0]
+    """Combined exposure for every pair of symbols BOTH carrying OPEN OR
+    PENDING risk (`exposure.symbol_exposure` is the combined view — see
+    `compute_exposure()`) AND measurably highly correlated (|corr| >=
+    threshold, N/A pairs excluded — never assumed correlated or
+    uncorrelated)."""
+    symbols_with_exposure = [s for s, risk in exposure.symbol_exposure.items() if risk > 0]
     clusters: dict[frozenset[str], float] = {}
-    for i, a in enumerate(open_symbols):
-        for b in open_symbols[i + 1:]:
+    for i, a in enumerate(symbols_with_exposure):
+        for b in symbols_with_exposure[i + 1:]:
             result = correlation_matrix.get((a, b), CorrelationResult(None, 0))
             if result.correlation is None or abs(result.correlation) < high_correlation_threshold:
                 continue

@@ -39,7 +39,9 @@ freshly-proven position identity.
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
+import typing
 from dataclasses import dataclass
 
 from adaptive_scalper.gateway.broker_constraints import derive_filling_type
@@ -47,6 +49,9 @@ from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.retcodes import interpret_retcode
 from adaptive_scalper.gateway.types import OrderAction, OrderCheckResult, OrderRequest, OrderSendResult
+
+if typing.TYPE_CHECKING:
+    from adaptive_scalper.execution.reconciliation import ReconciliationReport
 
 NOT_DEMO = "NOT_DEMO"
 ALREADY_CLOSED = "ALREADY_CLOSED"
@@ -56,6 +61,15 @@ UNKNOWN = "UNKNOWN"
 REJECTED = "REJECTED"
 SENT = "SENT"
 
+# Outcomes reached ONLY after order_send() was actually called — a real
+# request reached the broker (whether it filled, was rejected, or its
+# outcome is uncertain). Every other status is a PRE-SEND block (DEMO
+# verification, position/volume mismatch, order_check failure) where
+# nothing was ever transmitted. Callers persisting request-timing state
+# (external review finding #4) must use this to avoid recording a
+# request timestamp for a request that never left the process.
+POST_SEND_STATUSES = frozenset({SENT, REJECTED, UNKNOWN})
+
 DEFAULT_ORDER_CHECK_SUCCESS_RETCODES = frozenset({0, 10009})
 
 
@@ -64,6 +78,7 @@ class CloseOutcome:
     status: str
     detail: str
     result: OrderSendResult | None = None
+    reconciliation: "ReconciliationReport | None" = None
 
 
 def _opposite_direction(direction: str) -> str:
@@ -159,6 +174,7 @@ def close_position_safely(
 
     if conn is not None and reconciliation_chain_key is not None:
         from adaptive_scalper.execution.reconciliation import run_reconciliation
-        run_reconciliation(conn, gateway, reconciliation_chain_key)
+        report = run_reconciliation(conn, gateway, reconciliation_chain_key)
+        outcome = dataclasses.replace(outcome, reconciliation=report)
 
     return outcome

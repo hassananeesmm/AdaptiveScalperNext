@@ -90,6 +90,72 @@ def test_usd_related_exposure_includes_xauusd_and_btcusd_not_gbpjpy():
     assert exposure.usd_related_exposure == pytest.approx(15.0)
 
 
+# --------------------------------------------------------------------------
+# External review finding #10/#11: a RESTING/PLACED order is still
+# potential broker exposure and must participate in every heat dimension,
+# not just the total-risk sum.
+# --------------------------------------------------------------------------
+
+def test_pending_position_contributes_to_symbol_exposure():
+    exposure = compute_exposure(
+        open_positions=[PositionExposure("XAUUSD", "BUY", 10.0)],
+        pending_positions=[PositionExposure("XAUUSD", "BUY", 15.0)],
+    )
+    assert exposure.symbol_exposure["XAUUSD"] == pytest.approx(25.0)
+    assert exposure.positions_per_symbol["XAUUSD"] == 2
+
+
+def test_pending_only_position_still_appears_in_symbol_exposure():
+    exposure = compute_exposure(open_positions=[], pending_positions=[PositionExposure("BTCUSD", "BUY", 5.0)])
+    assert exposure.symbol_exposure["BTCUSD"] == pytest.approx(5.0)
+
+
+def test_pending_position_contributes_to_currency_direction_exposure():
+    exposure = compute_exposure(
+        open_positions=[], pending_positions=[PositionExposure("XAUUSD", "BUY", 10.0)],
+    )
+    assert exposure.currency_direction_exposure["XAU"] == pytest.approx(10.0)
+    assert exposure.currency_direction_exposure["USD"] == pytest.approx(-10.0)
+
+
+def test_pending_position_contributes_to_usd_related_exposure():
+    exposure = compute_exposure(open_positions=[], pending_positions=[PositionExposure("BTCUSD", "BUY", 5.0)])
+    assert exposure.usd_related_exposure == pytest.approx(5.0)
+
+
+def test_cluster_exposure_includes_a_pending_only_symbol():
+    exposure = compute_exposure(
+        open_positions=[PositionExposure("XAUUSD", "BUY", 10.0)],
+        pending_positions=[PositionExposure("BTCUSD", "BUY", 20.0)],
+    )
+    matrix = {("BTCUSD", "XAUUSD"): CorrelationResult(0.8, 50), ("XAUUSD", "BTCUSD"): CorrelationResult(0.8, 50)}
+    clusters = correlated_cluster_exposure(exposure, matrix, high_correlation_threshold=0.7)
+    assert clusters[frozenset({"XAUUSD", "BTCUSD"})] == pytest.approx(30.0)
+
+
+def test_portfolio_risk_gate_blocks_on_per_symbol_ceiling_from_pending_alone():
+    decision, reason = evaluate_portfolio_risk_gate(
+        proposed_symbol="XAUUSD", proposed_direction="BUY", proposed_monetary_risk=20.0, equity=10000,
+        open_positions=[], pending_positions=[PositionExposure("XAUUSD", "BUY", 40.0)],
+        correlation_matrix={}, limits=_limits(max_total_open_risk_pct=5.0, max_symbol_risk_pct=0.5),
+    )
+    assert decision == BLOCK_PORTFOLIO_RISK
+    assert "per-symbol risk" in reason
+
+
+def test_portfolio_risk_gate_blocks_on_correlated_cluster_from_pending_alone():
+    decision, reason = evaluate_portfolio_risk_gate(
+        proposed_symbol="BTCUSD", proposed_direction="BUY", proposed_monetary_risk=20.0, equity=10000,
+        open_positions=[], pending_positions=[PositionExposure("XAUUSD", "BUY", 40.0)],
+        correlation_matrix={
+            ("BTCUSD", "XAUUSD"): CorrelationResult(0.9, 100), ("XAUUSD", "BTCUSD"): CorrelationResult(0.9, 100),
+        },
+        limits=_limits(max_total_open_risk_pct=5.0, max_currency_direction_risk_pct=5.0, max_correlated_cluster_risk_pct=0.5),
+    )
+    assert decision == BLOCK_PORTFOLIO_RISK
+    assert "correlated-cluster risk" in reason
+
+
 def test_empty_portfolio_has_zero_everything():
     exposure = compute_exposure([])
     assert exposure.total_open_risk == 0.0

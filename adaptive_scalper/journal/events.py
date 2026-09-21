@@ -83,6 +83,57 @@ def get_or_create_chain(conn: sqlite3.Connection, chain_key: str, canonical_symb
     return cursor.lastrowid
 
 
+def _append_event_locked(
+    conn: sqlite3.Connection,
+    chain_key: str,
+    event_type: str,
+    event_timestamp_utc: int,
+    canonical_symbol: str,
+    payload: dict,
+    *,
+    broker_symbol: str | None = None,
+    strategy_key: str | None = None,
+    client_request_id: str | None = None,
+    broker_order_id: str | None = None,
+    broker_position_id: str | None = None,
+    broker_deal_id: str | None = None,
+) -> int:
+    """Same insert `append_event()` performs, but assumes the caller
+    ALREADY holds SQLite's write lock via an open `BEGIN IMMEDIATE`
+    transaction — for callers that need this journal write to be part of
+    a LARGER atomic unit (external review finding #16, e.g.
+    `execution/reconciliation.py`'s broker-truth recovery, which must
+    never leave local state half-applied between a position update, its
+    deal rows, and the journal record of the same recovery). Never call
+    this outside an already-open transaction: the sequence-number TOCTOU
+    protection `append_event()` provides depends on the write lock being
+    genuinely held, not on this function acquiring it."""
+    if event_type not in EVENT_TYPES:
+        raise UnknownEventTypeError(f"{event_type!r} is not a recognized journal event type")
+
+    chain_id = get_or_create_chain(conn, chain_key, canonical_symbol)
+    next_seq = conn.execute(
+        "SELECT COALESCE(MAX(sequence_in_chain), 0) + 1 AS next_seq FROM journal_events WHERE chain_id = ?",
+        (chain_id,),
+    ).fetchone()["next_seq"]
+
+    cursor = conn.execute(
+        """
+        INSERT INTO journal_events
+            (chain_id, sequence_in_chain, event_type, event_timestamp_utc, canonical_symbol,
+             broker_symbol, strategy_key, client_request_id, broker_order_id, broker_position_id,
+             broker_deal_id, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            chain_id, next_seq, event_type, event_timestamp_utc, canonical_symbol,
+            broker_symbol, strategy_key, client_request_id, broker_order_id, broker_position_id,
+            broker_deal_id, json.dumps(payload, default=str),
+        ),
+    )
+    return cursor.lastrowid
+
+
 def append_event(
     conn: sqlite3.Connection,
     chain_key: str,
@@ -111,33 +162,19 @@ def append_event(
     concurrent `append_event()` call for the same chain blocks until the
     first commits, rather than both reading the same "next sequence"
     value and racing to insert it.
-    """
-    if event_type not in EVENT_TYPES:
-        raise UnknownEventTypeError(f"{event_type!r} is not a recognized journal event type")
 
+    A caller that needs this write to be part of a LARGER atomic unit
+    (its own `BEGIN IMMEDIATE` already open) should call
+    `_append_event_locked()` directly instead — this function always
+    owns its own transaction boundary.
+    """
     conn.execute("BEGIN IMMEDIATE")
     try:
-        chain_id = get_or_create_chain(conn, chain_key, canonical_symbol)
-        next_seq = conn.execute(
-            "SELECT COALESCE(MAX(sequence_in_chain), 0) + 1 AS next_seq FROM journal_events WHERE chain_id = ?",
-            (chain_id,),
-        ).fetchone()["next_seq"]
-
-        cursor = conn.execute(
-            """
-            INSERT INTO journal_events
-                (chain_id, sequence_in_chain, event_type, event_timestamp_utc, canonical_symbol,
-                 broker_symbol, strategy_key, client_request_id, broker_order_id, broker_position_id,
-                 broker_deal_id, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                chain_id, next_seq, event_type, event_timestamp_utc, canonical_symbol,
-                broker_symbol, strategy_key, client_request_id, broker_order_id, broker_position_id,
-                broker_deal_id, json.dumps(payload, default=str),
-            ),
+        event_id = _append_event_locked(
+            conn, chain_key, event_type, event_timestamp_utc, canonical_symbol, payload,
+            broker_symbol=broker_symbol, strategy_key=strategy_key, client_request_id=client_request_id,
+            broker_order_id=broker_order_id, broker_position_id=broker_position_id, broker_deal_id=broker_deal_id,
         )
-        event_id = cursor.lastrowid
         conn.execute("COMMIT")
     except sqlite3.Error:
         conn.execute("ROLLBACK")

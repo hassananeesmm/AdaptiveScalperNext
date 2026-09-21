@@ -115,7 +115,7 @@ class FinalPermissionInput:
     execution_quote: ExecutionQuoteCheck
     news_result: NewsBlockResult
     cost_estimate: CostEstimate | None
-    open_symbols: list[str]
+    open_or_pending_symbols: list[str]
     correlation_matrix: dict[tuple[str, str], CorrelationResult]
     risk_gate_input: RiskGateInput
     risk_limits: RiskLimits
@@ -201,7 +201,7 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
         )
 
     corr_decision, corr_reason = evaluate_correlation_gate(
-        inp.signal.canonical_symbol, inp.open_symbols, inp.correlation_matrix
+        inp.signal.canonical_symbol, inp.open_or_pending_symbols, inp.correlation_matrix
     )
     if corr_decision != _CORRELATION_ALLOW:
         return FinalPermissionResult(corr_decision, corr_reason)

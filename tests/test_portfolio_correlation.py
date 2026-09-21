@@ -134,7 +134,7 @@ def test_gate_missing_correlation_data_is_informational_only_when_opted_out():
     assert decision == ALLOW
 
 
-def test_gate_allows_when_no_open_symbols():
+def test_gate_allows_when_no_open_or_pending_symbols():
     decision, reason = evaluate_correlation_gate("BTCUSD", [], {})
     assert decision == ALLOW
 

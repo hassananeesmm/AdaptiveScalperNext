@@ -85,20 +85,76 @@ delete) once fixed, with the fixing commit/date noted.
    live tick-bootstrap run ever reports suspiciously low counts vs. known
    volume.
 
-8. [SEVERITY: MEDIUM, SUBSYSTEM: position_management] `position_management
-   /manager.py`'s `review_position_once()` triggers a real reconciliation
-   pass on `FULL_CLOSE` (via `close_position_safely(conn=...,
-   reconciliation_chain_key=...)`), which can repair `positions`/`deals`
-   local state from the authoritative closing deal — but it never calls
-   `state_store.record_exit_fill()`, so `position_management_state`'s
-   `fill_r`/`giveback_fill`/`realized_slippage`/`broker_response_at_utc`
-   fields stay unset even after a successful close. Needs a follow-up
-   (either inside `review_position_once()` after a `SENT`/reconciliation-
-   confirmed close, or a separate reconciliation-driven job) that computes
-   `fill_r` from the real closing deal's price and calls
-   `record_exit_fill()`.
+9. [SEVERITY: LOW, SUBSYSTEM: execution] `execution/reconciliation
+   .find_closing_deals()` treats an INOUT deal (MT5 `ENUM_DEAL_ENTRY=2`)
+   purely as closing evidence for the reduced portion of a position's
+   exposure. It does not attempt to open a NEW local position for
+   whatever additional exposure the same INOUT deal may have opened in
+   the other direction (a netting-account "flip" in one atomic broker
+   operation) — no canonical-symbol/strategy context exists at
+   reconciliation time to attribute a freshly-opened position to. Not
+   observed in practice on this project's real IC Markets DEMO account
+   (a hedging account, where OUT_BY is the relevant multi-position-close
+   semantic instead); flag for a real design once/if a netting-mode
+   account is ever connected.
 
 ## Fixed
+
+- ~~[SEVERITY: HIGH, SUBSYSTEM: execution/position_management/portfolio]
+  External review of commit cbe16b3, 17 findings before PAPER/controlled-
+  DEMO validation: (1-3) `execution/stop_modification.py` reverified DEMO
+  only before `order_check`, not again before `order_send`, reused round
+  1's take-profit/symbol/tick state for the actual send, and never
+  rechecked stops/freeze/quote freshness immediately before send; (4)
+  `position_management/manager.py` recorded `request_at_utc` even for
+  pre-send blocks that never reached the broker; (5)
+  `state_store.get_or_create_state()` silently kept the old row on a
+  conflicting `initial_monetary_risk`/`entry_regime`, and didn't validate
+  positive/finite; (6) an invalid initial risk was indistinguishable from
+  a healthy HOLD; (7) no `POSITION_REVIEWED`/`STOP_ADVANCED` journal
+  events existed; (8) `record_exit_fill()` was never called (this item);
+  (9) a resolvable/unresolvable `PARTIAL` fill never became accounted
+  local exposure, and — a pre-existing gap this review surfaced — NOTHING
+  in this codebase had ever created a `positions` table row for a real
+  entry at all; (10-11) `portfolio/exposure.py` only folded pending
+  positions into the total-risk sum, leaving per-symbol/currency/USD/
+  cluster heat blind to resting orders, and `open_symbols` was misleadingly
+  named; (12) `execution/service.py` trusted DEMO/kill-switch/symbol state
+  solely from caller-supplied `FreshEvidence`; (13) no authoritative
+  final margin/broker recheck immediately before send; (14)
+  `execution/request_token.py` used a `client_request_id[:16]` prefix
+  slice, collision-prone for structured ids; (15)
+  `execution/reconciliation.py` only recorded the LATEST `OUT` deal,
+  ignoring `INOUT`/`OUT_BY` and multi-deal partial closes, and falsely
+  linked a closing deal's `order_id` to the entry order; (16) the local
+  recovery write (position + deals + journal) was not atomic; (17)
+  `PROJECT_STATUS.md` had several statements stale relative to the actual
+  codebase (Phase 5 claiming no continuous-expectancy/manager loop, a
+  hardcoded schema version, "order_send does not exist" prose left over
+  from before Phase 4).~~ Fixed 2026-09-21. New:
+  `position_risk_incidents` (migration `0013_position_risk_quarantine`),
+  `state_store.PositionStateConflictError`/`record_risk_incident()`/
+  `has_unresolved_risk_incident()`, `close.POST_SEND_STATUSES`,
+  `execution/store.create_local_position()`,
+  `journal.events._append_event_locked()`,
+  `reconciliation.find_closing_deals()`. Rewrote:
+  `execution/stop_modification.py` (both rounds now identical --
+  independent DEMO/symbol/tick/stops/freeze re-verification, request
+  rebuilt from fresh state each round, a changed request re-`order_check`ed
+  before send), `position_management/manager.py` (quarantine path,
+  post-send-only request timestamps, `POSITION_REVIEWED`/`STOP_ADVANCED`
+  journaling, real `record_exit_fill()` wiring), `execution/service.py`
+  (`_verify_critical_broker_state()` called twice, independently, for
+  DEMO/kill-switch/symbol/quote truth; a second `order_check` + fresh
+  margin recheck immediately before send; FILLED/PARTIAL paths now create
+  a real local position), `portfolio/exposure.py` (`compute_exposure()`
+  folds pending positions into every heat dimension, not just the total),
+  `execution/reconciliation.py` (`_recover_missing_local_position()` now
+  takes every closing deal, aggregates them, resolves `order_id` per-deal
+  from real local `orders` rows or NULL, and journals inside the SAME
+  transaction as the position/deal writes). Renamed `open_symbols` ->
+  `open_or_pending_symbols` across `core/final_permission.py`/
+  `portfolio/correlation.py`. 961 tests passing (up from 916).
 
 - ~~[SEVERITY: HIGH, SUBSYSTEM: execution/core/position_management]
   Round-2 external review, the remaining 5 HIGH findings: (4)

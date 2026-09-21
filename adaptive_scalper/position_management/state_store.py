@@ -12,9 +12,21 @@ restart can never "reset" it and fool a later giveback check.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
 from dataclasses import dataclass
+
+
+class PositionStateConflictError(ValueError):
+    """Raised when `get_or_create_state()` is called for a position that
+    already has a persisted row, with a DIFFERENT `initial_monetary_risk`
+    or `entry_regime` than what was originally recorded. These two fields
+    are immutable by directive section 21 ("moving a stop never redefines
+    R") — a caller supplying different values for an existing position is
+    an integrity fault (a caller bug, a position_id collision, or state
+    corruption), not something to silently paper over by returning the
+    old row unchanged."""
 
 
 @dataclass(frozen=True)
@@ -70,13 +82,31 @@ def get_or_create_state(
     entry_regime: str,
     now_utc: int | None = None,
 ) -> PositionManagementState:
-    """Idempotent: a repeat call for the same `position_id` returns the
-    EXISTING row unchanged — `initial_monetary_risk`/`entry_regime` are
-    never overwritten by a later call, even if the caller passes
-    different values (a caller bug should surface elsewhere, not silently
-    redefine R here)."""
+    """Idempotent ONLY when the caller supplies the SAME immutable values
+    as the existing row: `initial_monetary_risk`/`entry_regime` are never
+    overwritten by a later call. A repeat call with DIFFERENT values
+    raises `PositionStateConflictError` — silently keeping the old row
+    while pretending success would hide a real integrity fault (directive
+    section 21: moving a stop must never redefine R, and neither may a
+    caller bug)."""
+    if not math.isfinite(initial_monetary_risk) or initial_monetary_risk <= 0:
+        raise ValueError(
+            f"initial_monetary_risk must be positive and finite, got {initial_monetary_risk!r} "
+            f"for position_id={position_id}"
+        )
+
     existing = get_state(conn, position_id)
     if existing is not None:
+        if (
+            abs(existing.initial_monetary_risk - initial_monetary_risk) > 1e-9
+            or existing.entry_regime != entry_regime
+        ):
+            raise PositionStateConflictError(
+                f"position_id={position_id} already has persisted immutable state "
+                f"(initial_monetary_risk={existing.initial_monetary_risk}, entry_regime={existing.entry_regime!r}) "
+                f"which disagrees with the newly supplied values "
+                f"(initial_monetary_risk={initial_monetary_risk}, entry_regime={entry_regime!r})"
+            )
         return existing
 
     now = now_utc if now_utc is not None else int(time.time())
@@ -164,6 +194,44 @@ def record_exit_request(
     )
     conn.commit()
     return get_state(conn, position_id)  # type: ignore[return-value]
+
+
+def record_risk_incident(
+    conn: sqlite3.Connection,
+    position_id: int,
+    detail: str,
+    *,
+    now_utc: int | None = None,
+) -> int:
+    """Persist the degraded-health incident an unprovable/corrupted
+    `initial_monetary_risk` represents (directive section 75 — a
+    technical health problem, not just a financial-loss condition).
+    Idempotent per position: a repeat call while an unresolved incident
+    already exists for this position returns the EXISTING incident's id
+    rather than spamming a new row every review cycle."""
+    existing = conn.execute(
+        "SELECT id FROM position_risk_incidents WHERE position_id = ? AND resolved_at_utc IS NULL",
+        (position_id,),
+    ).fetchone()
+    if existing is not None:
+        return existing["id"]
+
+    now = now_utc if now_utc is not None else int(time.time())
+    cursor = conn.execute(
+        "INSERT INTO position_risk_incidents (position_id, incident_type, detail, detected_at_utc) "
+        "VALUES (?, 'INVALID_INITIAL_RISK', ?, ?)",
+        (position_id, detail, now),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def has_unresolved_risk_incident(conn: sqlite3.Connection, position_id: int) -> bool:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM position_risk_incidents WHERE position_id = ? AND resolved_at_utc IS NULL",
+        (position_id,),
+    ).fetchone()
+    return row["n"] > 0
 
 
 def record_exit_fill(

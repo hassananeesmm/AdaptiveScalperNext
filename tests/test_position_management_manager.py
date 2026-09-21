@@ -16,10 +16,18 @@ from adaptive_scalper.gateway.types import (
     Tick,
     TradeMode,
 )
+from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
-from adaptive_scalper.position_management.manager import FULL_CLOSE, HOLD, MOVE_PROTECTIVE_STOP, PositionReviewInput, review_position_once
-from adaptive_scalper.position_management.state_store import get_state
+from adaptive_scalper.position_management.manager import (
+    FULL_CLOSE,
+    HOLD,
+    MOVE_PROTECTIVE_STOP,
+    PositionReviewInput,
+    _review_chain_key,
+    review_position_once,
+)
+from adaptive_scalper.position_management.state_store import get_state, has_unresolved_risk_incident
 
 
 @pytest.fixture()
@@ -56,10 +64,13 @@ def _symbol_spec(**overrides) -> SymbolSpec:
     return SymbolSpec(**defaults)
 
 
-def _demo_gateway(bid: float = 2000.0, ask: float = 2000.20, **gw_overrides) -> FakeGateway:
+def _demo_gateway(bid: float = 2000.0, ask: float = 2000.20, tick_time: int = 1010, **gw_overrides) -> FakeGateway:
+    # tick_time matches the now_utc most tests pass to review_position_once()
+    # (1010) so the execution-quote-freshness check stop_modification.py
+    # now performs (external review finding #3) sees a fresh quote.
     defaults = dict(
         account=_demo_account(), terminal=_demo_terminal(), symbols=[_symbol_spec()],
-        ticks={"XAUUSDm": Tick(time=5000, bid=bid, ask=ask, last=bid, volume=1.0)},
+        ticks={"XAUUSDm": Tick(time=tick_time, bid=bid, ask=ask, last=bid, volume=1.0)},
     )
     defaults.update(gw_overrides)
     return FakeGateway(**defaults)
@@ -237,3 +248,127 @@ def test_full_close_updates_local_and_broker_state_together(db):
     # in this module; against the real gateway, deal timestamps are real.
     row = db.execute("SELECT status FROM positions WHERE id = ?", (position_id,)).fetchone()
     assert row["status"] == "OPEN"
+
+
+# --- External review findings (2026-09-21) ---
+
+
+def test_pre_send_close_block_does_not_record_a_request_timestamp(db):
+    # Finding #4: a PRE-SEND block (position already gone by the time
+    # close_position_safely re-fetches it -> ALREADY_CLOSED) must never
+    # record request_at_utc -- no request ever reached the broker.
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+    gw._open_positions.clear()  # sabotage: broker no longer reports this position
+
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
+    assert result.action == FULL_CLOSE
+    assert result.close_outcome.status == "ALREADY_CLOSED"
+
+    state = get_state(db, position_id)
+    assert state.decision_at_utc == 1010  # the decision itself is real and recorded
+    assert state.request_at_utc is None  # but no request was ever transmitted
+
+
+def test_full_close_records_a_request_timestamp_when_sent(db):
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
+    assert result.close_outcome.status == "SENT"
+    state = get_state(db, position_id)
+    assert state.request_at_utc == 1010
+
+
+def test_position_reviewed_journaled_on_hold(db):
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=1010)
+    events = get_chain_events(db, _review_chain_key(position_id))
+    reviewed = [e for e in events if e.event_type == "POSITION_REVIEWED"]
+    assert len(reviewed) == 1
+    assert reviewed[0].payload["selected_action"] == HOLD
+    assert reviewed[0].payload["current_r"] == pytest.approx(0.1)
+    assert reviewed[0].payload["quarantined"] is False
+    assert reviewed[0].broker_position_id == ticket
+
+
+def test_stop_advanced_journaled_on_breakeven(db):
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1010)
+    events = get_chain_events(db, _review_chain_key(position_id))
+    advanced = [e for e in events if e.event_type == "STOP_ADVANCED"]
+    assert len(advanced) == 1
+    assert advanced[0].payload["new_stop_price"] == pytest.approx(2000.5)
+
+
+def test_invalid_initial_risk_records_incident_and_journals_quarantined(db):
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket, initial_monetary_risk=0.0)
+
+    result = review_position_once(
+        db, gw, _base_input(position_id, ticket, initial_monetary_risk=0.0, unrealized_pnl=5.0), now_utc=1010,
+    )
+    assert result.action == HOLD
+    assert result.quarantined is True
+    assert has_unresolved_risk_incident(db, position_id) is True
+
+    events = get_chain_events(db, _review_chain_key(position_id))
+    reviewed = [e for e in events if e.event_type == "POSITION_REVIEWED"]
+    assert len(reviewed) == 1
+    assert reviewed[0].payload["quarantined"] is True
+
+    # a repeated quarantined review does not spam a second incident row
+    review_position_once(
+        db, gw, _base_input(position_id, ticket, initial_monetary_risk=0.0, unrealized_pnl=5.0), now_utc=1020,
+    )
+    count = db.execute(
+        "SELECT COUNT(*) AS n FROM position_risk_incidents WHERE position_id = ?", (position_id,)
+    ).fetchone()["n"]
+    assert count == 1
+
+
+def test_full_close_records_real_broker_fill_when_reconciliation_recovers(db):
+    # Finding #8: fill_r/giveback_fill/broker_response_at_utc must come
+    # from the REAL closing deal reconciliation recovers, never a guess.
+    # FakeGateway's simulated close deal hardcodes time=0/profit=0.0 (a
+    # documented simulator limitation -- see
+    # test_full_close_updates_local_and_broker_state_together above), so
+    # this test patches the deal it appends to a realistic time/profit to
+    # exercise the real wiring end to end.
+    import dataclasses as dc
+
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+
+    original_order_send = gw.order_send
+
+    def patched_order_send(request):
+        result = original_order_send(request)
+        if request.action == OrderAction.DEAL and request.position_ticket is not None:
+            last = gw._historical_deals[-1]
+            gw._historical_deals[-1] = dc.replace(last, time=1010, profit=20.0, commission=-1.0, swap=-0.5)
+        return result
+
+    gw.order_send = patched_order_send
+
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
+    assert result.action == FULL_CLOSE
+    assert result.close_outcome.status == "SENT"
+    assert result.close_outcome.reconciliation is not None
+    assert ticket in result.close_outcome.reconciliation.recovered_position_ids
+
+    state = get_state(db, position_id)
+    # realized_net = profit(20.0) + commission(-1.0) + swap(-0.5) = 18.5; fill_r = 18.5/20.0
+    assert state.fill_r == pytest.approx(0.925)
+    assert state.broker_response_at_utc == 1010
+    assert state.giveback_fill == pytest.approx(state.peak_r - 0.925)

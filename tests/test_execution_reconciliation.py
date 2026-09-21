@@ -15,6 +15,7 @@ from adaptive_scalper.execution.reconciliation import (
     LocalPositionRecord,
     classify_reconciliation,
     find_closing_deal,
+    find_closing_deals,
     get_unresolved_incidents,
     has_dangerous_unresolved_unknown,
     reconcile_positions,
@@ -283,6 +284,131 @@ def test_find_closing_deal_picks_the_latest_when_multiple_match():
     gw = FakeGateway(historical_deals=[early, late])
     result = find_closing_deal(gw, "1", 0, 9999999999)
     assert result.ticket == 200
+
+
+# --------------------------------------------------------------------------
+# find_closing_deals (external review finding #15: OUT/INOUT/OUT_BY, not
+# just OUT; every deal, not just the latest)
+# --------------------------------------------------------------------------
+
+def test_find_closing_deals_returns_every_matching_deal_oldest_first():
+    early = _closing_deal(entry=1, ticket=100, position_id=1, time=1000)
+    late = _closing_deal(entry=1, ticket=200, position_id=1, time=2000)
+    gw = FakeGateway(historical_deals=[late, early])  # deliberately out of order
+    result = find_closing_deals(gw, "1", 0, 9999999999)
+    assert [d.ticket for d in result] == [100, 200]
+
+
+def test_find_closing_deals_includes_inout_and_out_by():
+    out = _closing_deal(entry=1, ticket=100, position_id=1, time=1000)
+    inout = _closing_deal(entry=2, ticket=200, position_id=1, time=2000)
+    out_by = _closing_deal(entry=3, ticket=300, position_id=1, time=3000)
+    gw = FakeGateway(historical_deals=[out, inout, out_by])
+    result = find_closing_deals(gw, "1", 0, 9999999999)
+    assert [d.ticket for d in result] == [100, 200, 300]
+
+
+def test_find_closing_deals_ignores_opening_deals():
+    opening = _closing_deal(entry=0, ticket=100, position_id=1)
+    gw = FakeGateway(historical_deals=[opening])
+    assert find_closing_deals(gw, "1", 0, 9999999999) == []
+
+
+def test_find_closing_deals_ignores_other_positions():
+    other = _closing_deal(entry=1, ticket=100, position_id=999)
+    gw = FakeGateway(historical_deals=[other])
+    assert find_closing_deals(gw, "1", 0, 9999999999) == []
+
+
+# --------------------------------------------------------------------------
+# multi-deal reconciliation recovery (finding #15) + atomicity (finding #16)
+# --------------------------------------------------------------------------
+
+def test_run_reconciliation_recovers_and_records_every_partial_close_deal(db):
+    _insert_local_position(db, broker_position_id="1", opened_at_utc=1000)
+    first_close = _closing_deal(ticket=901, order=800, position_id=1, time=4000, volume=0.02, price=2005.0,
+                                 commission=-0.2, swap=0.0, profit=4.0)
+    second_close = _closing_deal(ticket=902, order=800, position_id=1, time=4500, volume=0.03, price=2010.0,
+                                  commission=-0.3, swap=-0.1, profit=6.0)
+    gw = FakeGateway(historical_deals=[first_close, second_close])
+
+    report = run_reconciliation(db, gw, "recon-multi", now_utc=5000)
+    assert report.status == RECOVERED
+    assert report.recovered_position_ids == ["1"]
+
+    # BOTH deals are persisted -- never just the last one.
+    rows = db.execute("SELECT * FROM deals WHERE broker_position_id = '1' ORDER BY occurred_at_utc").fetchall()
+    assert [r["broker_deal_id"] for r in rows] == ["901", "902"]
+    assert rows[0]["profit"] == 4.0
+    assert rows[1]["profit"] == 6.0
+
+    # the position closes at the LATEST deal's time.
+    row = db.execute("SELECT status, closed_at_utc FROM positions WHERE broker_position_id = '1'").fetchone()
+    assert row["status"] == "CLOSED"
+    assert row["closed_at_utc"] == 4500
+
+    events = [e for e in get_chain_events(db, "recon-multi:position:1") if e.event_type == "POSITION_CLOSED"]
+    assert len(events) == 1
+    assert events[0].payload["deal_count"] == 2
+    assert events[0].payload["total_profit"] == pytest.approx(10.0)
+    assert events[0].payload["total_commission"] == pytest.approx(-0.5)
+    assert events[0].payload["total_swap"] == pytest.approx(-0.1)
+
+
+def test_run_reconciliation_recovers_from_out_by_deal(db):
+    # Hedging-account close-by-opposite-position semantics (entry=3).
+    _insert_local_position(db, broker_position_id="1", opened_at_utc=1000)
+    out_by = _closing_deal(entry=3, ticket=903, position_id=1, time=4500, profit=7.0)
+    gw = FakeGateway(historical_deals=[out_by])
+
+    report = run_reconciliation(db, gw, "recon-outby", now_utc=5000)
+    assert report.status == RECOVERED
+    deal_row = db.execute("SELECT * FROM deals WHERE broker_deal_id = '903'").fetchone()
+    assert deal_row is not None
+    assert deal_row["profit"] == 7.0
+
+
+def test_recovered_deal_order_id_is_null_when_unprovable(db):
+    # finding #15: never falsely link a closing deal to the entry order
+    # (or any other unproven local order) -- NULL when it can't be shown.
+    _insert_local_position(db, broker_position_id="1", opened_at_utc=1000)
+    closing = _closing_deal(order=999999, ticket=904, position_id=1, time=4500)  # no local order with this ticket
+    gw = FakeGateway(historical_deals=[closing])
+
+    run_reconciliation(db, gw, "recon-nulllink", now_utc=5000)
+    deal_row = db.execute("SELECT order_id FROM deals WHERE broker_deal_id = '904'").fetchone()
+    assert deal_row["order_id"] is None
+
+
+def test_recovery_is_atomic_position_deals_and_journal_together(db):
+    # finding #16: if the atomic recovery transaction is interrupted
+    # before COMMIT, NONE of its writes (position, deals, journal) are
+    # observed -- simulated here by making the journal insert fail after
+    # the position/deal writes have already been issued inside the same
+    # transaction, and confirming everything rolls back together.
+    import sqlite3 as _sqlite3
+
+    from adaptive_scalper.execution import reconciliation as recon_module
+
+    _insert_local_position(db, broker_position_id="1", opened_at_utc=1000)
+    closing = _closing_deal(ticket=905, position_id=1, time=4500)
+    gw = FakeGateway(historical_deals=[closing])
+
+    def failing_append_event_locked(*a, **kw):
+        raise _sqlite3.IntegrityError("simulated failure after position/deal writes")
+
+    original = recon_module._append_event_locked
+    recon_module._append_event_locked = failing_append_event_locked
+    try:
+        with pytest.raises(_sqlite3.IntegrityError):
+            run_reconciliation(db, gw, "recon-atomic", now_utc=5000)
+    finally:
+        recon_module._append_event_locked = original
+
+    # NONE of the position update or deal insert survived the rollback.
+    row = db.execute("SELECT status FROM positions WHERE broker_position_id = '1'").fetchone()
+    assert row["status"] == "OPEN"
+    assert db.execute("SELECT * FROM deals WHERE broker_deal_id = '905'").fetchone() is None
 
 
 def test_run_reconciliation_is_idempotent_across_repeated_calls(db):

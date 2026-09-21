@@ -7,10 +7,14 @@ import pytest
 
 from adaptive_scalper.core.final_permission import FinalPermissionInput
 from adaptive_scalper.core.kill_switch import KillSwitchState, KillSwitchStatus
+from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
+from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
+from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.execution.reconciliation import BLOCKING_MISMATCH, CLEAN
 from adaptive_scalper.execution.service import (
     BLOCKED_BROKER_CONSTRAINT,
+    BLOCKED_BROKER_STATE,
     BLOCKED_MARGIN,
     BLOCKED_PERMISSION,
     BLOCKED_PRESEND_RECHECK,
@@ -33,7 +37,17 @@ from adaptive_scalper.gateway.symbol_validation import (
     ExecutionQuoteCheck,
     SymbolValidationResult,
 )
-from adaptive_scalper.gateway.types import OrderCheckResult, OrderSendResult, SymbolSpec, SymbolTradeMode, Tick
+from adaptive_scalper.gateway.types import (
+    AccountSnapshot,
+    HistoricalDeal,
+    OrderCheckResult,
+    OrderSendResult,
+    SymbolSpec,
+    SymbolTradeMode,
+    TerminalSnapshot,
+    Tick,
+    TradeMode,
+)
 from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.news.blocking import ALLOW as NEWS_ALLOW
 from adaptive_scalper.news.blocking import BLOCK_NEWS, NewsBlockResult
@@ -47,8 +61,28 @@ from adaptive_scalper.strategies.base import StrategySignal
 def db(tmp_path):
     conn = connect(tmp_path / "test.sqlite3")
     migrate(conn)
+    # execution/service.py's finding-#12 critical-state check reads the
+    # REAL persisted kill switch directly -- bootstrap it DISENGAGED so
+    # tests exercise the happy/blocked paths this file actually targets,
+    # not an incidental UNINITIALIZED block every test would otherwise hit.
+    bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     yield conn
     conn.close()
+
+
+def _demo_account(**overrides) -> AccountSnapshot:
+    defaults = dict(
+        login=123, trade_mode=TradeMode.DEMO, balance=10000.0, equity=10000.0, margin_free=10000.0,
+        currency="USD", server="ICMarketsSC-Demo", company="IC Markets", trade_allowed=True, trade_expert=True,
+    )
+    defaults.update(overrides)
+    return AccountSnapshot(**defaults)
+
+
+def _demo_terminal(**overrides) -> TerminalSnapshot:
+    defaults = dict(connected=True, trade_allowed=True, build=1000, name="MT5", company="MetaQuotes", path="")
+    defaults.update(overrides)
+    return TerminalSnapshot(**defaults)
 
 
 def _symbol_spec(**overrides) -> SymbolSpec:
@@ -60,6 +94,21 @@ def _symbol_spec(**overrides) -> SymbolSpec:
     )
     defaults.update(overrides)
     return SymbolSpec(**defaults)
+
+
+def _demo_gateway(cls=FakeGateway, **overrides) -> FakeGateway:
+    """THE gateway constructor every test in this file should use: a full
+    DEMO account/terminal/symbol/tick state, so execution/service.py's
+    finding-#12 critical-state check (its own fresh account_info/
+    terminal_info/symbol_info/symbol_info_tick calls) sees a genuinely
+    tradable setup rather than incidentally blocking on missing fixture
+    data every test would otherwise need to reason about."""
+    defaults = dict(
+        account=_demo_account(), terminal=_demo_terminal(), symbols=[_symbol_spec()],
+        ticks={"XAUUSDm": Tick(time=5000, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)},
+    )
+    defaults.update(overrides)
+    return cls(**defaults)
 
 
 def _signal(**overrides) -> StrategySignal:
@@ -87,7 +136,7 @@ def _permission_input(**overrides) -> FinalPermissionInput:
         cost_estimate=estimate_cost(spread_price=0.1, commission_price_equivalent=0.0,
                                      expected_slippage_price=0.0, swap_price_equivalent=0.0,
                                      uncertainty_margin_pct=0.0),
-        open_symbols=[], correlation_matrix={},
+        open_or_pending_symbols=[], correlation_matrix={},
         risk_gate_input=RiskGateInput(
             proposed_symbol="XAUUSD", proposed_monetary_risk=20.0, equity=10000,
             current_total_open_risk=0.0, current_total_pending_risk=0.0,
@@ -135,16 +184,12 @@ def _submit(db, gw, fetch_fresh_evidence, **overrides):
     return submit_new_entry(**defaults)
 
 
-def _gw_with_tick():
-    return FakeGateway(ticks={"XAUUSDm": Tick(time=5000, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)})
-
-
 # --------------------------------------------------------------------------
 # Happy path
 # --------------------------------------------------------------------------
 
 def test_happy_path_fills_and_journals_full_lifecycle(db):
-    gw = _gw_with_tick()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
     assert outcome.status == FILLED
     assert outcome.order.state == OrderState.FILLED
@@ -155,6 +200,19 @@ def test_happy_path_fills_and_journals_full_lifecycle(db):
         "ENTRY_ALLOWED", "ENTRY_ALLOWED", "ORDER_SUBMITTED", "ORDER_ACCEPTED", "ORDER_FILLED", "POSITION_OPENED",
     ]
 
+    # A real FILLED entry immediately becomes accounted local exposure —
+    # not just a journaled event (finding #9's sibling fix for the DONE
+    # path: nothing in this codebase created a `positions` row before).
+    row = db.execute(
+        "SELECT * FROM positions WHERE broker_position_id = ?", (outcome.order.broker_position_id,)
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "OPEN"
+    assert row["canonical_symbol"] == "XAUUSD"
+    assert row["direction"] == "BUY"
+    assert row["initial_monetary_risk"] == pytest.approx(20.0)
+    assert row["strategy_key"] == "momentum_continuation"
+
 
 def test_evidence_fetched_exactly_twice_on_the_happy_path(db):
     calls = []
@@ -163,7 +221,7 @@ def test_evidence_fetched_exactly_twice_on_the_happy_path(db):
         calls.append(1)
         return _good_evidence()
 
-    _submit(db, _gw_with_tick(), fetch)
+    _submit(db, _demo_gateway(), fetch)
     assert len(calls) == 2
 
 
@@ -173,7 +231,7 @@ def test_evidence_fetched_exactly_twice_on_the_happy_path(db):
 
 def test_blocked_initial_permission_never_calls_order_send(db):
     bad = FreshEvidence(permission_input=_permission_input(mode="REAL"), symbol_spec=_symbol_spec())
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(bad))
     assert outcome.status == BLOCKED_PERMISSION
     assert outcome.order.state == OrderState.PROPOSED
@@ -188,7 +246,7 @@ def test_blocked_initial_permission_never_calls_order_send(db):
 def test_account_switches_to_real_before_send_blocks_presend_recheck(db):
     initial = _good_evidence()
     switched_to_real = FreshEvidence(permission_input=_permission_input(mode="REAL"), symbol_spec=_symbol_spec())
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, switched_to_real))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
     assert gw.order_send_calls == []
@@ -198,7 +256,7 @@ def test_kill_switch_engages_after_order_check_blocks_send(db):
     initial = _good_evidence()
     engaged_ks = KillSwitchState(status=KillSwitchStatus.ENGAGED, reason="operator", changed_at="2026-01-01T00:00:00Z", changed_by="operator")
     engaged = _good_evidence(kill_switch_state=engaged_ks)
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, engaged))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
     assert gw.order_send_calls == []
@@ -207,7 +265,7 @@ def test_kill_switch_engages_after_order_check_blocks_send(db):
 def test_quote_becomes_stale_before_send_blocks(db):
     initial = _good_evidence()
     stale = _good_evidence(execution_quote=ExecutionQuoteCheck(False, "execution_stale_quote", "too old"))
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, stale))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
     assert gw.order_send_calls == []
@@ -216,7 +274,7 @@ def test_quote_becomes_stale_before_send_blocks(db):
 def test_news_window_begins_before_send_blocks(db):
     initial = _good_evidence()
     blocked_news = _good_evidence(news_result=NewsBlockResult(BLOCK_NEWS, "FOMC window", None, 60, 2700))
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, blocked_news))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
     assert gw.order_send_calls == []
@@ -225,7 +283,7 @@ def test_news_window_begins_before_send_blocks(db):
 def test_reconciliation_becomes_blocking_before_send_blocks(db):
     initial = _good_evidence()
     unclean = _good_evidence(reconciliation_status=BLOCKING_MISMATCH)
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, unclean))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
     assert gw.order_send_calls == []
@@ -234,7 +292,7 @@ def test_reconciliation_becomes_blocking_before_send_blocks(db):
 def test_unknown_appears_before_send_blocks(db):
     initial = _good_evidence()
     with_unknown = _good_evidence(has_dangerous_unknown_order=True)
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, with_unknown))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
     assert gw.order_send_calls == []
@@ -249,7 +307,7 @@ def test_risk_state_changes_before_send_blocks(db):
         daily_realized_pnl=0.0, peak_equity=10000,
     )
     risky = _good_evidence(risk_gate_input=over_limit_risk)
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, risky))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
     assert gw.order_send_calls == []
@@ -258,9 +316,172 @@ def test_risk_state_changes_before_send_blocks(db):
 def test_duplicate_appears_before_send_blocks(db):
     initial = _good_evidence()
     dup = _good_evidence(duplicate_active_order=True)
-    gw = FakeGateway()
+    gw = _demo_gateway()
     outcome = _submit(db, gw, _sequence(initial, dup))
     assert outcome.status == BLOCKED_PRESEND_RECHECK
+    assert gw.order_send_calls == []
+
+
+# --------------------------------------------------------------------------
+# External review finding #12: this module must directly re-fetch the
+# minimum broker-mutating safety state itself -- never trust it solely
+# from a caller-supplied FreshEvidence, which could return the SAME
+# cached object on both calls.
+# --------------------------------------------------------------------------
+
+def test_round1_blocks_when_gateway_account_is_not_demo_even_with_good_evidence(db):
+    # The CALLER's evidence claims everything is fine (mode=DEMO, a
+    # DemoVerificationResult saying allowed=True) -- but the GATEWAY's
+    # real account is REAL. This module's own verify_demo_before_order()
+    # call must catch this; it must never trust evidence.permission_input
+    # .demo_verification as the sole authority.
+    gw = _demo_gateway(account=_demo_account(trade_mode=TradeMode.REAL))
+    outcome = _submit(db, gw, _sequence(_good_evidence()))
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+def test_caller_returning_the_same_cached_evidence_twice_does_not_bypass_round2(db):
+    # The core finding #12 scenario: fetch_fresh_evidence() returns the
+    # EXACT SAME object both times (simulating a buggy/malicious caller
+    # that never actually re-fetches) -- but the underlying GATEWAY
+    # genuinely changed (account left DEMO) between round 1 and round 2.
+    # This module's OWN direct re-fetch must still catch it.
+    gw = _demo_gateway()
+    original_account_info = gw.account_info
+    calls = {"n": 0}
+
+    def flaky_account_info():
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _demo_account(trade_mode=TradeMode.REAL)
+        return original_account_info()
+
+    gw.account_info = flaky_account_info
+
+    cached_evidence = _good_evidence()
+
+    def fetch_same_object_every_time():
+        return cached_evidence  # a caller bug: never actually re-fetches
+
+    outcome = _submit(db, gw, fetch_same_object_every_time)
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+def test_real_kill_switch_engaged_blocks_send_even_when_caller_evidence_says_disengaged(db):
+    # The caller's evidence is frozen at DISENGAGED (a stale snapshot),
+    # but the REAL persisted kill switch is engaged between round 1 and
+    # round 2. This module reads core.kill_switch.get_state() itself.
+    gw = _demo_gateway()
+    frozen_evidence = _good_evidence()  # kill_switch_state=DISENGAGED baked in
+
+    calls = {"n": 0}
+
+    def fetch():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            engage_kill_switch(db, "test: simulate operator emergency stop", "test-operator")
+        return frozen_evidence
+
+    outcome = _submit(db, gw, fetch)
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+def test_gateway_symbol_disabled_between_rounds_blocks_send(db):
+    gw = _demo_gateway()
+    original_symbol_info = gw.symbol_info
+    calls = {"n": 0}
+
+    def flaky_symbol_info(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _symbol_spec(trade_mode=SymbolTradeMode.DISABLED)
+        return original_symbol_info(name)
+
+    gw.symbol_info = flaky_symbol_info
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+def test_gateway_quote_goes_stale_between_rounds_blocks_send(db):
+    gw = _demo_gateway()
+    original_tick = gw.symbol_info_tick
+    calls = {"n": 0}
+
+    def flaky_tick(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return Tick(time=1, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)  # ancient relative to now_utc=5000
+        return original_tick(name)
+
+    gw.symbol_info_tick = flaky_tick
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+# --------------------------------------------------------------------------
+# External review finding #13: a SECOND order_check + fresh margin
+# recheck, immediately before send, against the freshest broker state.
+# --------------------------------------------------------------------------
+
+def test_presend_margin_recheck_blocks_when_fresh_margin_free_insufficient(db):
+    class DrainingMarginGateway(FakeGateway):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._check_calls = 0
+
+        def order_check(self, request):
+            self._check_calls += 1
+            # first check (round 1): plenty of margin available; second
+            # check (round 2, immediately before send): margin_required
+            # now exceeds the fresh margin_free -- a real margin_free
+            # drop (e.g. another position opened) must still be caught.
+            margin_required = 50.0 if self._check_calls == 1 else 99999.0
+            return OrderCheckResult(retcode=10009, comment="ok", margin_required=margin_required)
+
+    gw = _demo_gateway(cls=DrainingMarginGateway)
+    evidence = FreshEvidence(permission_input=_permission_input(), symbol_spec=_symbol_spec(), available_margin_free=10000.0)
+    outcome = _submit(db, gw, _sequence(evidence, evidence))
+    assert outcome.status == BLOCKED_MARGIN
+    assert gw.order_send_calls == []
+
+
+def test_presend_order_check_recheck_failure_blocks_send(db):
+    class SecondCheckFailsGateway(FakeGateway):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._check_calls = 0
+
+        def order_check(self, request):
+            self._check_calls += 1
+            if self._check_calls == 1:
+                return OrderCheckResult(retcode=10009, comment="ok", margin_required=10.0)
+            return OrderCheckResult(retcode=10016, comment="invalid stops", margin_required=None)
+
+    gw = _demo_gateway(cls=SecondCheckFailsGateway)
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
+    assert outcome.status == BLOCKED_BROKER_CONSTRAINT
+    assert gw.order_send_calls == []
+
+
+def test_filling_type_change_between_rounds_blocks_send(db):
+    gw = _demo_gateway()
+    original_symbol_info = gw.symbol_info
+    calls = {"n": 0}
+
+    def flaky_symbol_info(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _symbol_spec(filling_mode=0)  # no longer any supported filling type
+        return original_symbol_info(name)
+
+    gw.symbol_info = flaky_symbol_info
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
+    assert outcome.status == BLOCKED_BROKER_CONSTRAINT
     assert gw.order_send_calls == []
 
 
@@ -273,7 +494,7 @@ def test_order_check_failure_blocks_before_send(db):
         def order_check(self, request):
             return OrderCheckResult(retcode=10014, comment="invalid volume", margin_required=None)
 
-    gw = RejectingCheckGateway()
+    gw = _demo_gateway(cls=RejectingCheckGateway)
     outcome = _submit(db, gw, _sequence(_good_evidence()))
     assert outcome.status == BLOCKED_BROKER_CONSTRAINT
     assert gw.order_send_calls == []
@@ -285,7 +506,7 @@ def test_insufficient_margin_blocks_before_send(db):
         def order_check(self, request):
             return OrderCheckResult(retcode=10009, comment="ok", margin_required=99999.0)
 
-    gw = HighMarginGateway()
+    gw = _demo_gateway(cls=HighMarginGateway)
     evidence = FreshEvidence(permission_input=_permission_input(), symbol_spec=_symbol_spec(), available_margin_free=100.0)
     outcome = _submit(db, gw, _sequence(evidence))
     assert outcome.status == BLOCKED_MARGIN
@@ -293,8 +514,10 @@ def test_insufficient_margin_blocks_before_send(db):
 
 
 def test_no_supported_filling_mode_blocks_before_check_or_send(db):
-    gw = FakeGateway()
-    evidence = FreshEvidence(permission_input=_permission_input(), symbol_spec=_symbol_spec(filling_mode=0))
+    # filling_type is now derived from THIS MODULE's own fresh
+    # gateway.symbol_info() fetch (finding #12), not evidence.symbol_spec.
+    gw = _demo_gateway(symbols=[_symbol_spec(filling_mode=0)])
+    evidence = _good_evidence()
     outcome = _submit(db, gw, _sequence(evidence))
     assert outcome.status == BLOCKED_BROKER_CONSTRAINT
     assert gw.order_send_calls == []
@@ -305,10 +528,20 @@ def test_no_supported_filling_mode_blocks_before_check_or_send(db):
 # --------------------------------------------------------------------------
 
 def test_done_partial_becomes_partial_never_rejected(db):
-    gw = FakeGateway(order_send_responses=[
-        OrderSendResult(retcode=10010, comment="partial fill", broker_order_id="111", broker_deal_id="222",
-                         broker_position_id=None, volume_filled=0.02, price_filled=2000.0, raw={}),
-    ])
+    # Finding #9: a resolvable PARTIAL fill must immediately become
+    # accounted LOCAL exposure -- a positions row scaled to the actual
+    # filled volume, not just a journaled event.
+    gw = _demo_gateway(
+        order_send_responses=[
+            OrderSendResult(retcode=10010, comment="partial fill", broker_order_id="111", broker_deal_id="222",
+                             broker_position_id=None, volume_filled=0.02, price_filled=2000.0, raw={}),
+        ],
+        historical_deals=[
+            HistoricalDeal(ticket=222, order=111, time=5000, type=0, entry=0, magic=0, position_id=333,
+                            volume=0.02, price=2000.0, commission=-0.1, swap=0.0, profit=0.0, fee=0.0,
+                            symbol="XAUUSDm", comment="", external_id=""),
+        ],
+    )
     outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
     assert outcome.status == PARTIAL
     assert outcome.order.state == OrderState.PARTIAL
@@ -316,9 +549,43 @@ def test_done_partial_becomes_partial_never_rejected(db):
     assert len(events) == 1
     assert events[0].payload["volume_filled"] == 0.02
 
+    # The requested volume was 0.05 with proposed_monetary_risk=20.0
+    # (see _permission_input's risk_gate_input default) -- filled 0.02 of
+    # it, so the LOCAL position's risk must be scaled proportionally, not
+    # carry the full-volume risk figure.
+    row = db.execute("SELECT * FROM positions WHERE broker_position_id = '333'").fetchone()
+    assert row is not None
+    assert row["status"] == "OPEN"
+    assert row["volume"] == pytest.approx(0.02)
+    assert row["entry_price"] == pytest.approx(2000.0)
+    assert row["initial_monetary_risk"] == pytest.approx(20.0 * 0.02 / 0.05)
+
+    opened_events = [e for e in get_chain_events(db, "chain-1") if e.event_type == "POSITION_OPENED"]
+    assert len(opened_events) == 1
+    assert opened_events[0].payload["partial"] is True
+    assert opened_events[0].payload["pending_volume"] == pytest.approx(0.03)
+
+
+def test_unresolvable_partial_fill_becomes_unknown_and_blocks_new_entries(db):
+    # No matching historical deal for broker_deal_id="222" -> the real
+    # broker position genuinely cannot be established -- this is
+    # PENDING_RECONCILIATION/UNKNOWN territory (directive section 30),
+    # never a guessed local position.
+    gw = _demo_gateway(order_send_responses=[
+        OrderSendResult(retcode=10010, comment="partial fill", broker_order_id="111", broker_deal_id="222",
+                         broker_position_id=None, volume_filled=0.02, price_filled=2000.0, raw={}),
+    ])
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
+    assert outcome.status == UNKNOWN
+    assert outcome.order.state == OrderState.UNKNOWN
+    assert db.execute("SELECT COUNT(*) AS n FROM positions").fetchone()["n"] == 0
+
+    from adaptive_scalper.execution.reconciliation import has_dangerous_unresolved_unknown
+    assert has_dangerous_unresolved_unknown(db) is True
+
 
 def test_placed_becomes_resting_never_rejected(db):
-    gw = FakeGateway(order_send_responses=[
+    gw = _demo_gateway(order_send_responses=[
         OrderSendResult(retcode=10008, comment="placed", broker_order_id="111", broker_deal_id=None,
                          broker_position_id=None, volume_filled=0.0, price_filled=None, raw={}),
     ])
@@ -328,7 +595,7 @@ def test_placed_becomes_resting_never_rejected(db):
 
 
 def test_cancel_retcode_becomes_cancelled(db):
-    gw = FakeGateway(order_send_responses=[
+    gw = _demo_gateway(order_send_responses=[
         OrderSendResult(retcode=10007, comment="cancelled", broker_order_id="111", broker_deal_id=None,
                          broker_position_id=None, volume_filled=0.0, price_filled=None, raw={}),
     ])
@@ -338,7 +605,7 @@ def test_cancel_retcode_becomes_cancelled(db):
 
 
 def test_timeout_retcode_becomes_unknown_never_blindly_resent(db):
-    gw = FakeGateway(order_send_responses=[
+    gw = _demo_gateway(order_send_responses=[
         OrderSendResult(retcode=10012, comment="timeout", broker_order_id=None, broker_deal_id=None,
                          broker_position_id=None, volume_filled=0.0, price_filled=None, raw={}),
     ])
@@ -352,7 +619,7 @@ def test_timeout_retcode_becomes_unknown_never_blindly_resent(db):
 
 
 def test_invalid_volume_retcode_becomes_rejected(db):
-    gw = FakeGateway(order_send_responses=[
+    gw = _demo_gateway(order_send_responses=[
         OrderSendResult(retcode=10014, comment="invalid volume", broker_order_id=None, broker_deal_id=None,
                          broker_position_id=None, volume_filled=0.0, price_filled=None, raw={}),
     ])
@@ -361,7 +628,7 @@ def test_invalid_volume_retcode_becomes_rejected(db):
 
 
 def test_broker_rejection_transitions_to_rejected(db):
-    gw = FakeGateway(order_send_responses=[
+    gw = _demo_gateway(order_send_responses=[
         OrderSendResult(retcode=10006, comment="rejected", broker_order_id=None, broker_deal_id=None,
                          broker_position_id=None, volume_filled=0.0, price_filled=None, raw={}),
     ])
@@ -373,7 +640,7 @@ def test_broker_rejection_transitions_to_rejected(db):
 
 
 def test_unresolvable_position_becomes_unknown_and_records_incident(db):
-    gw = FakeGateway(order_send_responses=[
+    gw = _demo_gateway(order_send_responses=[
         OrderSendResult(retcode=10009, comment="done", broker_order_id="111", broker_deal_id="222",
                          broker_position_id=None, volume_filled=0.05, price_filled=2000.0, raw={}),
     ])
@@ -390,7 +657,7 @@ def test_unresolvable_position_becomes_unknown_and_records_incident(db):
 # --------------------------------------------------------------------------
 
 def test_exact_request_never_mutated_between_check_and_send(db):
-    gw = _gw_with_tick()
+    gw = _demo_gateway()
     _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
     assert len(gw.order_send_calls) == 1
     sent = gw.order_send_calls[0]
@@ -403,7 +670,7 @@ def test_exact_request_never_mutated_between_check_and_send(db):
 
 
 def test_already_progressed_order_is_not_resubmitted(db):
-    gw = _gw_with_tick()
+    gw = _demo_gateway()
     first = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
     assert first.status == FILLED
     calls_after_first = len(gw.order_send_calls)

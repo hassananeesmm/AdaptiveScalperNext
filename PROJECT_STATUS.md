@@ -37,17 +37,35 @@ pipeline run against the live DEMO account and real market data.
 PHASE 4 (EXECUTION) exists: `order_send`/`order_check`/`positions_get`/
 `orders_get` are implemented on `Mt5Gateway`/`FakeGateway`; the order
 state machine, idempotent persistence, UNKNOWN resolution (all-evidence),
-reconciliation (real gateway truth), position-ticket resolution, a safe
-close path, and `execution/service.py` (the one execution orchestration
-service, architecturally enforced) all exist and are tested. **No real
-DEMO `order_send` has ever been performed** — this remains a deliberate
-scope boundary pending the full PAPER run and QA campaign, not a missing
+reconciliation (real gateway truth, multi-deal-aware, atomic per
+recovery), position-ticket resolution, a safe close path, a safe
+protective-stop-modification path, and `execution/service.py` (the one
+execution orchestration service, architecturally enforced) all exist and
+are tested — including two independent, freshly-refetched safety
+checkpoints immediately around every real `order_send`/`order_check`
+call (external review 2026-09-21, findings #1-3, #9, #12-16; see that
+review's fixes further down this file and in WORKLOG.md). A real FILLED
+or PARTIAL entry now immediately persists a local `positions` row scaled
+to the actual filled volume — nothing in this codebase silently drops
+partial exposure. **No real DEMO `order_send` has ever been performed
+against a live broker terminal** — this remains a deliberate scope
+boundary pending the full PAPER run and QA campaign, not a missing
 capability.
 
-PHASE 5 (position management) has adaptive-exit and re-entry DECISION
-CORES implemented and tested, but no continuous position-expectancy
-engine or runtime position-management LOOP yet (see "Current next task"
-below for the exact gap).
+PHASE 5 (position management) is implemented and tested end to end at
+the per-position-review level: continuous position expectancy
+(`position_management/expectancy.py`), the adaptive-exit and re-entry
+DECISION CORES, durable cross-restart state (`position_management
+/state_store.py`, with an immutable-value conflict guard and a degraded-
+health quarantine path for unprovable initial risk), and
+`position_management/manager.py`'s `review_position_once()` — the real
+per-position review cycle wiring all of the above together with the safe
+close/stop-modification services and the decision journal
+(`POSITION_REVIEWED`/`STOP_ADVANCED`/`POSITION_CLOSED` events). NOT yet
+built: the caller LOOP that invokes `review_position_once()` for every
+open position on a real ~0.5-1s cadence — that is part of the still-
+pending full-runtime-wiring task, not a gap in the review function
+itself.
 
 Local RAG (`adaptive_scalper/rag/`, advisory-only) and ML/self-learning
 OBSERVER-STAGE machinery (`adaptive_scalper/learning/` — lifecycle,
@@ -56,10 +74,11 @@ are both implemented and tested.
 
 NOT yet started: backtest/walk-forward/OOS, real ML training, the
 complete dashboard/CLI, the full end-to-end runtime engine, and release
-packaging. Schema version 11. See "Current next task" below for the
-authoritative list of what remains, and never infer completion of
-anything not explicitly marked IMPLEMENTED/CONNECTED/TESTED in this
-file.
+packaging. See "Schema version" below for the current schema number —
+not duplicated here to avoid exactly the staleness this note is fixing.
+See "Current next task" below for the authoritative list of what
+remains, and never infer completion of anything not explicitly marked
+IMPLEMENTED/CONNECTED/TESTED in this file.
 
 ## Completed components
 
@@ -86,8 +105,8 @@ Hard safety constants (`ALLOWED_CANONICAL_SYMBOLS`, `RETIRED_STRATEGY_KEYS`,
 ### `adaptive_scalper/persistence/` (IMPLEMENTED, CONNECTED, TESTED (fake))
 
 SQLite connection helper (WAL, foreign_keys ON) and a transactional,
-idempotent migration runner. Schema at version 8 — see "Schema version"
-below for the migration list. `tests/test_persistence.py` (7 tests) +
+idempotent migration runner — see "Schema version" below for the current
+schema number and migration list (not duplicated here). `tests/test_persistence.py` (7 tests) +
 `tests/test_migration_parser.py` (12 tests).
 
 `_split_statements()` is now built on `sqlite3.complete_statement()` —
@@ -835,17 +854,26 @@ real journal write — `ENTRY_ALLOWED`/`ENTRY_BLOCKED`, directive sections
 54-56 — so every permission decision becomes part of the traceable
 decision chain, not computed and discarded.
 
-**Honestly named gaps, not fabricated "always clean" defaults**:
-`BLOCK_RECONCILIATION`/`BLOCK_UNKNOWN_ORDER` (no execution/reconciliation
-layer yet), `BLOCK_MARGIN`/`BLOCK_BROKER_CONSTRAINT` (no live broker
-order-validation call yet), `BLOCK_DUPLICATE`/`BLOCK_REENTRY_CHURN` (no
-idempotency/position-history layer yet), `BLOCK_PORTFOLIO_RISK` (no
-distinct cluster-level heat ceiling beyond what `BLOCK_RISK`/
-`BLOCK_CORRELATION` already cover). Each is added when its real
-subsystem is built — this function does not pretend they're already
-covered. `order_send` still does not exist anywhere in this codebase;
-an `ALLOW` from this gate is necessary but not yet sufficient to submit
-an order until Phase 4's execution/idempotency/reconciliation land too.
+**Update (current state): every gate named below is now integrated.**
+`BLOCK_RECONCILIATION`/`BLOCK_UNKNOWN_ORDER`/`BLOCK_DUPLICATE`/
+`BLOCK_REENTRY_CHURN` were wired in by the execution-safety review round
+1 fixes, and `BLOCK_PORTFOLIO_RISK` by round 2 (see those sections below
+for exact detail) — this function no longer has any "always clean"
+default among its composed gates. `BLOCK_MARGIN`/`BLOCK_BROKER_CONSTRAINT`
+remain evaluated one step LATER, in `execution/service.py`, since they
+need the EXACT broker request and a fresh `order_check()` call, which by
+construction cannot happen until after this gate's `ALLOW` produces that
+exact request — this is a real architectural boundary, not a gap.
+`order_send` exists (`gateway/mt5_gateway.py`, `gateway/fake_gateway.py`)
+and is called exclusively through `execution/service.submit_new_entry()`
+for new entries (enforced by `tests/test_architecture_execution_boundary.py`)
+and through `execution/close.py`/`execution/stop_modification.py` for
+closes/protective-stop moves — an `ALLOW` from this gate is necessary but
+not sufficient on its own; the execution layer re-runs this ENTIRE gate
+fresh, twice, immediately around every real `order_send` (see
+`execution/service.py`'s section below). **No real DEMO `order_send` has
+ever actually been performed against a live broker** — see "Current
+phase" above for why that remains a deliberate scope boundary.
 
 `tests/test_final_permission.py` (23 tests): the happy path, every
 individual block reason (including the retired-strategy check firing
@@ -877,9 +905,14 @@ with the real kill switch never bypassed.
 
 ### `adaptive_scalper/execution/` — order state machine, idempotency, UNKNOWN resolution, reconciliation (IMPLEMENTED, CONNECTED, TESTED (fake), TESTED (live))
 
-Directive sections 29-31. `order_send` still does not exist anywhere in
-this codebase — this is the safety layer directive's own build order
-requires to exist FIRST, built and tested before it.
+Directive sections 29-31. This safety layer (order state machine,
+idempotency, UNKNOWN resolution, reconciliation) was built and tested
+FIRST, per the directive's own build order, before `order_send`/
+`order_check` were added to the gateway layer at all — that historical
+ordering is preserved in WORKLOG.md. `order_send` now exists and is
+called exclusively through `execution/service.py` (new entries) and
+`execution/close.py`/`execution/stop_modification.py` (closes/protective
+stops), never directly by anything else — see those modules' sections.
 
 - `state_machine.py`: `OrderState` (12 states) + `ALLOWED_TRANSITIONS`,
   the single source of truth for legal state changes. Broker
@@ -1202,16 +1235,28 @@ are now implemented and tested:
   reversal/max-holding-time full closes, peak-R persistence across
   calls, and the R-quarantine (invalid initial risk) HOLD path.
 
-NOT yet done (BUG_BACKLOG.md item 8): `review_position_once()` triggers
-real reconciliation on a close but never calls `state_store
-.record_exit_fill()` — the exit-timeline's fill_r/giveback_fill/
-realized_slippage fields stay unset even after a successful close.
-Also not yet done: the caller loop that actually INVOKES
+**Update (2026-09-21 external review, fixed)**: BUG_BACKLOG.md item 8 is
+resolved — `review_position_once()` now calls `state_store
+.record_exit_fill()` with REAL fill_r/broker_response_at_utc computed
+from the actual closing deal(s) reconciliation recovers (never a current-
+quote guess), whenever that recovery genuinely confirms this position's
+`broker_position_id`. `manager.py` also now: journals `POSITION_REVIEWED`
+on every review and `STOP_ADVANCED` on every real stop send; only records
+`request_at_utc` for outcomes that actually reached the broker
+(`close.POST_SEND_STATUSES`); and routes an unprovable
+`initial_monetary_risk` through a degraded-health quarantine
+(`state_store.record_risk_incident()`) rather than an indistinguishable
+healthy HOLD. Still not yet done: the caller loop that actually INVOKES
 `review_position_once()` per open position on a real cadence (0.5-1s
 directive) — this module is the per-position decision core, not the
 scheduler; that's part of the still-pending full-runtime-wiring task.
 
-Full suite: 916 passed, 0 failed, 0 skipped (up from 880).
+Full suite: 961 passed, 0 failed, 0 skipped (up from 916 — the 2026-09-21
+external-review fixes above added regression coverage across
+`test_execution_stop_modification.py`, `test_position_management_manager.py`,
+`test_position_management_state_store.py`, `test_execution_service.py`,
+`test_portfolio_exposure.py`, `test_request_token.py`, and
+`test_execution_reconciliation.py`).
 
 ## Execution-safety review round 1 fixes (prior checkpoint)
 
@@ -1345,19 +1390,54 @@ expectancy engine (`position_management/expectancy.py`) and a real
 portfolio-heat gate (`portfolio.exposure.evaluate_portfolio_risk_gate()`,
 wired into `core/final_permission.py` as `BLOCK_PORTFOLIO_RISK`).
 
+A further external review (2026-09-21) of `cbe16b3` found 17 more
+findings spanning `execution/stop_modification.py` (DEMO/TP/symbol-state
+not independently reverified before send), `position_management/manager.py`
+(false exit-request timestamps, no journaled `POSITION_REVIEWED`/
+`STOP_ADVANCED`, invalid-risk positions treated as a healthy HOLD,
+missing real exit-fill metrics), `position_management/state_store.py`
+(silently-accepted immutable-state conflicts), `execution/service.py`
+(critical broker/kill-switch state trusted solely from caller-supplied
+evidence; no authoritative final margin/broker recheck immediately before
+send; a resolvable/unresolvable PARTIAL fill not immediately becoming
+accounted local exposure), `portfolio/exposure.py` (pending exposure
+missing from per-symbol/currency/USD/cluster heat), `execution/
+request_token.py` (a weak prefix-slice correlation token), and
+`execution/reconciliation.py` (only the latest OUT deal recorded, no
+INOUT/OUT_BY handling, the local recovery write not atomic with its
+journal event). **All 17 are now fixed** — see WORKLOG.md for the
+detailed per-finding changes and this file's per-component sections
+(`execution/stop_modification.py`, `position_management/manager.py` and
+`state_store.py`, `execution/service.py`, `portfolio/exposure.py`,
+`execution/request_token.py`, `execution/reconciliation.py`) for current
+behavior. `execution/store.py` gained `create_local_position()` — used by
+`execution/service.py`'s FILLED and PARTIAL paths — closing a genuine
+pre-existing gap this review surfaced: nothing in this codebase had ever
+created a `positions` table row for a real (non-reconciliation-recovered)
+entry before.
+
 NOT yet done: actually WIRING the full pipeline into one real end-to-end
 runtime loop (market data → features → regime → strategies → selector →
 risk sizing → `execution.service.submit_new_entry` → position manager →
-adaptive exit → re-entry → result → RAG ingestion), real ML model
+adaptive exit → re-entry → result → RAG ingestion) — this is also what
+would populate `portfolio/exposure.py`'s `pending_positions` from real
+RESTING orders and drive `position_management/manager.py`'s
+`review_position_once()` on a real per-position cadence; real ML model
 training (the lifecycle/registry/promotion/drift machinery exists, but
 nothing yet trains a real model — needs the backtest/walk-forward
-temporal-split infrastructure first), backtest/walk-forward/OOS itself,
-the complete dashboard, and the complete CLI/launchers — all before any
+temporal-split infrastructure first); backtest/walk-forward/OOS itself;
+the complete dashboard; and the complete CLI/launchers — all before any
 real controlled-DEMO test can run. `execution/service.py`'s
 `order_check_success_retcodes` convention (`{0, 10009}`) also still needs
 live verification against the real terminal (BUG_BACKLOG.md item 5). A
 live tick-bootstrap run (currently only fake-tested + individual live
 gateway-call verification) remains a smaller open item from Phase 2.
+`execution/reconciliation.py`'s INOUT handling has a named, honest scope
+limit: it records the reducing portion of an INOUT deal as closing
+evidence but does not attempt to open a new local position for whatever
+additional exposure the same deal may have opened in the other direction
+(no canonical-symbol/strategy context exists at reconciliation time to
+attribute it) — tracked in BUG_BACKLOG.md, not silently mishandled.
 
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
@@ -1375,10 +1455,11 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-12 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+13 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
-`0011_learning`, `0012_position_management`).
+`0011_learning`, `0012_position_management`,
+`0013_position_risk_quarantine`).
 
 ## Local RAG (advisory-only)
 

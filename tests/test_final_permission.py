@@ -123,7 +123,7 @@ def _full_allow_input(**overrides) -> FinalPermissionInput:
         asset_identity=_identity_ok(),
         direction_check=_direction_ok(), execution_quote=_quote_ok(),
         news_result=_news_ok(), cost_estimate=_good_cost(),
-        open_symbols=[], correlation_matrix={},
+        open_or_pending_symbols=[], correlation_matrix={},
         risk_gate_input=_risk_input(), risk_limits=_risk_limits(),
         open_positions=[], pending_positions=[], portfolio_risk_limits=_portfolio_risk_limits(),
     )
@@ -230,7 +230,7 @@ def test_blocks_on_insufficient_expected_edge():
 def test_blocks_on_high_correlation_with_open_position():
     matrix = {("XAUUSD", "BTCUSD"): CorrelationResult(0.9, 100)}
     result = evaluate_final_permission(
-        _full_allow_input(open_symbols=["BTCUSD"], correlation_matrix=matrix)
+        _full_allow_input(open_or_pending_symbols=["BTCUSD"], correlation_matrix=matrix)
     )
     assert result.decision == "BLOCK_CORRELATION"
 
@@ -239,7 +239,7 @@ def test_blocks_on_na_correlation_with_open_position_by_default():
     # External review fix #4, exercised end to end through the composed gate.
     matrix = {("XAUUSD", "BTCUSD"): CorrelationResult(None, 3)}
     result = evaluate_final_permission(
-        _full_allow_input(open_symbols=["BTCUSD"], correlation_matrix=matrix)
+        _full_allow_input(open_or_pending_symbols=["BTCUSD"], correlation_matrix=matrix)
     )
     assert result.decision == "BLOCK_CORRELATION"
 

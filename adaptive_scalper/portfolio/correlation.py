@@ -77,7 +77,7 @@ ALLOW = "ALLOW"
 
 def evaluate_correlation_gate(
     proposed_symbol: str,
-    open_symbols: list[str],
+    open_or_pending_symbols: list[str],
     correlation_matrix: dict[tuple[str, str], CorrelationResult],
     high_correlation_threshold: float = 0.7,
     *,
@@ -103,13 +103,13 @@ def evaluate_correlation_gate(
     exploratory/offline analysis that isn't gating a real trading
     decision, never for the live permission path.
 
-    When `open_symbols` is empty, there is nothing to be correlated
+    When `open_or_pending_symbols` is empty, there is nothing to be correlated
     WITH, so missing data is never blocking regardless of this flag.
     """
-    if not open_symbols:
+    if not open_or_pending_symbols:
         return ALLOW, "no open/pending positions to correlate against"
 
-    for other in open_symbols:
+    for other in open_or_pending_symbols:
         if other == proposed_symbol:
             continue
         result = correlation_matrix.get((proposed_symbol, other), CorrelationResult(None, 0))

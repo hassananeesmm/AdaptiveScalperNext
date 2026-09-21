@@ -1375,3 +1375,105 @@ EXECUTION" sections):
   close — needs a reconciliation-driven follow-up.
 
 Full suite: 916 passed, 0 failed, 0 skipped (up from 880).
+
+## Session: external-review safety checkpoint (17 findings), resumed from cbe16b3
+
+Resumed per the mission prompt's explicit instruction to fix the latest
+external review findings before any further PAPER/DEMO work. Inspected
+`git status`/`git log`/`git diff` first (clean, `cbe16b3` HEAD, matching
+the mission's "latest confirmed pushed commit") and reread CLAUDE.md,
+MASTER_BUILD_DIRECTIVE.md, PROJECT_STATUS.md, WORKLOG.md, BUG_BACKLOG.md
+before making any change, per the mission's "DO NOT RESTART" instructions.
+
+All 17 findings from the external review of `cbe16b3` are now fixed —
+full per-finding detail is in BUG_BACKLOG.md's "Fixed" section (search
+"17 findings before PAPER/controlled-DEMO validation"); summary:
+
+1-3. `execution/stop_modification.py` rewritten so BOTH rounds (before
+   `order_check` and immediately before `order_send`) are identical:
+   independent fresh DEMO/kill-switch-adjacent verification, fresh
+   `symbol_info`/`symbol_info_tick` (trade mode, stops level, freeze
+   level, execution-grade quote freshness), and the take-profit/stop
+   values rebuilt from the FRESH round-2 position snapshot rather than
+   reused from round 1. A changed request is `order_check`ed again before
+   send. 21 tests (up from 12).
+4. `position_management/manager.py` only records `request_at_utc` for
+   `close.POST_SEND_STATUSES` (`SENT`/`REJECTED`/`UNKNOWN`) — a pre-send
+   block (`NOT_DEMO`/`ALREADY_CLOSED`/`VOLUME_MISMATCH`/
+   `BROKER_CONSTRAINT`) never fabricates a request timestamp.
+5. `state_store.get_or_create_state()` raises `PositionStateConflictError`
+   on a conflicting repeat call and validates `initial_monetary_risk` is
+   positive/finite before ever writing a row.
+6. An invalid initial risk now routes through a NEW degraded-health
+   quarantine path (`position_risk_incidents` table, migration
+   `0013_position_risk_quarantine`, schema now 13) — `record_risk_incident()`,
+   idempotent per-position while unresolved — rather than an
+   indistinguishable healthy HOLD.
+7. `manager.py` now journals `POSITION_REVIEWED` on every review and
+   `STOP_ADVANCED` on every real stop send (its own `position-review:
+   {id}` chain); `POSITION_CLOSED` was already journaled by
+   reconciliation recovery and now carries the full multi-deal aggregate
+   (see 15 below).
+8. `manager.py` now calls `state_store.record_exit_fill()` with REAL
+   fill_r/broker_response_at_utc computed from the actual closing
+   deal(s) reconciliation recovers — closes BUG_BACKLOG.md's previously
+   open item 8.
+9. A resolvable `PARTIAL` fill in `execution/service.py` now resolves its
+   real broker position (same broker-history lookup the DONE path uses)
+   and immediately persists a `positions` row scaled to the ACTUAL filled
+   volume; an unresolvable one becomes `UNKNOWN`/`PENDING_RECONCILIATION`
+   and blocks new entries via the same `UNKNOWN_OUTCOME` incident path
+   every other unresolved case uses. Investigating this surfaced a
+   genuine pre-existing gap: nothing in this codebase had EVER created a
+   `positions` table row for a normal FILLED entry either — fixed too,
+   via new `execution/store.create_local_position()` (idempotent on
+   `broker_position_id`), used by both the FILLED and PARTIAL paths.
+10-11. `portfolio/exposure.py`'s `compute_exposure()` now folds
+   `pending_positions` into per-symbol/currency-direction/USD/
+   positions-per-symbol heat, not just the total-risk sum (a resting
+   order previously only counted toward the total ceiling, invisible to
+   every other heat dimension). `correlated_cluster_exposure()`'s
+   misleadingly-named local `open_symbols` var renamed
+   `symbols_with_exposure`; `open_symbols` renamed `open_or_pending_symbols`
+   across `core/final_permission.py`/`portfolio/correlation.py`.
+12. `execution/service.py` gained `_verify_critical_broker_state()`:
+   this execution boundary now directly re-fetches account_info/
+   terminal_info (via `verify_demo_before_order`), the REAL persisted
+   kill-switch state (`core.kill_switch.get_state()`), and
+   symbol_info/symbol_info_tick itself, called independently before
+   `order_check` and again immediately before `order_send` — never
+   solely trusted from a caller-supplied `FreshEvidence`, which could
+   return the same cached object on both calls.
+13. A second `order_check()` of the SAME exact request, plus a fresh
+   `margin_free` comparison against THIS module's own fresh
+   `account_info()`, now runs immediately before every `order_send` — the
+   authoritative final margin/broker recheck.
+14. `execution/request_token.py`'s `request_token()` now derives an
+   `ASN:<16-hex-char SHA-256 prefix>` token from the FULL
+   `client_request_id` — the old `client_request_id[:16]` prefix slice
+   could collide whenever two distinct ids shared a common prefix (a real
+   risk for structured id schemes).
+15. `execution/reconciliation.py` gained `find_closing_deals()` (plural):
+   every OUT/INOUT/OUT_BY deal for a position, oldest first — not just
+   the latest OUT. `_recover_missing_local_position()` now records EVERY
+   deal, aggregates volume/commission/swap/profit across all of them for
+   the journaled totals, and resolves each deal's local `order_id` from a
+   REAL matching `orders` row (or NULL when unprovable) instead of
+   falsely reusing the position's entry order id.
+16. The position update, every deal insert, and the `POSITION_CLOSED`
+   journal event for one reconciliation recovery are now ONE atomic
+   transaction — `journal/events.py` gained `_append_event_locked()` (the
+   same insert `append_event()` does, minus its own `BEGIN IMMEDIATE`, for
+   a caller that already holds the write lock).
+17. `PROJECT_STATUS.md`'s stale statements fixed: Phase 5 now correctly
+   describes the existing continuous-expectancy engine and
+   `manager.review_position_once()` loop core (only the outer scheduler
+   is still pending); the hardcoded "Schema version 11"/"Schema at
+   version 8" mentions replaced with pointers to the single authoritative
+   "Schema version" section (now 13); the two "`order_send` still does
+   not exist anywhere in this codebase" paragraphs (left over from before
+   Phase 4 was built) rewritten to describe current reality.
+
+Full suite: 961 passed, 0 failed, 0 skipped (up from 916). No secrets,
+credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
+for commit (verified via `git status`/`git diff` before committing).

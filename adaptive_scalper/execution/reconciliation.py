@@ -49,7 +49,7 @@ from dataclasses import dataclass
 
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.types import HistoricalDeal
-from adaptive_scalper.journal.events import append_event
+from adaptive_scalper.journal.events import _append_event_locked, append_event
 
 ORPHAN_BROKER_POSITION = "ORPHAN_BROKER_POSITION"
 MISSING_LOCAL_POSITION = "MISSING_LOCAL_POSITION"
@@ -215,50 +215,124 @@ def classify_reconciliation(findings: list[ReconciliationFinding]) -> str:
 
 
 # MT5 ENUM_DEAL_ENTRY: 0=IN (opened), 1=OUT (closed), 2=INOUT, 3=OUT_BY.
+# External review finding #15: OUT is not the only deal entry that
+# reduces/closes a position. INOUT (a netting-account deal that both
+# reduces existing exposure AND opens new exposure in one atomic broker
+# operation) and OUT_BY (a hedging-account deal that closes one position
+# by an exactly opposite one) are both real, closing-relevant evidence —
+# treating only OUT as "a close" would silently miss real exits.
 _DEAL_ENTRY_OUT = 1
+_DEAL_ENTRY_INOUT = 2
+_DEAL_ENTRY_OUT_BY = 3
+_CLOSING_DEAL_ENTRIES = frozenset({_DEAL_ENTRY_OUT, _DEAL_ENTRY_INOUT, _DEAL_ENTRY_OUT_BY})
+
+
+def find_closing_deals(
+    gateway: Gateway, broker_position_id: str, window_from_utc: int, window_to_utc: int,
+) -> list[HistoricalDeal]:
+    """EVERY closing-relevant deal (OUT/INOUT/OUT_BY) for
+    `broker_position_id` in the given window, oldest first — never just
+    the latest (external review finding #15: a position can close across
+    several partial-close deals, and storing only the last one silently
+    drops the others' commission/swap/profit from the local record).
+    Never a guess, never the current market price standing in for a
+    historical exit.
+
+    Honest scope note on INOUT: this function returns INOUT deals as
+    CLOSING evidence for the reduced portion of `broker_position_id`'s
+    exposure. It does not attempt to split out and open a NEW local
+    position for whatever additional exposure the same INOUT deal may
+    have opened in the other direction — that remains a named gap (no
+    canonical-symbol/strategy context exists at reconciliation time to
+    attribute a freshly-opened position to), tracked in BUG_BACKLOG.md
+    rather than silently mishandled."""
+    deals = gateway.history_deals_get(window_from_utc, window_to_utc)
+    matching = [
+        d for d in deals if str(d.position_id) == str(broker_position_id) and d.entry in _CLOSING_DEAL_ENTRIES
+    ]
+    return sorted(matching, key=lambda d: d.time)
 
 
 def find_closing_deal(
     gateway: Gateway, broker_position_id: str, window_from_utc: int, window_to_utc: int,
 ) -> HistoricalDeal | None:
-    """The authoritative closing deal for `broker_position_id`, if broker
-    history has one in the given window — never a guess, never the
-    current market price standing in for a historical exit. If more than
-    one OUT deal matches (partial closes), the LATEST one is treated as
-    the final close (its `price`/`time` are what the local record's
-    close is repaired from; a full accounting of every partial close
-    remains a named gap — see BUG_BACKLOG.md)."""
-    deals = gateway.history_deals_get(window_from_utc, window_to_utc)
-    matching = [d for d in deals if str(d.position_id) == str(broker_position_id) and d.entry == _DEAL_ENTRY_OUT]
-    if not matching:
+    """The single LATEST closing-relevant deal, or `None` — a convenience
+    wrapper over `find_closing_deals()` for callers that only need "the"
+    final close moment (e.g. its `price`/`time`), not the full accounting.
+    `run_reconciliation()` itself uses the plural function so every deal
+    is actually recorded, not just this one."""
+    deals = find_closing_deals(gateway, broker_position_id, window_from_utc, window_to_utc)
+    return deals[-1] if deals else None
+
+
+def _local_order_id_for_broker_order(conn: sqlite3.Connection, broker_order_id: str | None) -> int | None:
+    """Never falsely links a broker deal to a local order row (external
+    review finding #15): returns the local `orders.id` ONLY when a row
+    genuinely exists for that exact broker order ticket; `None`
+    (persisted as SQL NULL) when it cannot be proven — never the
+    position's ENTRY order id standing in for a close it didn't create."""
+    if not broker_order_id:
         return None
-    return max(matching, key=lambda d: d.time)
+    row = conn.execute("SELECT id FROM orders WHERE broker_order_id = ?", (str(broker_order_id),)).fetchone()
+    return row["id"] if row is not None else None
 
 
 def _recover_missing_local_position(
-    conn: sqlite3.Connection, local: LocalPositionRecord, closing_deal: HistoricalDeal, now_utc: int,
+    conn: sqlite3.Connection, local: LocalPositionRecord, closing_deals: list[HistoricalDeal], chain_key: str,
 ) -> None:
-    """Atomically repairs local state from a REAL broker closing deal —
-    marks the position CLOSED with its actual close time, records the
-    deal, and journals POSITION_CLOSED. Never called with a fabricated
-    or current-market-price stand-in for `closing_deal`."""
+    """Atomically repairs local state from EVERY real broker closing deal
+    for this position — marks the position CLOSED at the LATEST deal's
+    time, records EACH deal (never just the last one), and journals ONE
+    aggregated POSITION_CLOSED event — all in a SINGLE transaction
+    (external review finding #16: broker truth being observed must not
+    leave local SQLite recording half-applied between the position
+    update, its deal rows, and the journal record of the same recovery).
+    Never called with fabricated or current-market-price deals."""
+    if not closing_deals:
+        raise ValueError("_recover_missing_local_position() requires at least one closing deal")
+
+    latest = closing_deals[-1]
     conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute(
             "UPDATE positions SET status = 'CLOSED', closed_at_utc = ? WHERE id = ?",
-            (closing_deal.time, local.id),
+            (latest.time, local.id),
         )
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO deals
-                (order_id, broker_deal_id, broker_position_id, price, volume, commission, swap, profit, occurred_at_utc)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                local.entry_order_id, str(closing_deal.ticket), local.broker_position_id, closing_deal.price,
-                closing_deal.volume, closing_deal.commission, closing_deal.swap, closing_deal.profit,
-                closing_deal.time,
-            ),
+        for deal in closing_deals:
+            order_id = _local_order_id_for_broker_order(conn, str(deal.order) if deal.order else None)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO deals
+                    (order_id, broker_deal_id, broker_position_id, price, volume, commission, swap, profit, occurred_at_utc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order_id, str(deal.ticket), local.broker_position_id, deal.price,
+                    deal.volume, deal.commission, deal.swap, deal.profit, deal.time,
+                ),
+            )
+
+        position_chain_key = f"{chain_key}:position:{local.broker_position_id}"
+        _append_event_locked(
+            conn, position_chain_key, "POSITION_CLOSED", latest.time, local.canonical_symbol,
+            {
+                "reason": "reconciliation recovery from broker history",
+                "deal_count": len(closing_deals),
+                "price": latest.price,
+                "total_volume": sum(d.volume for d in closing_deals),
+                "total_commission": sum(d.commission for d in closing_deals),
+                "total_swap": sum(d.swap for d in closing_deals),
+                "total_profit": sum(d.profit for d in closing_deals),
+                "deals": [
+                    {
+                        "ticket": d.ticket, "entry": d.entry, "price": d.price, "volume": d.volume,
+                        "commission": d.commission, "swap": d.swap, "profit": d.profit, "time": d.time,
+                    }
+                    for d in closing_deals
+                ],
+            },
+            strategy_key=local.strategy_key, broker_position_id=local.broker_position_id,
+            broker_deal_id=str(latest.ticket),
         )
         conn.execute("COMMIT")
     except sqlite3.Error:
@@ -314,32 +388,26 @@ def run_reconciliation(
             blocking_findings.append(f)
             continue
         local = local_positions[f.broker_position_id]
-        closing_deal = find_closing_deal(
+        # ALL closing-relevant deals (OUT/INOUT/OUT_BY), not just the
+        # latest (finding #15) — a position can close across several
+        # partial-close deals, and every one of them is real cost/profit.
+        closing_deals = find_closing_deals(
             gateway, f.broker_position_id, local.opened_at_utc, now + history_lookback_seconds,
         )
-        if closing_deal is None:
+        if not closing_deals:
             unrepaired_ids.append(f.broker_position_id)
             blocking_findings.append(f)
             continue
-        _recover_missing_local_position(conn, local, closing_deal, now)
+        # Position update + every deal row + the POSITION_CLOSED journal
+        # event for this recovery are ONE atomic transaction (finding
+        # #16) — _recover_missing_local_position() itself journals under
+        # a per-position sub-chain (a chain_key maps to exactly one
+        # canonical_symbol for its lifetime — journal.events
+        # .get_or_create_chain enforces this — and this run's own
+        # chain_key is tied to the account-wide RECONCILIATION
+        # pseudo-symbol, not any one position's real symbol).
+        _recover_missing_local_position(conn, local, closing_deals, chain_key)
         recovered_ids.append(f.broker_position_id)
-        # POSITION_CLOSED concerns one specific symbol; the reconciliation
-        # run's own chain_key is tied to the account-wide RECONCILIATION
-        # pseudo-symbol (a chain_key maps to exactly one canonical_symbol
-        # for its lifetime — journal.events.get_or_create_chain enforces
-        # this), so this event gets its own per-position sub-chain rather
-        # than reusing chain_key.
-        position_chain_key = f"{chain_key}:position:{local.broker_position_id}"
-        append_event(
-            conn, position_chain_key, "POSITION_CLOSED", closing_deal.time, local.canonical_symbol,
-            {
-                "reason": "reconciliation recovery from broker history", "price": closing_deal.price,
-                "volume": closing_deal.volume, "commission": closing_deal.commission,
-                "swap": closing_deal.swap, "profit": closing_deal.profit,
-            },
-            strategy_key=local.strategy_key, broker_position_id=local.broker_position_id,
-            broker_deal_id=str(closing_deal.ticket),
-        )
 
     for f in blocking_findings:
         record_incident(conn, f.finding_type, f.detail, now_utc=now)

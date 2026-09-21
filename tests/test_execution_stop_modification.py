@@ -81,7 +81,7 @@ def _open_position(gw: FakeGateway, direction: str = "BUY", volume: float = 0.05
 def _modify(gw, ticket, **overrides):
     defaults = dict(
         broker_position_id=ticket, expected_direction="BUY", expected_volume=0.05, broker_symbol="XAUUSDm",
-        proposed_stop_price=1995.0,
+        proposed_stop_price=1995.0, now=5000.0,  # matches _tick()'s default time=5000 -> age 0, always fresh
     )
     defaults.update(overrides)
     return modify_protective_stop_safely(gw, **defaults)
@@ -228,3 +228,138 @@ def test_definitive_rejection_reports_rejected():
     ]
     outcome = _modify(gw, ticket, proposed_stop_price=1990.0)
     assert outcome.status == REJECTED
+
+
+# --- External review findings (2026-09-21): DEMO/TP/symbol-state must be
+# reverified INDEPENDENTLY immediately before send, not reused from the
+# order_check round. ---
+
+
+def test_account_switches_to_real_between_check_and_send_blocks_send():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", stop_loss=0.0)
+    calls_before = len(gw.order_send_calls)
+
+    original_account_info = gw.account_info
+    calls = {"n": 0}
+
+    def flaky_account_info():
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _demo_account(trade_mode=TradeMode.REAL)
+        return original_account_info()
+
+    gw.account_info = flaky_account_info
+    outcome = _modify(gw, ticket, proposed_stop_price=1990.0)
+    assert outcome.status == NOT_DEMO
+    # DEMO on first check, REAL on final check => zero SLTP order_send calls
+    assert len(gw.order_send_calls) == calls_before
+
+
+def test_terminal_trading_disabled_between_check_and_send_blocks_send():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", stop_loss=0.0)
+    calls_before = len(gw.order_send_calls)
+
+    original_terminal_info = gw.terminal_info
+    calls = {"n": 0}
+
+    def flaky_terminal_info():
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _demo_terminal(trade_allowed=False)
+        return original_terminal_info()
+
+    gw.terminal_info = flaky_terminal_info
+    outcome = _modify(gw, ticket, proposed_stop_price=1990.0)
+    assert outcome.status == NOT_DEMO
+    assert len(gw.order_send_calls) == calls_before
+
+
+def test_tp_refreshed_before_send_never_sends_stale_tp():
+    gw = _demo_gateway()
+    gw.order_send(OrderRequest(
+        action=OrderAction.DEAL, symbol="XAUUSDm", direction="BUY", volume=0.05, price=2000.0,
+        stop_loss=0.0, take_profit=2050.0,
+    ))
+    ticket = gw.positions_get()[0].broker_position_id
+
+    original_positions_get = gw.positions_get
+    original_order_check = gw.order_check
+    calls = {"n": 0}
+    order_check_calls = []
+
+    def flaky_positions_get():
+        calls["n"] += 1
+        positions = original_positions_get()
+        if calls["n"] >= 2 and positions:
+            import dataclasses
+            positions[0] = dataclasses.replace(positions[0], take_profit=2060.0)  # TP moved between rounds
+        return positions
+
+    def counting_order_check(request):
+        order_check_calls.append(request)
+        return original_order_check(request)
+
+    gw.positions_get = flaky_positions_get
+    gw.order_check = counting_order_check
+
+    outcome = _modify(gw, ticket, proposed_stop_price=1990.0)
+    assert outcome.status == SENT
+    # the request actually SENT carries the fresh round-2 TP, never round 1's stale value
+    assert gw.order_send_calls[-1].take_profit == 2060.0
+    # the rebuilt (changed) request was independently order_check'd before send
+    assert len(order_check_calls) == 2
+    assert order_check_calls[0].take_profit == 2050.0
+    assert order_check_calls[1].take_profit == 2060.0
+
+
+def test_symbol_disabled_between_check_and_send_blocks_send():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", stop_loss=0.0)
+    calls_before = len(gw.order_send_calls)
+
+    original_symbol_info = gw.symbol_info
+    calls = {"n": 0}
+
+    def flaky_symbol_info(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _symbol_spec(trade_mode=SymbolTradeMode.DISABLED)
+        return original_symbol_info(name)
+
+    gw.symbol_info = flaky_symbol_info
+    outcome = _modify(gw, ticket, proposed_stop_price=1990.0)
+    assert outcome.status == BROKER_CONSTRAINT
+    assert len(gw.order_send_calls) == calls_before
+
+
+def test_stale_quote_between_check_and_send_blocks_send():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", stop_loss=0.0)
+    calls_before = len(gw.order_send_calls)
+
+    original_symbol_info_tick = gw.symbol_info_tick
+    calls = {"n": 0}
+
+    def flaky_tick(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _tick(time=1)  # far in the past relative to now=5000.0 -> stale
+        return original_symbol_info_tick(name)
+
+    gw.symbol_info_tick = flaky_tick
+    outcome = _modify(gw, ticket, proposed_stop_price=1990.0)
+    assert outcome.status == NO_QUOTE
+    assert len(gw.order_send_calls) == calls_before
+
+
+def test_freeze_level_blocks_too_close_stop():
+    gw = _demo_gateway(symbols=[_symbol_spec(trade_stops_level=0, trade_freeze_level=50)])
+    ticket = _open_position(gw, direction="BUY", stop_loss=0.0)
+    calls_before = len(gw.order_send_calls)
+    # freeze_level=50 points * point=0.01 = 0.50 min distance; bid=2000.0,
+    # proposed stop=1999.9 -> distance=0.10 < 0.50
+    outcome = _modify(gw, ticket, proposed_stop_price=1999.9)
+    assert outcome.status == TOO_CLOSE_TO_PRICE
+    assert len(gw.order_send_calls) == calls_before
