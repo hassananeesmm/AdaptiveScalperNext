@@ -1460,11 +1460,12 @@ adaptive exit → re-entry → result → RAG ingestion) — this is also what
 would populate `portfolio/exposure.py`'s `pending_positions` from real
 RESTING orders and drive `position_management/manager.py`'s
 `review_position_once()` on a real per-position cadence; real ML model
-training (the lifecycle/registry/promotion/drift machinery exists, but
-nothing yet trains a real model — needs the backtest/walk-forward
-temporal-split infrastructure first); backtest/walk-forward/OOS itself;
-the complete dashboard; and the complete CLI/launchers — all before any
-real controlled-DEMO test can run. `execution/service.py`'s
+training (the lifecycle/registry/promotion/drift machinery exists, and
+the backtest/walk-forward temporal-split infrastructure it needs now
+exists too — see "Backtest / walk-forward / OOS / Monte Carlo
+infrastructure" below — but nothing yet trains a real model on it); the
+complete dashboard; and the complete CLI/launchers — all before any real
+controlled-DEMO test can run. `execution/service.py`'s
 `order_check_success_retcodes` convention (`{0, 10009}`) also still needs
 live verification against the real terminal (BUG_BACKLOG.md item 5). A
 live tick-bootstrap run (currently only fake-tested + individual live
@@ -1479,6 +1480,21 @@ attribute it) — tracked in BUG_BACKLOG.md, not silently mishandled.
 See BUG_BACKLOG.md and this file's per-component notes for exactly what
 is and isn't done; do not infer completion of anything not explicitly
 marked IMPLEMENTED/CONNECTED/TESTED above.
+
+## Backtest / walk-forward / OOS / Monte Carlo infrastructure (directive section 80)
+
+`adaptive_scalper/backtest/` and `adaptive_scalper/simulation/` — IMPLEMENTED, TESTED (fake, 48 tests: 10 engine, 9 walk-forward, 6 OOS, 10 Monte Carlo, 3 persistence, plus fill-model's own 10). No live/DEMO involvement anywhere in this subsystem — pure historical-bar replay.
+
+- `simulation/fill_model.py` — `simulate_fill()` (spread+slippage-aware fill at a bar's `open`, the causal no-lookahead reference price), `round_trip_commission_price()`/`money_from_price_distance()` (share `costs.model`'s PRICE-unit conversion so simulated and live costs are directly comparable). `FillAssumptions` has no free zero defaults (matches `costs.model.estimate_cost`'s convention). Shared by both the backtest engine and the (still-pending) PAPER engine so fill/cost assumptions are defined once.
+- `simulation/types.py` — `EvidenceOrigin` enum (`BROKER_DEMO_CONFIRMED`/`PAPER_LIVE_DATA`/`BROKER_ACCOUNT_HISTORY`/`HISTORICAL_MT5_REPLAY`/`BACKTEST`/`SIMULATED`/`IMPORTED`/`UNVERIFIED`) and `NON_LIVE_ORIGINS` — every simulated result anywhere in this codebase is labeled with which of these it is, never silently presented as live.
+- `backtest/engine.py` — `run_backtest()`, the single-shot causal engine. Walks bars forward-only; a signal computed from bar `i`'s close cannot fill before bar `i+1`'s open. Reuses the SAME production decision cores the live system will use (`strategies.registry`, `regimes.classifier`, `selector.select_proposal`, `costs.model`/`costs.edge`, `position_management.expectancy`/`adaptive_exit`, `risk.governor.calculate_safe_volume`) rather than a parallel reimplementation. OHLC-only same-bar SL/TP ambiguity is resolved conservatively (stop assumed hit first). Directive section 81's historical-news limitation is honestly recorded in `BacktestResult.news_limitation_note` whenever no point-in-time `news_windows` were supplied. Named scope limit: single symbol per run (no cross-symbol portfolio-heat gating yet — depends on the multi-symbol runtime loop, still pending).
+- `backtest/dataset.py` — `DatasetSnapshot`/`build_dataset_snapshot()`/`compute_bars_checksum()` (SHA-256 over the exact bar sequence — content-derived, so identical data always resolves to the identical `dataset_id`), `record_dataset()`/`record_dataset_usage()`/`has_dataset_been_used_as()` against migration `0014_backtest`'s `datasets`/`dataset_usage` tables (directive section 65's dataset-integrity/usage ledger).
+- `backtest/persistence.py` — `record_backtest_run()`: idempotent-on-`run_id` durable recording of a run's dataset, dataset-usage, `backtest_runs` row, and every `backtest_trades` row. `run_backtest()` itself stays pure/DB-free; persistence is an explicit opt-in a caller passes a real connection into.
+- `backtest/walk_forward.py` — `run_walk_forward()`: N sequential, non-overlapping, optionally-embargoed folds, each an independent `run_backtest()` call walked forward in time (never shuffled — shuffling a time series would leak a later fold's characteristics into an earlier one's decisions). Named scope limit: each fold's feature engine warms up fresh at that fold's own start rather than reaching into a prior fold's bars, so a fold can never depend on data outside its own declared range. `embargo_bars` drops a purge gap between consecutive folds. Persists each fold as a `WALK_FORWARD_FOLD` run when given a connection.
+- `backtest/oos.py` — `run_untouched_oos()`: the only sanctioned way to run genuine OOS validation. Fails closed with `DatasetContaminatedError` if the exact (content-checksummed) bar range was ever previously used for `TRAINING`/`VALIDATION`/`WALK_FORWARD_FOLD`, or already spent as `OOS` once before (repeat use defeats the point of a holdout) unless `allow_oos_reuse=True` is passed explicitly.
+- `backtest/monte_carlo.py` — `run_monte_carlo()`: trade-ORDER resampling (random permutation, never resampling-with-replacement, which would fabricate outcomes that never happened) over a completed run's REALIZED P/L sequence. Deterministic given the same `seed` (a documented `random.Random(seed)` instance, no hidden global RNG state). Reports final-equity/max-drawdown distributions (mean/median/p5/p95/min/max) and probability of ruin (equity ever touching `ruin_equity_fraction * initial_equity`).
+
+NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracked under the pending CLI/dashboard tasks); nothing has run this against REAL historical bars yet (only synthetic bars in tests) — a real run needs `history/store.get_bars()` (added this checkpoint) to pull an actual bootstrapped range; ML training (PHASE 10) is the next consumer of this infrastructure and hasn't been built yet.
 
 ## Current git commit
 

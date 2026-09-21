@@ -1578,3 +1578,89 @@ Full per-finding detail is in BUG_BACKLOG.md's "Fixed" section (search
 Full suite: 1024 passed, 0 failed, 0 skipped (up from 961). No secrets,
 credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
 for commit (verified via `git status`/`git diff` before committing).
+
+## Session: backtest / walk-forward / OOS / Monte Carlo infrastructure
+## (directive section 80), resumed per mission's "continue automatically"
+
+Resumed the paused backtest work (`adaptive_scalper/backtest/engine.py`
+was written but untested going into the NF1-16 checkpoint) per the
+mission's explicit "do not stop after pushing" instruction.
+
+First verified `engine.py`'s wiring against every production decision
+core it calls (`compute_bar_features`, `classify_regime`/`RegimeTracker`,
+`select_proposal`, `calculate_safe_volume`, `estimate_cost`,
+`evaluate_position_expectancy`, `evaluate_adaptive_exit`/
+`compute_current_r`/`resolve_new_stop_price`) by reading each real
+signature and return type, then proved it end to end with new
+`tests/test_backtest_engine.py` (10 tests) against deterministic
+synthetic bar series (a clean uptrend/downtrend for a reliable
+`momentum_continuation` fire, and a flat series to prove zero trades and
+no crash): entries only in the trend's direction, every trade force-
+closed by the end of the range, `final_equity` exactly reconciling
+against the sum of realized trade P/L, a monotonically-increasing-in-
+time equity curve, determinism (same input -> byte-identical output),
+the `news_limitation_note` honesty check, and the `ValueError` on too few
+bars. All 10 passed on the first run, giving real confidence the engine
+was correctly wired, not just syntactically valid.
+
+Then built the three pieces `run_backtest()` alone doesn't cover:
+
+- `backtest/persistence.py`: `record_backtest_run()` — idempotent-on-
+  `run_id` durable recording of a run's dataset (via `dataset.py`'s
+  existing `build_dataset_snapshot()`/`record_dataset()`), dataset-usage,
+  `backtest_runs` row, and every `backtest_trades` row (migration
+  `0014_backtest`, already created but never actually written to before
+  this). `run_backtest()` itself deliberately stays pure/DB-free;
+  persistence is an explicit per-caller opt-in.
+- `backtest/walk_forward.py`: `run_walk_forward()` — N sequential, non-
+  overlapping (optionally `embargo_bars`-separated) folds, each an
+  independent `run_backtest()` call walked forward in time, never
+  shuffled (shuffling would leak a later fold's characteristics into an
+  earlier fold's decisions, which directive section 80's "NO LOOKAHEAD"
+  forbids). Named scope limit documented in the module docstring: each
+  fold's feature engine warms up fresh at its own start rather than
+  reaching into a prior fold's bars. Aggregate metrics pool every fold's
+  trades in chronological order via `engine._compute_metrics()` (reused,
+  not reimplemented).
+- `backtest/oos.py`: `run_untouched_oos()` — the only sanctioned way to
+  run genuine out-of-sample validation (directive section 65: "An OOS
+  dataset that influenced design is no longer untouched"). Checks
+  `dataset.has_dataset_been_used_as()` against the content-checksummed
+  dataset BEFORE running anything; raises `DatasetContaminatedError` if
+  the exact range was ever used for `TRAINING`/`VALIDATION`/
+  `WALK_FORWARD_FOLD`, or already spent as `OOS` once before (unless
+  `allow_oos_reuse=True` is passed explicitly — a deliberate, named
+  escape hatch, not a silent default).
+- `backtest/monte_carlo.py`: `run_monte_carlo()` — trade-ORDER
+  resampling (random permutation of the REALIZED P/L multiset, never
+  resampling-with-replacement, which would fabricate trade outcomes that
+  never happened) over a completed run's trades. Deterministic given the
+  same `seed` (`random.Random(seed)`, never hidden global RNG state).
+  Reports final-equity/max-drawdown distribution stats and probability of
+  ruin (equity ever touching `ruin_equity_fraction * initial_equity`).
+
+New `tests/test_backtest_walk_forward.py` (9), `tests/test_backtest_oos.py`
+(6), `tests/test_backtest_monte_carlo.py` (10), `tests/test_backtest_
+persistence.py` (3) — 38 new tests total this session, covering: fold
+ordering/non-overlap/embargo widening/too-few-bars rejection,
+walk-forward persistence idempotency, OOS contamination refusal (by
+prior TRAINING use, by prior WALK_FORWARD_FOLD use, by OOS-already-spent,
+and the explicit reuse escape hatch), OOS non-interference across
+genuinely different datasets, Monte Carlo determinism/seed-sensitivity/
+sum-invariance-across-permutations/ruin-probability edge cases, and
+dataset-row reuse (same bars, two different `used_for` purposes, one
+dataset row) for direct persistence calls.
+
+`adaptive_scalper/backtest/__init__.py` added (the package existed as an
+implicit namespace package before this — now has a real docstring
+summarizing every submodule's role, matching `simulation/__init__.py`'s
+existing style).
+
+PROJECT_STATUS.md gained a new "Backtest / walk-forward / OOS / Monte
+Carlo infrastructure" section describing all of the above; the prior
+"NOT yet done" paragraph's "backtest/walk-forward/OOS itself" line
+removed now that it exists.
+
+Full suite: 1062 passed, 0 failed, 0 skipped (up from 1024). No secrets,
+credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
+for commit (verified via `git status`/`git diff` before committing).

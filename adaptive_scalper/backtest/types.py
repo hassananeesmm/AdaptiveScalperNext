@@ -91,3 +91,43 @@ class BacktestResult:
     origin: EvidenceOrigin = EvidenceOrigin.BACKTEST
     news_limitation_note: str | None = None
     config: BacktestConfig | None = None
+
+
+@dataclass(frozen=True)
+class WalkForwardFold:
+    fold_index: int
+    range_start_utc: int
+    range_end_utc: int
+    result: BacktestResult
+
+
+@dataclass(frozen=True)
+class WalkForwardResult:
+    canonical_symbol: str
+    resolution: str
+    folds: tuple[WalkForwardFold, ...]
+    # Metrics pooled across every fold's trades -- "does the strategy set
+    # hold up walking forward through time", not just one lucky window.
+    aggregate_metrics: BacktestMetrics
+    embargo_bars: int
+
+
+@dataclass(frozen=True)
+class DistributionStats:
+    mean: float
+    median: float
+    p5: float
+    p95: float
+    minimum: float
+    maximum: float
+
+
+@dataclass(frozen=True)
+class MonteCarloResult:
+    n_simulations: int
+    seed: int
+    initial_equity: float
+    final_equity: DistributionStats
+    max_drawdown: DistributionStats
+    probability_of_ruin: float
+    ruin_equity_fraction: float
