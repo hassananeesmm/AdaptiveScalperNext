@@ -100,6 +100,31 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~[SEVERITY: HIGH, SUBSYSTEM: backtest/paper] While building PAPER mode
+  (directive section 132), `run_backtest()` was extended with an
+  incremental resume mode (`resume_open_position`/
+  `force_close_at_range_end=False`) so an ongoing PAPER cycle could
+  continue managing a still-open simulated position across calls
+  instead of force-closing it every cycle. A strict "does resuming in
+  chunks match one continuous run" test caught a real divergence:
+  `regimes.classifier.RegimeTracker`'s hysteresis state (confirmed/
+  candidate/candidate_count) was rebuilt from `UNKNOWN` on every
+  `run_backtest()` call, with no way to resume it — an incremental
+  caller restarting the tracker every cycle genuinely diverges from
+  what a continuously-running tracker would have decided, defeating
+  directive section 13's "do not flip on one noisy bar" guarantee
+  across process/cycle boundaries.~~ Caught and fixed before ever being
+  committed, 2026-09-21: `RegimeTracker` gained `initial_candidate`/
+  `initial_candidate_count` constructor params and a `.state` property;
+  `run_backtest()` gained `resume_regime_tracker: RegimeTrackerState |
+  None` and always returns `BacktestResult.final_regime_tracker_state`.
+  Regression: `test_run_backtest_resume_regime_tracker_reproduces_
+  continuous_processing` explicitly shows the divergence WITHOUT
+  resuming it and exact match WITH it (trade-for-trade, including the
+  still-open position); `tests/test_paper_engine.py::test_run_paper_
+  cycle_incremental_feeding_matches_a_single_shot_backtest` proves the
+  same property end-to-end through `paper/engine.py`.
+
 - ~~[SEVERITY: CRITICAL/HIGH/MEDIUM, SUBSYSTEM: execution/position_management/
   gateway] External review of the working tree ahead of commit 2bd1bf0
   (post-17-findings), 16 new findings before resuming backtest/ML/PAPER

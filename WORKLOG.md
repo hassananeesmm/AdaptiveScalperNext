@@ -1739,3 +1739,90 @@ STAGE 1 observer-only boundary.
 Full suite: 1083 passed, 0 failed, 0 skipped (up from 1062). No secrets,
 credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
 for commit (verified via `git status`/`git diff` before committing).
+
+## Session: PAPER engine (directive section 132)
+
+Continued automatically per the mission's "do not stop" instruction into
+the next pending task: PAPER mode ("real MT5 market data, simulated
+fills, never a broker order_send").
+
+Designed around reusing `backtest.engine.run_backtest()`'s exact
+production decision cores rather than a parallel reimplementation
+(directive: "Do not create decorative/showpiece subsystems disconnected
+from the real decision path") — but `run_backtest()` was built for a
+BOUNDED historical range (it force-closes any still-open trade at the
+final bar so metrics are never computed over a truncated position),
+which is wrong for PAPER: an ongoing process has no "end of range," and
+force-closing every cycle would fabricate exits that never happened.
+
+Extended `run_backtest()` with an incremental mode instead of forking a
+second engine: new `OpenPositionState` (types.py) captures everything
+needed to resume a still-open trade; `force_close_at_range_end: bool =
+True` (default preserves existing bounded behavior exactly — verified by
+the full existing test suite passing unchanged) and
+`resume_open_position`/`resume_regime_tracker` let an incremental caller
+pass a position back in. Documented the exact resume CONTRACT a caller
+must uphold in the docstring: the bars array must be [trailing
+feature_lookback bars of context] + [only genuinely NEW bars] -- never
+the full accumulated history again, which would re-decide already-
+processed bars against the resumed position's current (already-moved)
+stop/target using stale price action.
+
+Caught a real, non-trivial divergence bug while proving this correct: a
+strict "does resuming in chunks match one continuous run" test initially
+FAILED by a meaningful margin (~31 equity units on a 200-bar run).
+Root cause: `regimes.classifier.RegimeTracker`'s hysteresis state
+(confirmed/candidate/candidate_count) was rebuilt from `UNKNOWN` on every
+`run_backtest()` call, with no way to resume it -- an incremental caller
+restarting the tracker every cycle genuinely diverges from what a
+continuously-running tracker would have decided, defeating directive
+section 13's "do not flip on one noisy bar" guarantee across cycles.
+Fixed: `RegimeTracker` gained `initial_candidate`/`initial_candidate_count`
+constructor params and a `.state` property; `run_backtest()` gained
+`resume_regime_tracker: RegimeTrackerState | None` and always returns
+`BacktestResult.final_regime_tracker_state`. Proven with a dedicated
+regression (`test_run_backtest_resume_regime_tracker_reproduces_
+continuous_processing`) that explicitly shows WITHOUT resuming it the
+two runs diverge, and WITH it they match exactly (trade-for-trade,
+including the still-open position). New `RegimeTracker` unit tests in
+`test_regime_classifier.py` cover `.state`/resumed-construction directly.
+
+New `adaptive_scalper/paper/`:
+- `state.py` — `paper_session_state`/`paper_trades` persistence
+  (migration `0018_paper`), deliberately separate tables from
+  `positions`/`orders`/`deals` (directive section 82: "Evidence classes
+  must not silently receive identical weight" -- a simulated PAPER
+  position must never be reachable by `execution/reconciliation.py`'s
+  broker-truth recovery path). `record_paper_trades()` is idempotent
+  (`INSERT OR IGNORE` on `(session_key, entry_time_utc, direction)`).
+- `engine.py` — `run_paper_cycle()`, the only entry point. No `Gateway`
+  parameter at all -- a future runtime-engine caller supplies `bars`
+  (fetched live from the real MT5 terminal). Its whole job is correct
+  windowing (`_slice_resume_window()`: computes exactly the bar slice
+  the resume contract needs from whatever full bar history the caller
+  supplies, so callers never have to get this right by hand -- the exact
+  mistake caught mid-session in a badly-written test) and atomic state
+  persistence (`BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`, so a crash between
+  "decide" and "persist" is always safely retryable via the idempotent
+  trade recording).
+
+`tests/test_paper_engine.py::test_run_paper_cycle_incremental_feeding_
+matches_a_single_shot_backtest` is the strongest correctness proof: cycles
+through a 220-bar range in growing chunks (50/100/150/200/220 bars fed
+each time) and asserts the FINAL persisted state (equity, every trade,
+the still-open position) is byte-identical to one non-incremental
+`run_backtest()` call over the same full range.
+
+Also fixed a false positive this work triggered in
+`test_architecture_execution_boundary.py` (a docstring literally
+contained the substring `.order_send(` while explaining that PAPER mode
+never calls it) -- reworded without changing meaning; added `backtest`/
+`paper` to that test's `FORBIDDEN_DIRS` documentation list for
+completeness (the actual enforcement already covered them via the full
+directory scan).
+
+21 new tests (7 `test_paper_state.py`, 6 `test_paper_engine.py`, 5 new
+`backtest.engine` resume/force-close tests, 3 new `RegimeTracker` tests).
+Full suite: 1104 passed, 0 failed, 0 skipped (up from 1083). No secrets,
+credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
+for commit (verified via `git status`/`git diff` before committing).

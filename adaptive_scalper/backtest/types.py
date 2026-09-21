@@ -89,6 +89,46 @@ class BacktestMetrics:
 
 
 @dataclass(frozen=True)
+class RegimeTrackerState:
+    """Resumable `regimes.classifier.RegimeTracker` hysteresis state.
+    Without resuming this too, an incremental (PAPER) caller restarting
+    the tracker from `UNKNOWN` every cycle would genuinely diverge from
+    what a continuously-running tracker would decide -- directive section
+    13's "do not flip on one noisy bar" guarantee must hold across
+    cycles, not just within one bounded call."""
+
+    confirmed: str
+    candidate: str | None
+    candidate_count: int
+
+
+@dataclass(frozen=True)
+class OpenPositionState:
+    """Resumable still-open-trade state (directive section 132: PAPER
+    mode is an ONGOING process, not a bounded historical range, so a
+    position open at the end of one `run_backtest()` call must be
+    resumable in the NEXT call rather than force-closed just because
+    that call's bar window ended). Carries everything `backtest.engine
+    ._OpenTrade` holds; a caller passes this back in as
+    `run_backtest(..., resume_open_position=...)` to continue managing
+    the SAME position rather than starting flat."""
+
+    strategy_key: str
+    direction: str
+    entry_time_utc: int
+    entry_price: float
+    volume: float
+    initial_monetary_risk: float
+    entry_regime: str
+    stop_price: float
+    target_price: float | None
+    initial_stop_distance_price: float
+    total_cost: float
+    entry_features: dict[str, float | None] | None = None
+    entry_raw_confidence: float | None = None
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     canonical_symbol: str
     resolution: str
@@ -101,6 +141,13 @@ class BacktestResult:
     origin: EvidenceOrigin = EvidenceOrigin.BACKTEST
     news_limitation_note: str | None = None
     config: BacktestConfig | None = None
+    # Set only when the caller passed `force_close_at_range_end=False` AND
+    # a trade was still open at the final bar -- see OpenPositionState.
+    open_position: OpenPositionState | None = None
+    # Always populated: the regime tracker's hysteresis state at the end
+    # of this run -- an incremental caller passes it back in as
+    # `run_backtest(..., resume_regime_tracker=...)` next call.
+    final_regime_tracker_state: RegimeTrackerState | None = None
 
 
 @dataclass(frozen=True)

@@ -34,6 +34,8 @@ FORBIDDEN_DIRS = [
     ADAPTIVE_SCALPER / "rag",
     ADAPTIVE_SCALPER / "dashboard",
     ADAPTIVE_SCALPER / "cli",
+    ADAPTIVE_SCALPER / "backtest",
+    ADAPTIVE_SCALPER / "paper",
 ]
 
 

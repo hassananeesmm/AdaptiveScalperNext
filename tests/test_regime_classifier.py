@@ -187,3 +187,41 @@ def test_tracker_resets_when_a_raw_observation_matches_confirmed_again():
 def test_tracker_rejects_non_positive_min_confirmations():
     with pytest.raises(ValueError):
         RegimeTracker(min_confirmations=0)
+
+
+# --------------------------------------------------------------------------
+# RegimeTracker resumable state (backtest.engine / paper.engine incremental
+# callers -- resuming must reproduce EXACTLY what an uninterrupted tracker
+# would have decided)
+# --------------------------------------------------------------------------
+
+def test_tracker_state_reports_confirmed_candidate_and_count():
+    tracker = RegimeTracker(min_confirmations=3, initial_regime=RANGE)
+    erratic = classify_regime(_snap(range_expansion_ratio=2.5, efficiency_ratio=0.1, directional_persistence=0.3))
+    tracker.update(erratic)
+    tracker.update(erratic)
+    assert tracker.state == (RANGE, ERRATIC, 2)
+
+
+def test_tracker_constructed_from_state_behaves_identically_to_the_original():
+    original = RegimeTracker(min_confirmations=3, initial_regime=RANGE)
+    erratic = classify_regime(_snap(range_expansion_ratio=2.5, efficiency_ratio=0.1, directional_persistence=0.3))
+    original.update(erratic)
+    original.update(erratic)  # 2 of 3 confirmations in progress
+
+    confirmed, candidate, count = original.state
+    resumed = RegimeTracker(
+        min_confirmations=3, initial_regime=confirmed, initial_candidate=candidate, initial_candidate_count=count,
+    )
+
+    # ONE more matching observation must flip BOTH trackers identically --
+    # the resumed tracker is not starting its confirmation streak over.
+    assert original.update(erratic) == ERRATIC
+    assert resumed.update(erratic) == ERRATIC
+    assert original.state == resumed.state
+
+
+def test_tracker_resumed_with_no_state_behaves_like_a_fresh_tracker():
+    fresh = RegimeTracker(min_confirmations=2)
+    resumed = RegimeTracker(min_confirmations=2, initial_regime=UNKNOWN, initial_candidate=None, initial_candidate_count=0)
+    assert fresh.state == resumed.state == (UNKNOWN, None, 0)

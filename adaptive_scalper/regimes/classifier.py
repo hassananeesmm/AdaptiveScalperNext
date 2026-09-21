@@ -141,13 +141,35 @@ class RegimeTracker:
     changes after `min_confirmations` consecutive raw classifications
     agree on the SAME new regime, so a single noisy bar can't flip it."""
 
-    def __init__(self, min_confirmations: int = 2, initial_regime: str = UNKNOWN) -> None:
+    def __init__(
+        self, min_confirmations: int = 2, initial_regime: str = UNKNOWN, *,
+        initial_candidate: str | None = None, initial_candidate_count: int = 0,
+    ) -> None:
         if min_confirmations < 1:
             raise ValueError("min_confirmations must be >= 1")
         self.min_confirmations = min_confirmations
         self._confirmed = initial_regime
-        self._candidate: str | None = None
-        self._candidate_count = 0
+        # `initial_candidate`/`initial_candidate_count` let a caller
+        # RESUME an ongoing tracker's in-progress hysteresis exactly
+        # (directive section 13's "do not flip on one noisy bar" must
+        # hold across process restarts/incremental cycles too, e.g.
+        # `adaptive_scalper.paper.engine` -- not just within one
+        # continuous run). Never set independently of `state`/
+        # `confirmed_regime`, which report both together.
+        self._candidate: str | None = initial_candidate
+        self._candidate_count = initial_candidate_count
+
+    @property
+    def confirmed_regime(self) -> str:
+        return self._confirmed
+
+    @property
+    def state(self) -> tuple[str, str | None, int]:
+        """`(confirmed_regime, candidate, candidate_count)` -- everything
+        needed to construct an equivalent `RegimeTracker` later via
+        `RegimeTracker(min_confirmations, confirmed, initial_candidate=
+        candidate, initial_candidate_count=candidate_count)`."""
+        return self._confirmed, self._candidate, self._candidate_count
 
     def update(self, raw: RegimeClassification) -> str:
         if raw.regime == self._confirmed:

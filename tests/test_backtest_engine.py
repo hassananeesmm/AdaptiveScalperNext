@@ -11,6 +11,9 @@ results.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
+
+import pytest
 
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.types import BacktestConfig
@@ -179,6 +182,128 @@ def test_run_backtest_captures_entry_features_for_ml_training():
         # proves the captured vector is the REAL features snapshot, not
         # an empty/placeholder dict.
         assert trade.entry_features["efficiency_ratio"] is not None
+
+
+def test_run_backtest_force_close_false_leaves_a_still_open_trade_unclosed():
+    bars = _trending_bars(200)
+    result = run_backtest(
+        bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        force_close_at_range_end=False,
+    )
+    assert result.open_position is not None
+    assert all(t.exit_reason != "BACKTEST_RANGE_ENDED" for t in result.trades)
+    # The open position must NOT also appear as a closed trade.
+    assert result.open_position.entry_time_utc not in {t.entry_time_utc for t in result.trades if t.is_closed}
+
+
+def test_run_backtest_force_close_true_is_the_default_and_always_closes():
+    bars = _trending_bars(200)
+    result = run_backtest(bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000)
+    assert result.open_position is None
+    assert all(t.is_closed for t in result.trades)
+
+
+def test_run_backtest_resume_open_position_continues_the_same_trade_into_a_later_window():
+    # A resuming (PAPER-style) caller passes a window of [feature_lookback
+    # bars of trailing CONTEXT] + [only the genuinely NEW bars] -- never
+    # the full history again, which would re-decide already-processed bars.
+    bars = _trending_bars(220)
+    lookback = _config().feature_lookback
+    first = run_backtest(
+        bars[:200], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        force_close_at_range_end=False,
+    )
+    assert first.open_position is not None
+
+    resume_window = bars[200 - lookback - 1:220]
+    second = run_backtest(
+        resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        resume_open_position=first.open_position, force_close_at_range_end=False,
+    )
+    # The resumed position's entry details are UNCHANGED from the first call.
+    resumed_trade = next(t for t in second.trades if t.entry_time_utc == first.open_position.entry_time_utc)
+    assert resumed_trade.entry_price == first.open_position.entry_price
+    assert resumed_trade.volume == first.open_position.volume
+    assert resumed_trade.entry_features == first.open_position.entry_features
+
+
+def test_run_backtest_resume_open_position_never_reopens_a_new_entry_before_managing_the_resumed_one():
+    bars = _trending_bars(220)
+    lookback = _config().feature_lookback
+    first = run_backtest(
+        bars[:200], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        force_close_at_range_end=False,
+    )
+    resume_window = bars[200 - lookback - 1:220]
+    second = run_backtest(
+        resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        resume_open_position=first.open_position, force_close_at_range_end=False,
+    )
+    # No trade in the resumed run can have opened chronologically BEFORE
+    # the resumed position closed (or is still the same open position) --
+    # the engine must manage the resumed trade first, never scan for a
+    # fresh entry while one is already (resumed) open.
+    entry_times = sorted(t.entry_time_utc for t in second.trades)
+    if entry_times:
+        assert entry_times[0] == first.open_position.entry_time_utc
+
+
+def test_run_backtest_resume_regime_tracker_reproduces_continuous_processing():
+    # Regression: without resuming the regime tracker's hysteresis state,
+    # a resumed/incremental call restarts it from UNKNOWN every time,
+    # genuinely diverging from what a continuously-running tracker would
+    # have decided. Proof: cycling through the SAME range in two chunks
+    # WITH resume_regime_tracker must match one continuous call exactly;
+    # WITHOUT it, the two are not guaranteed to (and empirically don't).
+    bars = _trending_bars(220)
+    lookback = _config().feature_lookback
+    first = run_backtest(
+        bars[:200], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        force_close_at_range_end=False,
+    )
+    assert first.open_position is not None  # otherwise this test proves nothing about resuming
+    boundary_entry_time = first.open_position.entry_time_utc
+
+    reference = run_backtest(
+        bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        force_close_at_range_end=False,
+    )
+    reference_new = sorted(
+        (t.entry_time_utc, t.direction, round(t.realized_pnl, 6))
+        for t in reference.trades if t.entry_time_utc >= boundary_entry_time
+    )
+
+    resume_window = bars[200 - lookback - 1:220]
+    # A resuming (PAPER-style) caller must also carry forward the REAL
+    # accumulated equity `first`'s own run ended at -- never restart
+    # sizing from the static config default, which would under/over-size
+    # every subsequent trade relative to the continuous reference run.
+    resume_config = replace(_config(), initial_equity=first.metrics.final_equity)
+
+    with_resume = run_backtest(
+        resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=resume_config, now_utc=2_000_000_000,
+        resume_open_position=first.open_position, resume_regime_tracker=first.final_regime_tracker_state,
+        force_close_at_range_end=False,
+    )
+    with_resume_trades = sorted(
+        (t.entry_time_utc, t.direction, round(t.realized_pnl, 6)) for t in with_resume.trades
+    )
+    assert with_resume_trades == reference_new
+    if with_resume.open_position is not None:
+        assert reference.open_position is not None
+        assert with_resume.open_position.entry_time_utc == reference.open_position.entry_time_utc
+    else:
+        assert reference.open_position is None
+
+    without_resume = run_backtest(
+        resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=resume_config, now_utc=2_000_000_000,
+        resume_open_position=first.open_position, force_close_at_range_end=False,  # no resume_regime_tracker
+    )
+    without_resume_trades = sorted(
+        (t.entry_time_utc, t.direction, round(t.realized_pnl, 6)) for t in without_resume.trades
+    )
+    # Document the actual divergence this fixes -- not just "close enough".
+    assert without_resume_trades != reference_new
 
 
 def test_run_backtest_never_lets_a_trade_close_before_it_opens():

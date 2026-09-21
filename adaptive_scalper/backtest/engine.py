@@ -44,7 +44,14 @@ import time
 from dataclasses import replace
 
 from adaptive_scalper.backtest.dataset import build_dataset_snapshot
-from adaptive_scalper.backtest.types import BacktestConfig, BacktestMetrics, BacktestResult, SimulatedTrade
+from adaptive_scalper.backtest.types import (
+    BacktestConfig,
+    BacktestMetrics,
+    BacktestResult,
+    OpenPositionState,
+    RegimeTrackerState,
+    SimulatedTrade,
+)
 from adaptive_scalper.costs.edge import BLOCK_COST as _COST_BLOCK
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
@@ -116,7 +123,24 @@ def run_backtest(
     *,
     config: BacktestConfig = BacktestConfig(),
     now_utc: int | None = None,
+    resume_open_position: OpenPositionState | None = None,
+    resume_regime_tracker: RegimeTrackerState | None = None,
+    force_close_at_range_end: bool = True,
 ) -> BacktestResult:
+    """`resume_open_position`/`resume_regime_tracker`/
+    `force_close_at_range_end=False` are for an
+    ONGOING incremental caller (PAPER mode, `adaptive_scalper/paper/`) that
+    calls this repeatedly as new bars arrive, rather than once over a
+    fixed historical range. CONTRACT the caller must uphold: `bars` on a
+    resuming call must be [the trailing `feature_lookback` bars of
+    CONTEXT ending right before the new region] + [only the genuinely NEW
+    bars since the previous call] -- never the full accumulated history
+    again. Every bar from `start_index` onward is treated as a fresh
+    decision point, so re-passing already-processed bars re-decides them
+    against the resumed position's CURRENT (already-moved-forward) stop/
+    target using OLD price action, which is nonsensical. `adaptive_scalper
+    .paper.engine` owns this windowing so callers never have to get it
+    right by hand."""
     if len(bars) < config.feature_lookback + 3:
         raise ValueError(
             f"need at least feature_lookback+3 ({config.feature_lookback + 3}) bars, got {len(bars)}"
@@ -125,13 +149,22 @@ def run_backtest(
 
     registry = build_active_registry()
     active_strategies = registry.all_active()
-    regime_tracker = RegimeTracker(min_confirmations=config.regime_min_confirmations)
+    if resume_regime_tracker is not None:
+        regime_tracker = RegimeTracker(
+            min_confirmations=config.regime_min_confirmations, initial_regime=resume_regime_tracker.confirmed,
+            initial_candidate=resume_regime_tracker.candidate,
+            initial_candidate_count=resume_regime_tracker.candidate_count,
+        )
+    else:
+        regime_tracker = RegimeTracker(min_confirmations=config.regime_min_confirmations)
 
     equity = config.initial_equity
     peak_equity = equity
     max_drawdown = 0.0
 
-    open_trade: _OpenTrade | None = None
+    open_trade: _OpenTrade | None = (
+        _OpenTrade(**resume_open_position.__dict__) if resume_open_position is not None else None
+    )
     pending_entry: StrategySignal | None = None
     pending_entry_features: dict[str, float | None] | None = None
     trades: list[SimulatedTrade] = []
@@ -255,15 +288,25 @@ def run_backtest(
                     pending_entry_features = numeric_feature_vector(features)
 
     # Force-close any still-open trade at the final bar's close so
-    # metrics are never computed over an artificially-truncated position.
+    # metrics are never computed over an artificially-truncated position
+    # -- UNLESS the caller is an ongoing/incremental process (PAPER mode,
+    # directive section 132) that will resume this same position next
+    # call via `resume_open_position`, in which case force-closing it here
+    # would fabricate a trade exit that never actually happened.
+    open_position_state: OpenPositionState | None = None
     if open_trade is not None:
-        last_bar = bars[-1]
-        fill = simulate_fill(last_bar, _opposite(open_trade.direction), symbol_spec.point, config.fill_assumptions)
-        trades.append(_close_trade(open_trade, last_bar.time, fill.price, "BACKTEST_RANGE_ENDED", regime_tracker._confirmed, symbol_spec))
-        equity = _apply_trade_to_equity(equity, trades[-1])
-        peak_equity = max(peak_equity, equity)
-        max_drawdown = max(max_drawdown, peak_equity - equity)
-        equity_curve.append((last_bar.time, equity))
+        if force_close_at_range_end:
+            last_bar = bars[-1]
+            fill = simulate_fill(last_bar, _opposite(open_trade.direction), symbol_spec.point, config.fill_assumptions)
+            trades.append(_close_trade(open_trade, last_bar.time, fill.price, "BACKTEST_RANGE_ENDED", regime_tracker.confirmed_regime, symbol_spec))
+            equity = _apply_trade_to_equity(equity, trades[-1])
+            peak_equity = max(peak_equity, equity)
+            max_drawdown = max(max_drawdown, peak_equity - equity)
+            equity_curve.append((last_bar.time, equity))
+        else:
+            open_position_state = OpenPositionState(**{
+                name: getattr(open_trade, name) for name in _OpenTrade.__slots__
+            })
 
     metrics = _compute_metrics(trades, config.initial_equity, equity, max_drawdown)
     dataset = build_dataset_snapshot(
@@ -271,12 +314,14 @@ def run_backtest(
         strategies=tuple(s.key for s in active_strategies), feature_schema_version=1, now_utc=now,
     )
 
+    final_confirmed, final_candidate, final_candidate_count = regime_tracker.state
     return BacktestResult(
         canonical_symbol=canonical_symbol, resolution=resolution, dataset_id=dataset.dataset_id,
         range_start_utc=bars[0].time, range_end_utc=bars[-1].time, trades=tuple(trades), metrics=metrics,
         equity_curve=tuple(equity_curve),
         news_limitation_note=None if config.news_windows else NEWS_LIMITATION_NOTE,
-        config=config,
+        config=config, open_position=open_position_state,
+        final_regime_tracker_state=RegimeTrackerState(final_confirmed, final_candidate, final_candidate_count),
     )
 
 
