@@ -100,6 +100,87 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~[SEVERITY: CRITICAL/HIGH/MEDIUM, SUBSYSTEM: execution/position_management/
+  gateway] External review of the working tree ahead of commit 2bd1bf0
+  (post-17-findings), 16 new findings before resuming backtest/ML/PAPER
+  work: (1) `_verify_critical_broker_state()` computed `now` ONCE and
+  reused it for BOTH quote-freshness checks in a two-round verify, so a
+  stale tick could pass round 2 even though wall-clock time had genuinely
+  advanced past the freshness threshold; (2) the execution-owned symbol
+  check only verified `trade_mode != DISABLED`, never independently
+  re-verifying directional trade-mode permission (LONGONLY/SHORTONLY/
+  CLOSEONLY) or asset identity against FRESH symbol metadata — it
+  trusted the caller's `FinalPermissionInput` for both; (3)
+  `execution/close.py` remained materially older than
+  `stop_modification.py` (symbol_info fetched twice, filling policy from
+  round 1 only, no second `order_check` before send); (4) stop/close
+  result-state interpretation collapsed CANCELLED/RESTING/PARTIAL into a
+  single `SENT`, losing the distinction between "broker proved this
+  happened" and "broker accepted but hasn't confirmed yet"; (5-6)
+  partial-fill residual risk (requested/filled/remaining volume and
+  monetary risk) was not persisted as durable typed fields, so a RESTING
+  order's pending risk couldn't be reconstructed from SQLite + broker
+  truth after a restart; (7-10) `create_local_position()` silently kept
+  stale first-fill data on a SECOND partial fill into the same
+  `broker_position_id`; `entry_price` could be persisted as
+  `result.price_filled or 0.0` (a real zero on ambiguous fills); only a
+  `positions` row was written, never the individual entry deals; the
+  local `deals` schema dropped broker `fee`; (11) UNKNOWN-without-
+  broker-id resolution matched on token+symbol alone, not
+  direction/volume/magic/time-window, risking a false match to an
+  unrelated order sharing a token prefix; (12) `run_reconciliation()`
+  only reconciled `positions_get()`, never `orders_get()` — a broker
+  pending order with no local counterpart (or vice versa) went entirely
+  unnoticed; (13) `_maybe_record_exit_fill()` queried only the LATEST
+  closing deal, undercounting P/L on multi-deal/partial closes; (14)
+  `record_exit_fill()`'s `realized_slippage` parameter existed but the
+  manager never computed/supplied it; (15) `record_incident()` created
+  an unbounded new row every ~0.5-1s reconciliation cycle for the SAME
+  unresolved mismatch; (16) `PROJECT_STATUS.md` still had a stale
+  Gateway Protocol paragraph claiming `order_send`/`order_check`/
+  `positions_get`/`orders_get` were deliberately excluded, a stale
+  "Schema version 13" section, and a stale "no order_send/order_check
+  exists anywhere" paragraph, all left over from before this and the
+  prior checkpoint's execution work landed.~~ Fixed 2026-09-21. New:
+  `adaptive_scalper/execution/entry_fills.py`
+  (`record_entry_fills()`/`EntryFillRecordResult`, refuses to mutate a
+  position once R-management is active), migrations `0015_entry_fills`
+  (durable `requested_monetary_risk`/`filled_volume`/
+  `filled_initial_monetary_risk`/`remaining_volume`/
+  `remaining_pending_monetary_risk` on `orders`; `fee`/`entry_type`/
+  `deal_type`/`broker_order_ticket`/`magic`/`comment` on `deals`),
+  `0016_order_magic`, `0017_incident_dedup` (`dedup_key`/
+  `first_seen_at_utc`/`last_seen_at_utc`/`occurrence_count` on
+  `execution_incidents`). Rewrote: `execution/service.py`
+  (`_verify_critical_broker_state()` takes an injectable
+  `clock: Callable[[], float]`, calls it independently each round; fetches
+  `symbol_spec` once per round and checks `identity_matches_canonical()`
+  + `validate_direction_for_new_exposure()` against it, never trusting
+  the caller's evidence alone), `execution/stop_modification.py` (same
+  clock-injection pattern; added `CANCELLED` as a distinct outcome),
+  `execution/close.py` (full rewrite to the stop_modification.py
+  standard: `FULLY_CLOSED`/`PARTIAL_CLOSE`/`RESTING`/`CANCELLED`/
+  `REJECTED`/`UNKNOWN` as distinct outcomes, a partial close updates
+  local volume/risk from broker truth via
+  `_apply_partial_close_to_local_state()`), `execution/unknown.py`
+  (direction/volume/magic/time-window compatibility required in all 4
+  evidence-source loops, not just token+symbol), `execution/
+  reconciliation.py` (`reconcile_pending_orders()`/
+  `_recover_missing_local_order()` reconcile `orders_get()` against
+  local active orders; `record_incident()` now takes a `dedup_key` and
+  updates an existing unresolved row's `last_seen_at_utc`/
+  `occurrence_count` instead of inserting a duplicate),
+  `position_management/manager.py`
+  (`_maybe_record_exit_fill()` aggregates every closing deal, not just
+  the latest, and computes+persists `realized_slippage`),
+  `execution/position_resolution.py`
+  (`resolve_entry_fill_evidence()` — weighted-average price across every
+  matching entry deal, never a bare `result.price_filled or 0.0`).
+  `PROJECT_STATUS.md`'s Gateway Protocol paragraph, "Schema version"
+  section (now 17), and "no order_send exists" / "BLOCK_SYMBOL_NOT_ALLOWED
+  does not exist" paragraphs all corrected to current reality. 1024 tests
+  passing (up from 961).
+
 - ~~[SEVERITY: HIGH, SUBSYSTEM: execution/position_management/portfolio]
   External review of commit cbe16b3, 17 findings before PAPER/controlled-
   DEMO validation: (1-3) `execution/stop_modification.py` reverified DEMO

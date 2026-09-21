@@ -10,6 +10,7 @@ from adaptive_scalper.execution.store import (
     create_order,
     get_order_by_client_request_id,
     get_order_state_history,
+    record_order_risk_accounting,
     transition_order_state,
 )
 from adaptive_scalper.persistence import connect, migrate
@@ -165,3 +166,69 @@ def test_order_persists_across_a_fresh_connection(tmp_path):
     reloaded = get_order_by_client_request_id(conn2, "req-1")
     assert reloaded.state == OrderState.SUBMITTED
     conn2.close()
+
+
+# --------------------------------------------------------------------------
+# record_order_risk_accounting (external review findings #5/#6, 2026-09-21):
+# durable, typed pending/filled/remaining risk fields, reconstructable
+# from SQLite alone after a restart.
+# --------------------------------------------------------------------------
+
+def test_record_order_risk_accounting_sets_requested_and_remaining(db):
+    order = create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, now_utc=1000)
+    record_order_risk_accounting(
+        db, order.id, requested_monetary_risk=20.0, remaining_volume=0.05,
+        remaining_pending_monetary_risk=20.0, now_utc=1000,
+    )
+    row = db.execute("SELECT * FROM orders WHERE id = ?", (order.id,)).fetchone()
+    assert row["requested_monetary_risk"] == pytest.approx(20.0)
+    assert row["remaining_volume"] == pytest.approx(0.05)
+    assert row["remaining_pending_monetary_risk"] == pytest.approx(20.0)
+    assert row["filled_volume"] == 0.0  # column default, never NULL
+    assert row["filled_initial_monetary_risk"] == 0.0
+
+
+def test_record_order_risk_accounting_narrows_remaining_after_a_partial_fill(db):
+    order = create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, now_utc=1000)
+    record_order_risk_accounting(
+        db, order.id, requested_monetary_risk=20.0, remaining_volume=0.05,
+        remaining_pending_monetary_risk=20.0, now_utc=1000,
+    )
+    # a partial fill of 0.02 of 0.05 at proportional risk 8.0
+    record_order_risk_accounting(
+        db, order.id, filled_volume=0.02, filled_initial_monetary_risk=8.0,
+        remaining_volume=0.03, remaining_pending_monetary_risk=12.0, now_utc=1010,
+    )
+    row = db.execute("SELECT * FROM orders WHERE id = ?", (order.id,)).fetchone()
+    assert row["requested_monetary_risk"] == pytest.approx(20.0)  # untouched by the second call
+    assert row["filled_volume"] == pytest.approx(0.02)
+    assert row["filled_initial_monetary_risk"] == pytest.approx(8.0)
+    assert row["remaining_volume"] == pytest.approx(0.03)
+    assert row["remaining_pending_monetary_risk"] == pytest.approx(12.0)
+
+
+def test_record_order_risk_accounting_survives_a_fresh_connection(tmp_path):
+    # Restart recovery: pending/filled risk must be reconstructable from
+    # SQLite alone, no in-memory proposal object required.
+    path = tmp_path / "test.sqlite3"
+    conn1 = connect(path)
+    migrate(conn1)
+    order = create_order(conn1, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, now_utc=1000)
+    record_order_risk_accounting(
+        conn1, order.id, requested_monetary_risk=20.0, remaining_volume=0.05,
+        remaining_pending_monetary_risk=20.0, now_utc=1000,
+    )
+    conn1.close()
+
+    conn2 = connect(path)
+    row = conn2.execute("SELECT * FROM orders WHERE id = ?", (order.id,)).fetchone()
+    assert row["requested_monetary_risk"] == pytest.approx(20.0)
+    assert row["remaining_pending_monetary_risk"] == pytest.approx(20.0)
+    conn2.close()
+
+
+def test_record_order_risk_accounting_with_no_fields_is_a_safe_no_op(db):
+    order = create_order(db, "req-1", "XAUUSD", "XAUUSDm", "BUY", 0.05, now_utc=1000)
+    record_order_risk_accounting(db, order.id, now_utc=1000)  # nothing supplied
+    row = db.execute("SELECT * FROM orders WHERE id = ?", (order.id,)).fetchone()
+    assert row["requested_monetary_risk"] is None

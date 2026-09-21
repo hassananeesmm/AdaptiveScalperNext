@@ -55,6 +55,16 @@ class OrderRecord:
     last_broker_comment: str | None
     created_at_utc: int
     updated_at_utc: int
+    magic: int = 0
+    # External review findings #5/#6/#11: durable typed risk accounting
+    # (see `record_order_risk_accounting()`) and the order's own magic
+    # number, exposed here so callers (e.g. `execution/unknown.py`'s
+    # secondary UNKNOWN correlation) can read them back.
+    requested_monetary_risk: float | None = None
+    filled_volume: float = 0.0
+    filled_initial_monetary_risk: float = 0.0
+    remaining_volume: float | None = None
+    remaining_pending_monetary_risk: float | None = None
 
 
 def _row_to_order(row: sqlite3.Row) -> OrderRecord:
@@ -65,7 +75,10 @@ def _row_to_order(row: sqlite3.Row) -> OrderRecord:
         stop_loss=row["stop_loss"], take_profit=row["take_profit"], state=OrderState(row["state"]),
         broker_order_id=row["broker_order_id"], broker_position_id=row["broker_position_id"],
         last_broker_retcode=row["last_broker_retcode"], last_broker_comment=row["last_broker_comment"],
-        created_at_utc=row["created_at_utc"], updated_at_utc=row["updated_at_utc"],
+        created_at_utc=row["created_at_utc"], updated_at_utc=row["updated_at_utc"], magic=row["magic"],
+        requested_monetary_risk=row["requested_monetary_risk"], filled_volume=row["filled_volume"],
+        filled_initial_monetary_risk=row["filled_initial_monetary_risk"], remaining_volume=row["remaining_volume"],
+        remaining_pending_monetary_risk=row["remaining_pending_monetary_risk"],
     )
 
 
@@ -85,6 +98,7 @@ def create_order(
     chain_key: str | None = None,
     stop_loss: float | None = None,
     take_profit: float | None = None,
+    magic: int = 0,
     now_utc: int | None = None,
 ) -> OrderRecord:
     """Idempotent for a genuine retry: if `client_request_id` already has
@@ -106,6 +120,7 @@ def create_order(
             "requested_volume": (existing.requested_volume, requested_volume),
             "stop_loss": (existing.stop_loss, stop_loss),
             "take_profit": (existing.take_profit, take_profit),
+            "magic": (existing.magic, magic),
         }
         mismatches = {k: v for k, v in immutable_fields.items() if v[0] != v[1]}
         if mismatches:
@@ -123,12 +138,12 @@ def create_order(
             """
             INSERT INTO orders
                 (client_request_id, chain_key, canonical_symbol, broker_symbol, direction,
-                 requested_volume, stop_loss, take_profit, state, created_at_utc, updated_at_utc)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 requested_volume, stop_loss, take_profit, magic, state, created_at_utc, updated_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 client_request_id, chain_key, canonical_symbol, broker_symbol, direction,
-                requested_volume, stop_loss, take_profit, OrderState.PROPOSED.value, now, now,
+                requested_volume, stop_loss, take_profit, magic, OrderState.PROPOSED.value, now, now,
             ),
         )
         conn.execute(
@@ -203,6 +218,25 @@ def transition_order_state(
     return get_order_by_client_request_id(conn, row["client_request_id"])  # type: ignore[return-value]
 
 
+_ACTIVE_ORDER_STATES = ("SUBMITTED", "ACCEPTED", "PENDING", "RESTING", "PARTIAL", "UNKNOWN")
+
+
+def get_active_orders(conn: sqlite3.Connection) -> list[OrderRecord]:
+    """Every locally-tracked order still in a non-terminal state AND
+    carrying a real `broker_order_id` — the set `execution.reconciliation
+    .reconcile_pending_orders()` (external review finding #12) compares
+    against the broker's current `orders_get()` pending-order universe.
+    An order with no `broker_order_id` yet has nothing to compare against
+    here; that gap is what `execution.unknown
+    .resolve_unknown_order_without_broker_id()` exists for instead."""
+    rows = conn.execute(
+        f"SELECT * FROM orders WHERE broker_order_id IS NOT NULL AND state IN "
+        f"({','.join('?' for _ in _ACTIVE_ORDER_STATES)})",
+        _ACTIVE_ORDER_STATES,
+    ).fetchall()
+    return [_row_to_order(r) for r in rows]
+
+
 def get_order_state_history(conn: sqlite3.Connection, order_id: int) -> list[tuple[str | None, str, int]]:
     """(from_state, to_state, occurred_at_utc) tuples in order — the full
     reconstructable lifecycle of one order."""
@@ -220,44 +254,51 @@ def get_local_position_by_broker_id(conn: sqlite3.Connection, broker_position_id
     ).fetchone()
 
 
-def create_local_position(
+# NOTE: the local `positions` row for a FILLED/PARTIAL entry is no longer
+# created here. External review finding #7 found the original
+# `create_local_position()`'s "idempotent no-op on a repeat
+# broker_position_id" design unsafe for a SECOND fill trickling into the
+# SAME position (it would silently keep the FIRST fill's stale
+# volume/price/risk). `execution/entry_fills.py`'s `record_entry_fills()`
+# replaces it: it persists every individual entry DEAL (finding #9) and
+# recomputes the position's aggregate volume/weighted-average price/
+# initial risk from ALL persisted entry deals on every call, rather than
+# writing once and never revisiting.
+
+
+def record_order_risk_accounting(
     conn: sqlite3.Connection,
+    order_id: int,
     *,
-    broker_position_id: str,
-    canonical_symbol: str,
-    direction: str,
-    volume: float,
-    entry_price: float,
-    initial_monetary_risk: float,
-    strategy_key: str | None,
-    entry_order_id: int | None,
-    opened_at_utc: int,
-) -> int:
-    """Persists the LOCAL record of a position this process just opened
-    (fully or partially) — external review finding #9: a fill (partial or
-    complete) must immediately become accounted local exposure, not just
-    a journaled event with no row `portfolio`/`risk`/reconciliation code
-    can actually query. Idempotent on `broker_position_id` (the table's
-    UNIQUE constraint): a repeat call for the same broker position id
-    (e.g. a retried resolution after a transient failure) returns the
-    EXISTING row's id rather than raising or duplicating — it never
-    updates the existing row's fields, since a real position's own entry
-    price/volume/risk are set once, at open, exactly like
-    `position_management.state_store`'s immutable fields."""
-    existing = get_local_position_by_broker_id(conn, broker_position_id)
-    if existing is not None:
-        return existing["id"]
-    cursor = conn.execute(
-        """
-        INSERT INTO positions
-            (broker_position_id, canonical_symbol, direction, volume, entry_price,
-             initial_monetary_risk, strategy_key, entry_order_id, status, opened_at_utc)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?)
-        """,
-        (
-            str(broker_position_id), canonical_symbol, direction, volume, entry_price,
-            initial_monetary_risk, strategy_key, entry_order_id, opened_at_utc,
-        ),
-    )
+    requested_monetary_risk: float | None = None,
+    filled_volume: float | None = None,
+    filled_initial_monetary_risk: float | None = None,
+    remaining_volume: float | None = None,
+    remaining_pending_monetary_risk: float | None = None,
+    now_utc: int | None = None,
+) -> None:
+    """Durable, typed pending/filled/remaining risk accounting on the
+    order row (external review findings #5/#6) — reconstructable from
+    SQLite + broker truth after a restart, without needing any in-memory
+    proposal object the process may have lost. Only the fields actually
+    supplied (non-`None`) are updated; a caller may legitimately call this
+    more than once as a RESTING order's remaining volume/risk changes
+    with later fills."""
+    now = now_utc if now_utc is not None else int(time.time())
+    columns: list[str] = []
+    params: list[float] = []
+    for column, value in (
+        ("requested_monetary_risk", requested_monetary_risk),
+        ("filled_volume", filled_volume),
+        ("filled_initial_monetary_risk", filled_initial_monetary_risk),
+        ("remaining_volume", remaining_volume),
+        ("remaining_pending_monetary_risk", remaining_pending_monetary_risk),
+    ):
+        if value is not None:
+            columns.append(f"{column} = ?")
+            params.append(value)
+    if not columns:
+        return
+    params.extend([now, order_id])
+    conn.execute(f"UPDATE orders SET {', '.join(columns)}, updated_at_utc = ? WHERE id = ?", params)
     conn.commit()
-    return cursor.lastrowid

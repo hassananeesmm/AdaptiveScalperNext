@@ -1,15 +1,23 @@
 """Tests for execution.close (execution-safety review round 1 finding #2,
-round 2 finding #3): proves the safe close path cannot create reverse
-exposure and carries the same pre-send protections as a new entry."""
+round 2 finding #3; brought to stop_modification.py's hardening standard
+by external review 2026-09-21 findings #3/#4): proves the safe close path
+cannot create reverse exposure and carries the same pre-send protections
+as a new entry."""
 
 from __future__ import annotations
+
+import pytest
 
 from adaptive_scalper.execution.close import (
     ALREADY_CLOSED,
     BROKER_CONSTRAINT,
+    CANCELLED,
+    FULLY_CLOSED,
     NOT_DEMO,
+    NO_QUOTE,
+    PARTIAL_CLOSE,
     REJECTED,
-    SENT,
+    SYMBOL_MISMATCH,
     UNKNOWN,
     VOLUME_MISMATCH,
     close_position_safely,
@@ -24,8 +32,10 @@ from adaptive_scalper.gateway.types import (
     SymbolSpec,
     SymbolTradeMode,
     TerminalSnapshot,
+    Tick,
     TradeMode,
 )
+from adaptive_scalper.persistence import connect, migrate
 
 
 def _demo_account(**overrides) -> AccountSnapshot:
@@ -55,7 +65,10 @@ def _symbol_spec(**overrides) -> SymbolSpec:
 
 
 def _demo_gateway(**gw_overrides) -> FakeGateway:
-    defaults = dict(account=_demo_account(), terminal=_demo_terminal(), symbols=[_symbol_spec()])
+    defaults = dict(
+        account=_demo_account(), terminal=_demo_terminal(), symbols=[_symbol_spec()],
+        ticks={"XAUUSDm": Tick(time=5000, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)},
+    )
     defaults.update(gw_overrides)
     return FakeGateway(**defaults)
 
@@ -69,6 +82,7 @@ def _open_position(gw: FakeGateway, direction: str = "BUY", volume: float = 0.05
 def _close(gw, ticket, **overrides):
     defaults = dict(
         broker_position_id=ticket, expected_direction="BUY", expected_volume=0.05, broker_symbol="XAUUSDm",
+        clock=lambda: 5000.0,  # matches _demo_gateway()'s default tick time=5000 -> always fresh
     )
     defaults.update(overrides)
     return close_position_safely(gw, **defaults)
@@ -79,7 +93,7 @@ def test_buy_position_closes_with_correct_sell_deal_and_ticket():
     ticket = _open_position(gw, direction="BUY", volume=0.05)
 
     outcome = _close(gw, ticket)
-    assert outcome.status == SENT
+    assert outcome.status == FULLY_CLOSED
     assert gw.positions_get() == []
     sent_request = gw.order_send_calls[-1]
     assert sent_request.direction == "SELL"
@@ -92,7 +106,7 @@ def test_sell_position_closes_with_correct_buy_deal_and_ticket():
     ticket = _open_position(gw, direction="SELL", volume=0.05)
 
     outcome = _close(gw, ticket, expected_direction="SELL")
-    assert outcome.status == SENT
+    assert outcome.status == FULLY_CLOSED
     assert gw.positions_get() == []
     sent_request = gw.order_send_calls[-1]
     assert sent_request.direction == "BUY"
@@ -151,7 +165,8 @@ def test_close_never_opens_a_new_position_under_any_outcome():
 
 
 # --------------------------------------------------------------------------
-# Round-2 finding #3: same pre-send protections as a new entry.
+# Round-2 finding #3 / external review finding #3 (2026-09-21): same
+# pre-send protections as a new entry, both rounds identical.
 # --------------------------------------------------------------------------
 
 def test_account_not_demo_blocks_close_entirely():
@@ -231,6 +246,42 @@ def test_no_supported_filling_mode_blocks_close():
     assert len(gw.order_send_calls) == calls_before
 
 
+def test_symbol_mismatch_blocks_close():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", volume=0.05)
+    calls_before = len(gw.order_send_calls)
+    outcome = _close(gw, ticket, broker_symbol="GBPJPYm")  # position is actually XAUUSDm
+    assert outcome.status == SYMBOL_MISMATCH
+    assert len(gw.order_send_calls) == calls_before
+
+
+def test_stale_quote_blocks_close():
+    gw = _demo_gateway(ticks={"XAUUSDm": Tick(time=1, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)})
+    ticket = _open_position(gw, direction="BUY", volume=0.05)
+    calls_before = len(gw.order_send_calls)
+    outcome = _close(gw, ticket)  # clock=5000.0 vs tick.time=1 -> far stale
+    assert outcome.status == NO_QUOTE
+    assert len(gw.order_send_calls) == calls_before
+
+
+def test_real_wall_clock_advancing_past_freshness_blocks_round_2():
+    # External review finding #1 (second round): the freshness clock must
+    # be independently re-read at each round.
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", volume=0.05)
+    calls_before = len(gw.order_send_calls)
+    clock_calls = {"n": 0}
+
+    def advancing_clock():
+        clock_calls["n"] += 1
+        return 5000.0 if clock_calls["n"] == 1 else 5010.0
+
+    outcome = _close(gw, ticket, clock=advancing_clock)
+    assert outcome.status == NO_QUOTE
+    assert len(gw.order_send_calls) == calls_before
+    assert clock_calls["n"] >= 2
+
+
 def test_ambiguous_close_retcode_becomes_unknown_never_blindly_resent():
     gw = _demo_gateway()
     ticket = _open_position(gw, direction="BUY", volume=0.05)
@@ -254,3 +305,65 @@ def test_definitive_rejection_on_close_reports_rejected():
     ]
     outcome = _close(gw, ticket)
     assert outcome.status == REJECTED
+
+
+# --------------------------------------------------------------------------
+# External review finding #4 (2026-09-21): CANCELLED/PARTIAL_CLOSE must
+# never be collapsed into a blanket success.
+# --------------------------------------------------------------------------
+
+def test_cancelled_close_retcode_is_not_reported_as_fully_closed():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", volume=0.05)
+
+    gw._order_send_responses = [
+        OrderSendResult(retcode=10007, comment="cancelled", broker_order_id=None, broker_deal_id=None,
+                         broker_position_id=None, volume_filled=0.0, price_filled=None, raw={}),
+    ]
+    outcome = _close(gw, ticket)
+    assert outcome.status == CANCELLED
+    assert outcome.status != FULLY_CLOSED
+
+
+def test_partial_close_reports_partial_close_not_fully_closed():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", volume=0.05)
+
+    gw._order_send_responses = [
+        OrderSendResult(retcode=10010, comment="partial", broker_order_id="111", broker_deal_id="222",
+                         broker_position_id=None, volume_filled=0.02, price_filled=2000.0, raw={}),
+    ]
+    outcome = _close(gw, ticket)
+    assert outcome.status == PARTIAL_CLOSE
+    assert outcome.status != FULLY_CLOSED
+
+
+def test_partial_close_updates_local_volume_and_risk_from_broker_truth():
+    conn = connect(":memory:")
+    migrate(conn)
+
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", volume=0.05)
+
+    conn.execute(
+        """
+        INSERT INTO positions
+            (broker_position_id, canonical_symbol, direction, volume, entry_price,
+             initial_monetary_risk, strategy_key, status, opened_at_utc)
+        VALUES (?, 'XAUUSD', 'BUY', 0.05, 2000.0, 20.0, 'momentum_continuation', 'OPEN', 1000)
+        """,
+        (ticket,),
+    )
+    conn.commit()
+
+    gw._order_send_responses = [
+        OrderSendResult(retcode=10010, comment="partial", broker_order_id="111", broker_deal_id="222",
+                         broker_position_id=None, volume_filled=0.02, price_filled=2000.0, raw={}),
+    ]
+    outcome = _close(gw, ticket, conn=conn)
+    assert outcome.status == PARTIAL_CLOSE
+
+    row = conn.execute("SELECT volume, initial_monetary_risk FROM positions WHERE broker_position_id = ?", (ticket,)).fetchone()
+    assert row["volume"] == pytest.approx(0.03)  # 0.05 - 0.02 filled
+    assert row["initial_monetary_risk"] == pytest.approx(20.0 * (0.03 / 0.05))
+    conn.close()

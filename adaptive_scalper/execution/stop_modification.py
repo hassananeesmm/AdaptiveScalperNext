@@ -55,11 +55,13 @@ this module DOES honor as defense in depth.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from typing import Callable
 
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.protocol import Gateway
-from adaptive_scalper.gateway.retcodes import interpret_retcode
+from adaptive_scalper.gateway.retcodes import RetcodeCategory, interpret_retcode
 from adaptive_scalper.gateway.symbol_validation import (
     DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS,
     validate_execution_quote,
@@ -82,6 +84,11 @@ NO_CHANGE = "NO_CHANGE"
 BROKER_CONSTRAINT = "BROKER_CONSTRAINT"
 UNKNOWN = "UNKNOWN"
 REJECTED = "REJECTED"
+# External review finding #4 (2026-09-21): a CANCELLED retcode is NOT
+# proof the stop advanced -- it must never fall through to SENT. It gets
+# its own distinct outcome, never REJECTED (a cancel is not a positive
+# rejection either) and never SENT/success.
+CANCELLED = "CANCELLED"
 SENT = "SENT"
 
 DEFAULT_ORDER_CHECK_SUCCESS_RETCODES = frozenset({0, 10009})
@@ -125,12 +132,18 @@ def _resolve_round(
     broker_symbol: str,
     proposed_stop_price: float,
     max_quote_age_seconds: float,
-    now: float | None,
+    clock: Callable[[], float],
 ) -> _RoundResult:
     """Fresh DEMO verification + fresh position + fresh symbol/tick state,
     entirely re-fetched and re-validated — never reused from a prior
     round. Called once before `order_check` and again, identically,
-    immediately before `order_send`."""
+    immediately before `order_send`.
+
+    `clock()` is called HERE, freshly, every round (external review
+    finding #1, 2026-09-21) — never a `now` value computed once and
+    carried across both rounds, which would let real wall-clock time
+    pass (permission/order_check/DB work) without round 2's freshness
+    check ever noticing a quote had actually gone stale."""
     demo = verify_demo_before_order(gateway)
     if not demo.allowed:
         return _RoundResult(StopModificationOutcome(NOT_DEMO, f"refusing a broker-mutating stop change: {demo.detail}"))
@@ -172,7 +185,7 @@ def _resolve_round(
         ))
 
     tick = gateway.symbol_info_tick(broker_symbol)
-    quote_check = validate_execution_quote(tick, max_quote_age_seconds=max_quote_age_seconds, now=now)
+    quote_check = validate_execution_quote(tick, max_quote_age_seconds=max_quote_age_seconds, now=clock())
     if not quote_check.valid:
         return _RoundResult(StopModificationOutcome(
             NO_QUOTE, f"quote check failed for {broker_symbol!r}: {quote_check.reason} — {quote_check.detail}",
@@ -206,10 +219,12 @@ def modify_protective_stop_safely(
     comment: str = "",
     order_check_success_retcodes: frozenset[int] = DEFAULT_ORDER_CHECK_SUCCESS_RETCODES,
     max_quote_age_seconds: float = DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS,
-    now: float | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> StopModificationOutcome:
-    """`now`: epoch seconds to compare quote freshness against, for
-    deterministic tests; omit to use real `time.time()`."""
+    """`clock`: the FRESHNESS clock (external review finding #1) — called
+    independently at each round; omit to use real `time.time()`. Tests
+    proving genuine staleness detection pass a fake clock that advances
+    between rounds."""
     round_kwargs = dict(
         broker_position_id=broker_position_id,
         expected_direction=expected_direction,
@@ -217,7 +232,7 @@ def modify_protective_stop_safely(
         broker_symbol=broker_symbol,
         proposed_stop_price=proposed_stop_price,
         max_quote_age_seconds=max_quote_age_seconds,
-        now=now,
+        clock=clock,
     )
 
     round1 = _resolve_round(gateway, **round_kwargs)
@@ -263,10 +278,21 @@ def modify_protective_stop_safely(
     result = gateway.order_send(final_request)
     interpretation = interpret_retcode(result.retcode)
 
-    if interpretation.order_state.value == "UNKNOWN":
-        return StopModificationOutcome(UNKNOWN, interpretation.detail, result=result)
+    # External review finding #4 (2026-09-21): only POSITIVE broker proof
+    # of a completed modification (category DONE) may report success.
+    # CANCELLED is its own distinct outcome, never folded into SENT.
+    # PLACED/DONE_PARTIAL don't make semantic sense for an in-place SLTP
+    # modification (they describe a NEW order's resting/partial-fill
+    # state) — if a broker ever reports one anyway, that is exactly the
+    # kind of ambiguity that must stay UNKNOWN/PENDING_RECONCILIATION,
+    # never guessed into success.
     if interpretation.is_definitive_rejection:
         return StopModificationOutcome(REJECTED, interpretation.detail, result=result)
-    return StopModificationOutcome(
-        SENT, f"stop advanced to {final_request.stop_loss}", new_stop_price=final_request.stop_loss, result=result,
-    )
+    if interpretation.category == RetcodeCategory.CANCELLED:
+        return StopModificationOutcome(CANCELLED, interpretation.detail, result=result)
+    if interpretation.category == RetcodeCategory.DONE:
+        return StopModificationOutcome(
+            SENT, f"stop advanced to {final_request.stop_loss}", new_stop_price=final_request.stop_loss, result=result,
+        )
+    # TIMEOUT_OR_ERROR, PLACED, DONE_PARTIAL: no positive proof either way.
+    return StopModificationOutcome(UNKNOWN, interpretation.detail, result=result)

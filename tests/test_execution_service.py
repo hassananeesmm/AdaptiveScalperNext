@@ -179,6 +179,7 @@ def _submit(db, gw, fetch_fresh_evidence, **overrides):
         conn=db, gateway=gw, chain_key="chain-1", client_request_id="req-1", canonical_symbol="XAUUSD",
         broker_symbol="XAUUSDm", direction="BUY", volume=0.05, stop_loss=1990.0, take_profit=2020.0,
         fetch_fresh_evidence=fetch_fresh_evidence, now_utc=5000, history_window_seconds=10000,
+        clock=lambda: 5000.0,  # matches _demo_gateway()'s default tick time=5000 -> always fresh unless overridden
     )
     defaults.update(overrides)
     return submit_new_entry(**defaults)
@@ -212,6 +213,15 @@ def test_happy_path_fills_and_journals_full_lifecycle(db):
     assert row["direction"] == "BUY"
     assert row["initial_monetary_risk"] == pytest.approx(20.0)
     assert row["strategy_key"] == "momentum_continuation"
+
+    # External review findings #5/#6: durable typed risk accounting on
+    # the order row itself, reconstructable from SQLite alone.
+    order_row = db.execute("SELECT * FROM orders WHERE id = ?", (outcome.order.id,)).fetchone()
+    assert order_row["requested_monetary_risk"] == pytest.approx(20.0)
+    assert order_row["filled_volume"] == pytest.approx(0.05)
+    assert order_row["filled_initial_monetary_risk"] == pytest.approx(20.0)
+    assert order_row["remaining_volume"] == pytest.approx(0.0)
+    assert order_row["remaining_pending_monetary_risk"] == pytest.approx(0.0)
 
 
 def test_evidence_fetched_exactly_twice_on_the_happy_path(db):
@@ -424,6 +434,112 @@ def test_gateway_quote_goes_stale_between_rounds_blocks_send(db):
 
 
 # --------------------------------------------------------------------------
+# External review finding #1 (2026-09-21, second round): the freshness
+# CLOCK must be independently re-read at each round -- a frozen `now`
+# carried across the whole submission lifecycle would let a quote go
+# genuinely stale in real wall-clock time without round 2 ever noticing.
+# --------------------------------------------------------------------------
+
+def test_real_wall_clock_advancing_past_freshness_blocks_round_2_even_with_unchanged_tick(db):
+    # The tick returned is IDENTICAL both rounds (never mutated) -- only
+    # the CLOCK advances between round 1 and round 2, simulating real
+    # wall-clock time genuinely passing during permission/order_check/DB
+    # work. A frozen `now` value would never detect this.
+    gw = _demo_gateway()
+    clock_calls = {"n": 0}
+
+    def advancing_clock():
+        clock_calls["n"] += 1
+        # round 1 sees a fresh clock (tick.time=5000, age=0); round 2's
+        # clock has advanced well past the 5s execution-quote freshness
+        # threshold, even though the SAME tick object is returned both times.
+        return 5000.0 if clock_calls["n"] == 1 else 5010.0
+
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()), clock=advancing_clock)
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+    assert clock_calls["n"] >= 2  # the clock was genuinely re-read, not read once and reused
+
+
+def test_clock_is_independent_of_the_event_journal_timestamp(db):
+    # now_utc (journal timestamp) stays fixed for the whole submission;
+    # clock() is a SEPARATE concern and can differ freely without
+    # affecting journal event timestamps.
+    gw = _demo_gateway()
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()), now_utc=99999, clock=lambda: 5000.0, history_window_seconds=200000)
+    assert outcome.status == FILLED
+    events = get_chain_events(db, "chain-1")
+    assert all(e.event_timestamp_utc == 99999 for e in events)
+
+
+# --------------------------------------------------------------------------
+# External review finding #2 (2026-09-21): the execution boundary's own
+# critical-state check must independently verify FRESH directional
+# trade-mode permission and canonical asset identity -- not just
+# trade_mode != DISABLED, and never solely trusted from the caller's
+# (potentially stale) FinalPermissionInput.
+# --------------------------------------------------------------------------
+
+def test_full_to_closeonly_between_rounds_blocks_new_entry(db):
+    gw = _demo_gateway()
+    original_symbol_info = gw.symbol_info
+    calls = {"n": 0}
+
+    def flaky_symbol_info(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _symbol_spec(trade_mode=SymbolTradeMode.CLOSEONLY)
+        return original_symbol_info(name)
+
+    gw.symbol_info = flaky_symbol_info
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+def test_full_to_longonly_before_a_sell_blocks_new_entry(db):
+    gw = _demo_gateway()
+    original_symbol_info = gw.symbol_info
+    calls = {"n": 0}
+
+    def flaky_symbol_info(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            return _symbol_spec(trade_mode=SymbolTradeMode.LONGONLY)
+        return original_symbol_info(name)
+
+    gw.symbol_info = flaky_symbol_info
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()), direction="SELL")
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+def test_longonly_still_allows_a_buy(db):
+    gw = _demo_gateway(symbols=[_symbol_spec(trade_mode=SymbolTradeMode.LONGONLY)])
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()), direction="BUY")
+    assert outcome.status == FILLED
+
+
+def test_fresh_asset_identity_mismatch_between_rounds_blocks_new_entry(db):
+    gw = _demo_gateway()
+    original_symbol_info = gw.symbol_info
+    calls = {"n": 0}
+
+    def flaky_symbol_info(name):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            # description no longer contains "gold" and currency_base no
+            # longer XAU -- identity can no longer be proven for XAUUSD.
+            return _symbol_spec(description="Silver", currency_base="XAG")
+        return original_symbol_info(name)
+
+    gw.symbol_info = flaky_symbol_info
+    outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
+    assert outcome.status == BLOCKED_BROKER_STATE
+    assert gw.order_send_calls == []
+
+
+# --------------------------------------------------------------------------
 # External review finding #13: a SECOND order_check + fresh margin
 # recheck, immediately before send, against the freshest broker state.
 # --------------------------------------------------------------------------
@@ -563,6 +679,15 @@ def test_done_partial_becomes_partial_never_rejected(db):
     opened_events = [e for e in get_chain_events(db, "chain-1") if e.event_type == "POSITION_OPENED"]
     assert len(opened_events) == 1
     assert opened_events[0].payload["partial"] is True
+
+    # External review findings #5/#6: filled/remaining risk accounting on
+    # the order row narrows correctly after the partial fill.
+    order_row = db.execute("SELECT * FROM orders WHERE id = ?", (outcome.order.id,)).fetchone()
+    assert order_row["requested_monetary_risk"] == pytest.approx(20.0)
+    assert order_row["filled_volume"] == pytest.approx(0.02)
+    assert order_row["filled_initial_monetary_risk"] == pytest.approx(20.0 * 0.02 / 0.05)
+    assert order_row["remaining_volume"] == pytest.approx(0.03)
+    assert order_row["remaining_pending_monetary_risk"] == pytest.approx(20.0 - (20.0 * 0.02 / 0.05))
     assert opened_events[0].payload["pending_volume"] == pytest.approx(0.03)
 
 
@@ -592,6 +717,14 @@ def test_placed_becomes_resting_never_rejected(db):
     outcome = _submit(db, gw, _sequence(_good_evidence(), _good_evidence()))
     assert outcome.status == RESTING
     assert outcome.order.state == OrderState.RESTING
+
+    # External review finding #6: a RESTING order's monetary risk must be
+    # derivable from persisted state -- fully pending, nothing filled.
+    order_row = db.execute("SELECT * FROM orders WHERE id = ?", (outcome.order.id,)).fetchone()
+    assert order_row["requested_monetary_risk"] == pytest.approx(20.0)
+    assert order_row["filled_volume"] == pytest.approx(0.0)
+    assert order_row["remaining_volume"] == pytest.approx(0.05)
+    assert order_row["remaining_pending_monetary_risk"] == pytest.approx(20.0)
 
 
 def test_cancel_retcode_becomes_cancelled(db):

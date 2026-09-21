@@ -70,6 +70,27 @@ def test_insert_bars_is_idempotent(db):
     assert count == 100
 
 
+def test_get_bars_returns_ascending_bars_in_range(db):
+    bars = _bars(1_700_000_000, 10)
+    store.insert_bars(db, "XAUUSD", "M1", bars)
+    result = store.get_bars(db, "XAUUSD", "M1", 1_700_000_000, 1_700_000_000 + 9 * 60)
+    assert [b.time for b in result] == [b.time for b in bars]
+    assert result[0].open == 1.0
+
+
+def test_get_bars_excludes_out_of_range_and_other_symbol_resolution(db):
+    bars = _bars(1_700_000_000, 10)
+    store.insert_bars(db, "XAUUSD", "M1", bars)
+    store.insert_bars(db, "XAUUSD", "M5", bars)
+    store.insert_bars(db, "GBPJPY", "M1", bars)
+
+    narrow = store.get_bars(db, "XAUUSD", "M1", 1_700_000_000 + 2 * 60, 1_700_000_000 + 4 * 60)
+    assert len(narrow) == 3
+
+    empty = store.get_bars(db, "XAUUSD", "M1", 0, 10)
+    assert empty == []
+
+
 def test_insert_ticks_is_idempotent(db):
     ticks = _ticks(1_700_000_000, 50)
     first = store.insert_ticks(db, "XAUUSD", ticks)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from adaptive_scalper.execution.position_resolution import resolve_opened_position_id
+import pytest
+
+from adaptive_scalper.execution.position_resolution import resolve_entry_fill_evidence, resolve_opened_position_id
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
 from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder
 
@@ -92,3 +94,80 @@ def test_real_order_send_flow_resolves_correctly():
     )
     assert resolution.resolved
     assert resolution.broker_position_id == actual_position_id
+
+
+# --------------------------------------------------------------------------
+# resolve_entry_fill_evidence (external review finding #8/#9, 2026-09-21):
+# never entry_price=0.0 -- entry price must come from positively proven
+# broker deal evidence, and every matching entry deal must be returned.
+# --------------------------------------------------------------------------
+
+def test_entry_fill_evidence_resolves_single_deal():
+    gw = FakeGateway(historical_deals=[_deal(ticket=500, order=100, position_id=900, price=2000.0, volume=0.05)])
+    evidence = resolve_entry_fill_evidence(
+        gw, broker_deal_id="500", broker_order_id="100", window_from_utc=0, window_to_utc=9999999999,
+    )
+    assert evidence.resolved
+    assert evidence.broker_position_id == "900"
+    assert len(evidence.deals) == 1
+    assert evidence.total_filled_volume == 0.05
+    assert evidence.weighted_avg_price == 2000.0
+
+
+def test_entry_fill_evidence_aggregates_multiple_in_deals_for_the_same_position():
+    gw = FakeGateway(historical_deals=[
+        _deal(ticket=500, order=100, position_id=900, price=2000.0, volume=0.02),
+        _deal(ticket=501, order=100, position_id=900, price=2010.0, volume=0.03),
+    ])
+    evidence = resolve_entry_fill_evidence(
+        gw, broker_deal_id="500", broker_order_id="100", window_from_utc=0, window_to_utc=9999999999,
+    )
+    assert evidence.resolved
+    assert len(evidence.deals) == 2
+    assert evidence.total_filled_volume == 0.05
+    # weighted avg = (2000*0.02 + 2010*0.03) / 0.05 = 2006.0
+    assert evidence.weighted_avg_price == pytest.approx(2006.0)
+
+
+def test_entry_fill_evidence_ignores_deals_for_other_positions():
+    gw = FakeGateway(historical_deals=[
+        _deal(ticket=500, order=100, position_id=900, price=2000.0, volume=0.02),
+        _deal(ticket=600, order=200, position_id=901, price=1990.0, volume=0.05),  # different position
+    ])
+    evidence = resolve_entry_fill_evidence(
+        gw, broker_deal_id="500", broker_order_id="100", window_from_utc=0, window_to_utc=9999999999,
+    )
+    assert evidence.resolved
+    assert len(evidence.deals) == 1
+    assert evidence.total_filled_volume == 0.02
+
+
+def test_entry_fill_evidence_unresolved_when_only_zero_price_deal_exists():
+    gw = FakeGateway(historical_deals=[_deal(ticket=500, order=100, position_id=900, price=0.0, volume=0.05)])
+    evidence = resolve_entry_fill_evidence(
+        gw, broker_deal_id="500", broker_order_id="100", window_from_utc=0, window_to_utc=9999999999,
+    )
+    assert not evidence.resolved
+    assert evidence.weighted_avg_price is None
+
+
+def test_entry_fill_evidence_ignores_out_deals():
+    gw = FakeGateway(historical_deals=[
+        _deal(ticket=500, order=100, position_id=900, entry=1, price=2010.0, volume=0.05),  # OUT, not IN
+    ])
+    evidence = resolve_entry_fill_evidence(
+        gw, broker_deal_id="500", broker_order_id="100", window_from_utc=0, window_to_utc=9999999999,
+    )
+    # position resolution itself requires an IN/any deal match by ticket to
+    # find the position id; here the only deal is OUT, so the position
+    # resolves via deal ticket match, but no IN evidence exists to price it.
+    assert not evidence.resolved
+
+
+def test_entry_fill_evidence_unresolved_when_position_itself_unresolved():
+    gw = FakeGateway()
+    evidence = resolve_entry_fill_evidence(
+        gw, broker_deal_id="500", broker_order_id="100", window_from_utc=0, window_to_utc=9999999999,
+    )
+    assert not evidence.resolved
+    assert evidence.broker_position_id is None

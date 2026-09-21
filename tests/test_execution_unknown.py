@@ -267,3 +267,85 @@ def test_agreeing_matches_across_sources_resolve_cleanly():
     result = _resolve_no_id(order, current_positions=[position], history_deals=[deal])
     assert result.resolved is True
     assert result.matched_broker_position_id == "55"
+
+
+# --------------------------------------------------------------------------
+# External review finding #11 (2026-09-21): a token+symbol match alone is
+# not enough -- direction/volume/magic/time-window must also agree, and a
+# candidate failing any of them is EXCLUDED (not escalated to conflict).
+# --------------------------------------------------------------------------
+
+def test_token_match_with_wrong_direction_is_not_evidence():
+    order = _order(broker_order_id=None, client_request_id="req-dir", broker_symbol="XAUUSDm", direction="BUY")
+    token = request_token("req-dir")
+    position = PositionSnapshot("55", "XAUUSDm", "SELL", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, token)
+    result = _resolve_no_id(order, current_positions=[position])
+    assert result.resolved is False
+    assert result.conflict is False  # excluded, not a conflict
+
+
+def test_token_match_with_wrong_volume_is_not_evidence():
+    order = _order(broker_order_id=None, client_request_id="req-vol", broker_symbol="XAUUSDm", requested_volume=0.05)
+    token = request_token("req-vol")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.30, 2000.0, 1990.0, 2010.0, 0.0, 0, token)
+    result = _resolve_no_id(order, current_positions=[position])
+    assert result.resolved is False
+    assert result.conflict is False
+
+
+def test_remaining_volume_is_an_acceptable_match_for_a_partially_filled_resting_order():
+    order = _order(
+        broker_order_id=None, client_request_id="req-remaining", broker_symbol="XAUUSDm",
+        requested_volume=0.05, remaining_volume=0.03,
+    )
+    token = request_token("req-remaining")
+    pending = PendingOrderSnapshot("77", "XAUUSDm", "BUY", 0.03, 1990.0, 0, token)  # broker-reported remaining volume
+    result = _resolve_no_id(order, current_pending_orders=[pending])
+    assert result.resolved is True
+    assert result.new_state == OrderState.RESTING
+
+
+def test_token_match_with_wrong_magic_is_not_evidence():
+    order = _order(broker_order_id=None, client_request_id="req-magic", broker_symbol="XAUUSDm", magic=42)
+    token = request_token("req-magic")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 999, token)
+    result = _resolve_no_id(order, current_positions=[position])
+    assert result.resolved is False
+    assert result.conflict is False
+
+
+def test_token_match_with_matching_magic_is_evidence():
+    order = _order(broker_order_id=None, client_request_id="req-magic-ok", broker_symbol="XAUUSDm", magic=42)
+    token = request_token("req-magic-ok")
+    position = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 42, token)
+    result = _resolve_no_id(order, current_positions=[position])
+    assert result.resolved is True
+
+
+def test_token_match_outside_time_window_is_not_evidence():
+    order = _order(broker_order_id=None, client_request_id="req-time", broker_symbol="XAUUSDm", created_at_utc=1000)
+    token = request_token("req-time")
+    deal = _history_deal(order=1, position_id=55, comment=token, time=1000 + 10_000)  # far outside the default window
+    result = _resolve_no_id(order, history_deals=[deal])
+    assert result.resolved is False
+    assert result.conflict is False
+
+
+def test_token_match_within_time_window_is_evidence():
+    order = _order(broker_order_id=None, client_request_id="req-time-ok", broker_symbol="XAUUSDm", created_at_utc=1000)
+    token = request_token("req-time-ok")
+    deal = _history_deal(order=1, position_id=55, comment=token, time=1050)  # well within the default 300s window
+    result = _resolve_no_id(order, history_deals=[deal])
+    assert result.resolved is True
+
+
+def test_incompatible_candidate_does_not_create_a_false_conflict_with_a_genuine_match():
+    # A coincidental token collision on the WRONG direction must not turn
+    # a genuinely resolvable match into a false ambiguity.
+    order = _order(broker_order_id=None, client_request_id="req-mixed", broker_symbol="XAUUSDm", direction="BUY")
+    token = request_token("req-mixed")
+    genuine = PositionSnapshot("55", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, token)
+    coincidental = PositionSnapshot("66", "XAUUSDm", "SELL", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, token)
+    result = _resolve_no_id(order, current_positions=[genuine, coincidental])
+    assert result.resolved is True
+    assert result.matched_broker_position_id == "55"

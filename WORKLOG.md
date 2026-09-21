@@ -1477,3 +1477,104 @@ full per-finding detail is in BUG_BACKLOG.md's "Fixed" section (search
 Full suite: 961 passed, 0 failed, 0 skipped (up from 916). No secrets,
 credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
 for commit (verified via `git status`/`git diff` before committing).
+
+## Session: external-review safety checkpoint (16 new findings), resumed
+## from the working tree ahead of 2bd1bf0
+
+Resumed per the mission prompt's explicit instruction to preserve local
+work newer than the last externally-reviewed push and fix a fresh batch
+of 16 external-review findings (numbered NF1-NF16 to distinguish them
+from the prior 17) before continuing into backtest/ML/PAPER/runtime
+work. Backtest/walk-forward infra (`adaptive_scalper/backtest/`,
+`adaptive_scalper/simulation/`, migration `0014_backtest`) that was
+already in progress when this review landed was preserved untouched and
+resumes after this checkpoint, per the mission's explicit "do not
+discard local work" instruction.
+
+Full per-finding detail is in BUG_BACKLOG.md's "Fixed" section (search
+"16 new findings before resuming backtest/ML/PAPER work"); summary:
+
+1. `execution/service.py` and `execution/stop_modification.py` both took
+   an injectable `clock: Callable[[], float]` (default `time.time`)
+   through to `validate_execution_quote()`, called independently at each
+   verification round rather than sharing one `now` computed once at the
+   top of a two-round check — closes a real window where a stale tick
+   could survive into round 2 undetected.
+2. `_verify_critical_broker_state()` now fetches `symbol_spec` fresh each
+   round and independently checks `identity_matches_canonical()` (new
+   public function in `gateway/symbol_validation.py`) and
+   `validate_direction_for_new_exposure()` against it, rather than
+   trusting the caller's `FinalPermissionInput.direction_check`/
+   `asset_identity` fields alone.
+3-4. `execution/close.py` rewritten to the same two-identical-rounds
+   standard as `stop_modification.py`: fresh symbol/tick/filling-type
+   each round, a second `order_check` before send when the final request
+   differs from round 1's, and result classification that distinguishes
+   `FULLY_CLOSED`/`PARTIAL_CLOSE`/`RESTING`/`CANCELLED`/`REJECTED`/
+   `UNKNOWN` rather than collapsing everything non-rejected into `SENT`.
+   A `PARTIAL_CLOSE` now calls `_apply_partial_close_to_local_state()`
+   to update local volume/risk from the broker-confirmed filled volume.
+5-6. `orders` gained durable typed fields (migration `0015_entry_fills`):
+   `requested_monetary_risk`/`filled_volume`/
+   `filled_initial_monetary_risk`/`remaining_volume`/
+   `remaining_pending_monetary_risk`, written via new
+   `execution/store.record_order_risk_accounting()` — a RESTING order's
+   pending risk is now reconstructable from SQLite + broker truth alone,
+   with no in-memory object required.
+7-10. New `execution/entry_fills.py`: `record_entry_fills()` persists
+   EVERY entry deal (new `deals` columns from the same migration:
+   `fee`/`entry_type`/`deal_type`/`broker_order_ticket`/`magic`/
+   `comment`) and recomputes the position's aggregate (weighted-average
+   price across all matching deals) from them — safe to call again if
+   more fills trickle in for the same `broker_position_id`, and refuses
+   to mutate the aggregate once R-management is already active on that
+   position (records an incident instead). `execution/
+   position_resolution.py` gained `resolve_entry_fill_evidence()`,
+   returning real broker execution evidence (deals, total filled volume,
+   weighted-average price) so a fill's entry price is NEVER persisted as
+   `result.price_filled or 0.0` — an unprovable fill stays
+   UNKNOWN/PENDING_RECONCILIATION.
+11. `execution/unknown.py`'s `resolve_unknown_order_without_broker_id()`
+   now requires direction/volume/magic compatibility (new
+   `_volume_compatible()`/`_magic_compatible()`) and, for deals/history
+   orders, a tight time-window match (new
+   `_within_time_window()`, default 300s) in EVERY evidence-source loop,
+   not just token+symbol — a token match with the wrong direction/volume/
+   time is excluded as evidence, not treated as a conflict.
+12. `execution/reconciliation.py` gained `reconcile_pending_orders()`
+   (mirrors `reconcile_positions()`, run against `orders_get()` vs local
+   `SUBMITTED`/`ACCEPTED`/`PENDING`/`RESTING`/`PARTIAL`/`UNKNOWN` orders)
+   and `_recover_missing_local_order()` (deferred-imports
+   `entry_fills`/`position_resolution` to avoid a circular import). A
+   dangerous unresolved pending-order mismatch now blocks new entries the
+   same way an unresolved position mismatch does.
+13-14. `position_management/manager.py`'s `_maybe_record_exit_fill()`
+   rewritten to aggregate ALL authoritative closing deals for a position
+   (not just the latest via `ORDER BY ... LIMIT 1`) for the real total
+   net P/L, weighted-average exit price, and `fill_r`; now also computes
+   and persists `realized_slippage` (decision reference price vs
+   broker-authoritative weighted fill price, correct BUY/SELL sign).
+15. `record_incident()` gained an optional `dedup_key` (falling back to
+   `f"{incident_type}:order:{order_id}"` when an order id is known): a
+   repeat call with the same key updates the existing unresolved row's
+   `last_seen_at_utc`/`occurrence_count`/`detail` (migration
+   `0017_incident_dedup`) instead of inserting a duplicate every
+   reconciliation cycle. Both `reconciliation.py` call sites now pass an
+   explicit key derived from `finding_type` + the broker position/order
+   id the finding concerns.
+16. `PROJECT_STATUS.md`'s stale Gateway Protocol paragraph (claiming
+   `order_send`/`order_check`/`positions_get`/`orders_get` were
+   deliberately excluded from the Protocol) rewritten to reflect that all
+   four now exist and are tested; the hardcoded "Schema version 13"
+   section updated to 17 (`0014_backtest` through `0017_incident_dedup`
+   added); the "no order_send/order_check exists anywhere in this
+   codebase" and "the directive §36 final-gate BLOCK_SYMBOL_NOT_ALLOWED
+   check does not exist yet" paragraphs (both left over from before the
+   17-findings checkpoint's execution work landed) rewritten to describe
+   current reality — `order_send`/`order_check` exist and are fake-tested;
+   `BLOCK_SYMBOL_NOT_ALLOWED` is implemented and composed into
+   `core/final_permission.py`.
+
+Full suite: 1024 passed, 0 failed, 0 skipped (up from 961). No secrets,
+credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
+for commit (verified via `git status`/`git diff` before committing).

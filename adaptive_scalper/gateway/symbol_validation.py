@@ -99,6 +99,18 @@ def _identity_matches(spec: SymbolSpec, identity: _IdentitySpec) -> bool:
     return True
 
 
+def identity_matches_canonical(spec: SymbolSpec, canonical: str) -> bool:
+    """Public entry point for `_identity_matches()` against an ALREADY-
+    FETCHED `SymbolSpec` — for callers (e.g. `execution/service.py`'s
+    critical-state check) that need to re-verify identity against fresh
+    broker metadata they fetched themselves, without `validate_resolved_symbol()`'s
+    own redundant internal `gateway.symbol_info()`/`symbol_info_tick()`
+    re-fetch. `canonical` must be one of `EXPECTED_IDENTITY`'s keys
+    (`ALLOWED_CANONICAL_SYMBOLS`) — a `KeyError` on anything else is
+    correct fail-closed behavior, not something to catch and paper over."""
+    return _identity_matches(spec, EXPECTED_IDENTITY[canonical])
+
+
 @dataclass(frozen=True)
 class SymbolValidationResult:
     canonical: str

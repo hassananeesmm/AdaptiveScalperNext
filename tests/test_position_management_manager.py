@@ -120,7 +120,7 @@ def test_healthy_neutral_position_holds(db):
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket)
 
-    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=1010)
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=1010, clock=lambda: 1010.0)
     assert result.action == HOLD
     assert result.current_r == pytest.approx(0.1)
     assert gw.order_send_calls[-1].action != "SLTP"  # nothing sent beyond the opening deal (no SLTP call)
@@ -132,7 +132,7 @@ def test_breakeven_trigger_moves_stop(db):
     position_id = _insert_local_position(db, ticket)
 
     # current_r = unrealized_pnl / initial_monetary_risk = 8/20 = 0.40 -> breakeven trigger
-    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1010)
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1010, clock=lambda: 1010.0)
     assert result.action == MOVE_PROTECTIVE_STOP
     assert result.stop_outcome is not None
     assert result.stop_outcome.status == "SENT"
@@ -148,10 +148,10 @@ def test_early_take_profit_triggers_full_close(db):
     position_id = _insert_local_position(db, ticket)
 
     # current_r = 20/20 = 1.0 >= early_take_profit_r default 1.0
-    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010, clock=lambda: 1010.0)
     assert result.action == FULL_CLOSE
     assert result.close_outcome is not None
-    assert result.close_outcome.status == "SENT"
+    assert result.close_outcome.status == "FULLY_CLOSED"
     assert gw.positions_get() == []  # actually closed
 
     state = get_state(db, position_id)
@@ -165,7 +165,7 @@ def test_thesis_invalidated_triggers_full_close_even_when_profitable(db):
     position_id = _insert_local_position(db, ticket)
 
     result = review_position_once(
-        db, gw, _base_input(position_id, ticket, unrealized_pnl=4.0, strategy_setup_still_valid=False), now_utc=1010,
+        db, gw, _base_input(position_id, ticket, unrealized_pnl=4.0, strategy_setup_still_valid=False), now_utc=1010, clock=lambda: 1010.0,
     )
     assert result.action == FULL_CLOSE
     assert any("setup condition" in r for r in result.reasons)
@@ -177,7 +177,7 @@ def test_regime_reversal_triggers_full_close(db):
     position_id = _insert_local_position(db, ticket)
 
     result = review_position_once(
-        db, gw, _base_input(position_id, ticket, unrealized_pnl=4.0, current_regime="TRENDING_DOWN"), now_utc=1010,
+        db, gw, _base_input(position_id, ticket, unrealized_pnl=4.0, current_regime="TRENDING_DOWN"), now_utc=1010, clock=lambda: 1010.0,
     )
     assert result.action == FULL_CLOSE
 
@@ -188,7 +188,7 @@ def test_max_holding_time_triggers_full_close(db):
     position_id = _insert_local_position(db, ticket)
 
     result = review_position_once(
-        db, gw, _base_input(position_id, ticket, unrealized_pnl=1.0, holding_seconds=600), now_utc=1010,
+        db, gw, _base_input(position_id, ticket, unrealized_pnl=1.0, holding_seconds=600), now_utc=1010, clock=lambda: 1010.0,
     )
     assert result.action == FULL_CLOSE
 
@@ -198,7 +198,7 @@ def test_peak_r_persists_across_review_calls(db):
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket)
 
-    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1010)  # r=0.40, breakeven fires
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1010, clock=lambda: 1010.0)  # r=0.40, breakeven fires
     result2 = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=1020)  # r=0.10, dropped
     assert result2.action == HOLD
     assert result2.peak_r == pytest.approx(0.40)  # never dropped
@@ -209,7 +209,7 @@ def test_invalid_initial_risk_quarantines_r_and_holds(db):
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket, initial_monetary_risk=0.0)
 
-    result = review_position_once(db, gw, _base_input(position_id, ticket, initial_monetary_risk=0.0, unrealized_pnl=5.0), now_utc=1010)
+    result = review_position_once(db, gw, _base_input(position_id, ticket, initial_monetary_risk=0.0, unrealized_pnl=5.0), now_utc=1010, clock=lambda: 1010.0)
     assert result.action == HOLD
     assert result.current_r is None
     assert gw.order_send_calls == [gw.order_send_calls[0]]  # only the opening deal, nothing else sent
@@ -223,7 +223,7 @@ def test_sell_position_breakeven_stop_moves_correct_direction(db):
     result = review_position_once(
         db, gw,
         _base_input(position_id, ticket, direction="SELL", unrealized_pnl=8.0, entry_price=2000.0),
-        now_utc=1010,
+        now_utc=1010, clock=lambda: 1010.0,
     )
     assert result.action == MOVE_PROTECTIVE_STOP
     # SELL: new stop = entry(2000) - 0.05*10 = 1999.5
@@ -235,7 +235,7 @@ def test_full_close_updates_local_and_broker_state_together(db):
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket)
 
-    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010, clock=lambda: 1010.0)
     assert gw.positions_get() == []
     # review_position_once() DOES trigger a real reconciliation pass via
     # close_position_safely(conn=..., reconciliation_chain_key=...), which
@@ -262,7 +262,7 @@ def test_pre_send_close_block_does_not_record_a_request_timestamp(db):
     position_id = _insert_local_position(db, ticket)
     gw._open_positions.clear()  # sabotage: broker no longer reports this position
 
-    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010, clock=lambda: 1010.0)
     assert result.action == FULL_CLOSE
     assert result.close_outcome.status == "ALREADY_CLOSED"
 
@@ -276,8 +276,8 @@ def test_full_close_records_a_request_timestamp_when_sent(db):
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket)
 
-    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
-    assert result.close_outcome.status == "SENT"
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010, clock=lambda: 1010.0)
+    assert result.close_outcome.status == "FULLY_CLOSED"
     state = get_state(db, position_id)
     assert state.request_at_utc == 1010
 
@@ -287,7 +287,7 @@ def test_position_reviewed_journaled_on_hold(db):
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket)
 
-    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=1010)
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=1010, clock=lambda: 1010.0)
     events = get_chain_events(db, _review_chain_key(position_id))
     reviewed = [e for e in events if e.event_type == "POSITION_REVIEWED"]
     assert len(reviewed) == 1
@@ -302,7 +302,7 @@ def test_stop_advanced_journaled_on_breakeven(db):
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket)
 
-    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1010)
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1010, clock=lambda: 1010.0)
     events = get_chain_events(db, _review_chain_key(position_id))
     advanced = [e for e in events if e.event_type == "STOP_ADVANCED"]
     assert len(advanced) == 1
@@ -315,7 +315,7 @@ def test_invalid_initial_risk_records_incident_and_journals_quarantined(db):
     position_id = _insert_local_position(db, ticket, initial_monetary_risk=0.0)
 
     result = review_position_once(
-        db, gw, _base_input(position_id, ticket, initial_monetary_risk=0.0, unrealized_pnl=5.0), now_utc=1010,
+        db, gw, _base_input(position_id, ticket, initial_monetary_risk=0.0, unrealized_pnl=5.0), now_utc=1010, clock=lambda: 1010.0,
     )
     assert result.action == HOLD
     assert result.quarantined is True
@@ -361,9 +361,9 @@ def test_full_close_records_real_broker_fill_when_reconciliation_recovers(db):
 
     gw.order_send = patched_order_send
 
-    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010)
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010, clock=lambda: 1010.0)
     assert result.action == FULL_CLOSE
-    assert result.close_outcome.status == "SENT"
+    assert result.close_outcome.status == "FULLY_CLOSED"
     assert result.close_outcome.reconciliation is not None
     assert ticket in result.close_outcome.reconciliation.recovered_position_ids
 
@@ -372,3 +372,73 @@ def test_full_close_records_real_broker_fill_when_reconciliation_recovers(db):
     assert state.fill_r == pytest.approx(0.925)
     assert state.broker_response_at_utc == 1010
     assert state.giveback_fill == pytest.approx(state.peak_r - 0.925)
+
+
+def test_full_close_realized_slippage_computed_from_decision_reference_price(db):
+    # Finding #14: realized_slippage = decision-time reference price vs
+    # the broker-authoritative exit price, signed so positive = worse for
+    # the trader (BUY position closes lower than expected).
+    import dataclasses as dc
+
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+
+    original_order_send = gw.order_send
+
+    def patched_order_send(request):
+        result = original_order_send(request)
+        if request.action == OrderAction.DEAL and request.position_ticket is not None:
+            last = gw._historical_deals[-1]
+            # exit fill price 1995.0 -- worse than the decision reference below
+            gw._historical_deals[-1] = dc.replace(last, time=1010, price=1995.0, profit=20.0, commission=0.0, swap=0.0)
+        return result
+
+    gw.order_send = patched_order_send
+
+    result = review_position_once(
+        db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0, current_price_at_review=2000.0),
+        now_utc=1010, clock=lambda: 1010.0,
+    )
+    assert result.action == FULL_CLOSE
+    state = get_state(db, position_id)
+    # BUY position: slippage = decision_reference(2000.0) - exit_price(1995.0) = 5.0 (worse)
+    assert state.realized_slippage == pytest.approx(5.0)
+
+
+def test_full_close_aggregates_multiple_closing_deals(db):
+    # Finding #13: fill_r/giveback_fill must reflect ALL closing deals
+    # recorded for the position, never just the latest one.
+    import dataclasses as dc
+
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+
+    original_order_send = gw.order_send
+
+    def patched_order_send(request):
+        result = original_order_send(request)
+        if request.action == OrderAction.DEAL and request.position_ticket is not None:
+            last = gw._historical_deals[-1]
+            # the real close deal FakeGateway just recorded
+            gw._historical_deals[-1] = dc.replace(
+                last, ticket=9001, time=1010, price=2000.0, volume=0.03, profit=12.0, commission=-0.3, swap=0.0, fee=0.0,
+            )
+            # plus an EARLIER partial-close deal for the same broker
+            # position that reconciliation should also pick up (a
+            # multi-deal close, external review finding #13/#15)
+            gw._historical_deals.append(dc.replace(
+                last, ticket=9000, time=1005, price=1998.0, volume=0.02, profit=8.0, commission=-0.2, swap=0.0, fee=0.0,
+            ))
+        return result
+
+    gw.order_send = patched_order_send
+
+    result = review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=20.0), now_utc=1010, clock=lambda: 1010.0)
+    assert result.action == FULL_CLOSE
+
+    state = get_state(db, position_id)
+    # total_profit=12.0+8.0=20.0; total_commission=-0.3-0.2=-0.5; realized_net=19.5; fill_r=19.5/20.0
+    assert state.fill_r == pytest.approx(19.5 / 20.0)
+    assert state.broker_response_at_utc == 1010  # the LATEST deal's time

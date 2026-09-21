@@ -53,8 +53,9 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
+from typing import Callable
 
-from adaptive_scalper.execution.close import POST_SEND_STATUSES, SENT as CLOSE_SENT, CloseOutcome, close_position_safely
+from adaptive_scalper.execution.close import FULLY_CLOSED, POST_SEND_STATUSES, CloseOutcome, close_position_safely
 from adaptive_scalper.execution.stop_modification import SENT as STOP_SENT, StopModificationOutcome, modify_protective_stop_safely
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.journal.events import append_event
@@ -95,6 +96,15 @@ class PositionReviewInput:
     rag_advisory_negative: bool = False
     model_advisory_negative: bool = False
     strategy_key: str | None = None
+    # External review finding #14: the market price this review actually
+    # used to compute `unrealized_pnl` -- the DECISION reference price a
+    # real exit fill is later compared against to derive realized
+    # slippage. Optional (`None` when a caller genuinely doesn't have it,
+    # e.g. most of this module's own unit tests) -- `realized_slippage`
+    # simply stays unset rather than being computed from a fabricated
+    # reference, exactly like every other "honest N/A" field in this
+    # codebase.
+    current_price_at_review: float | None = None
 
 
 @dataclass(frozen=True)
@@ -171,22 +181,58 @@ def _maybe_record_exit_fill(conn, inp: PositionReviewInput, close_outcome: Close
     (always true from this module) and ran; this position's
     `broker_position_id` appears in `recovered_position_ids` only when the
     reconciliation pass found and applied the REAL authoritative closing
-    deal from broker history (`execution/reconciliation.py`)."""
+    deal(s) from broker history (`execution/reconciliation.py`).
+
+    External review finding #13: aggregates EVERY closing deal
+    (OUT/INOUT/OUT_BY) recorded for this position — a close can span
+    multiple deals (partial closes, multi-deal fills) — never just the
+    single latest one, which would silently under/over-state `fill_r`/
+    `giveback_fill` whenever more than one deal was involved.
+
+    External review finding #14: also computes and persists
+    `realized_slippage` — the DECISION-time reference price
+    (`inp.current_price_at_review`) vs the broker-authoritative volume-
+    weighted exit price, signed so a positive value always means the fill
+    was WORSE for the trader (a lower price than expected on a BUY close,
+    a higher price than expected on a SELL close). Stays `None` (never
+    fabricated) when `inp.current_price_at_review` wasn't supplied.
+    """
     report = close_outcome.reconciliation
     if report is None or inp.broker_position_id not in report.recovered_position_ids:
         return
 
-    deal = conn.execute(
-        "SELECT * FROM deals WHERE broker_position_id = ? ORDER BY occurred_at_utc DESC LIMIT 1",
+    deals = conn.execute(
+        "SELECT * FROM deals WHERE broker_position_id = ? AND entry_type IN ('OUT', 'INOUT', 'OUT_BY') "
+        "ORDER BY occurred_at_utc",
         (inp.broker_position_id,),
-    ).fetchone()
-    if deal is None:
+    ).fetchall()
+    if not deals:
         return
 
-    realized_net = deal["profit"] + deal["commission"] + deal["swap"]
+    total_volume = sum(d["volume"] for d in deals)
+    total_profit = sum(d["profit"] for d in deals)
+    total_commission = sum(d["commission"] for d in deals)
+    total_swap = sum(d["swap"] for d in deals)
+    total_fee = sum(d["fee"] for d in deals)
+    latest_time = max(d["occurred_at_utc"] for d in deals)
+
+    realized_net = total_profit + total_commission + total_swap + total_fee
     fill_r = realized_net / inp.initial_monetary_risk
+
+    realized_slippage = None
+    if total_volume > 0 and inp.current_price_at_review is not None:
+        weighted_exit_price = sum(d["price"] * d["volume"] for d in deals) / total_volume
+        # The position's own direction, not the closing DEAL's direction
+        # (which is the opposite side) -- "worse" is relative to what the
+        # trader HELD, not what was sent to close it.
+        realized_slippage = (
+            inp.current_price_at_review - weighted_exit_price if inp.direction == "BUY"
+            else weighted_exit_price - inp.current_price_at_review
+        )
+
     state_store.record_exit_fill(
-        conn, inp.position_id, fill_r=fill_r, broker_response_at_utc=deal["occurred_at_utc"], now_utc=now,
+        conn, inp.position_id, fill_r=fill_r, broker_response_at_utc=latest_time,
+        realized_slippage=realized_slippage, now_utc=now,
     )
 
 
@@ -197,7 +243,12 @@ def review_position_once(
     *,
     params: AdaptiveExitParams = AdaptiveExitParams(),
     now_utc: int | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> PositionReviewResult:
+    """`clock`: the FRESHNESS clock passed through to
+    `modify_protective_stop_safely()` (external review finding #1) —
+    independent of `now_utc`, which is the journal/state-store EVENT
+    timestamp and legitimately stays fixed for this one review call."""
     now = now_utc if now_utc is not None else int(time.time())
 
     if not math.isfinite(inp.initial_monetary_risk) or inp.initial_monetary_risk <= 0:
@@ -271,7 +322,7 @@ def review_position_once(
         stop_outcome = modify_protective_stop_safely(
             gateway, broker_position_id=inp.broker_position_id, expected_direction=inp.direction,
             expected_volume=inp.volume, broker_symbol=inp.broker_symbol, proposed_stop_price=proposed_stop_price,
-            now=float(now),
+            clock=clock,
         )
         if stop_outcome.status == STOP_SENT:
             _journal_stop_advanced(conn, inp, now, stop_outcome, current_r=current_r, peak_r=state.peak_r)
@@ -281,15 +332,16 @@ def review_position_once(
     state_store.record_exit_decision(conn, inp.position_id, decision_r=current_r, decision_at_utc=now, now_utc=now)
     close_outcome = close_position_safely(
         gateway, broker_position_id=inp.broker_position_id, expected_direction=inp.direction,
-        expected_volume=inp.volume, broker_symbol=inp.broker_symbol,
+        expected_volume=inp.volume, broker_symbol=inp.broker_symbol, clock=clock,
         conn=conn, reconciliation_chain_key=_reconciliation_chain_key(inp.position_id),
     )
     if close_outcome.status in POST_SEND_STATUSES:
-        # A request actually reached the broker (filled, rejected, or
-        # uncertain) — only then is request_at_utc real (finding #4).
+        # A request actually reached the broker (filled, partially
+        # filled, cancelled, rejected, or uncertain) — only then is
+        # request_at_utc real (finding #4).
         state_store.record_exit_request(conn, inp.position_id, request_at_utc=now, now_utc=now)
 
-    if close_outcome.status == CLOSE_SENT:
+    if close_outcome.status == FULLY_CLOSED:
         _maybe_record_exit_fill(conn, inp, close_outcome, now)
 
     return PositionReviewResult(FULL_CLOSE, current_r, state.peak_r, reasons, close_outcome=close_outcome)

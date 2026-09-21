@@ -6,6 +6,7 @@ from __future__ import annotations
 from adaptive_scalper.execution.stop_modification import (
     ALREADY_CLOSED,
     BROKER_CONSTRAINT,
+    CANCELLED,
     NO_CHANGE,
     NOT_DEMO,
     NO_QUOTE,
@@ -81,7 +82,7 @@ def _open_position(gw: FakeGateway, direction: str = "BUY", volume: float = 0.05
 def _modify(gw, ticket, **overrides):
     defaults = dict(
         broker_position_id=ticket, expected_direction="BUY", expected_volume=0.05, broker_symbol="XAUUSDm",
-        proposed_stop_price=1995.0, now=5000.0,  # matches _tick()'s default time=5000 -> age 0, always fresh
+        proposed_stop_price=1995.0, clock=lambda: 5000.0,  # matches _tick()'s default time=5000 -> age 0, always fresh
     )
     defaults.update(overrides)
     return modify_protective_stop_safely(gw, **defaults)
@@ -363,3 +364,43 @@ def test_freeze_level_blocks_too_close_stop():
     outcome = _modify(gw, ticket, proposed_stop_price=1999.9)
     assert outcome.status == TOO_CLOSE_TO_PRICE
     assert len(gw.order_send_calls) == calls_before
+
+
+# --- External review finding #1 (2026-09-21, second round): the
+# freshness CLOCK must be independently re-read at each round, never a
+# frozen `now` carried across the whole call. ---
+
+
+def test_real_wall_clock_advancing_past_freshness_blocks_round_2():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", stop_loss=1990.0)
+    calls_before = len(gw.order_send_calls)
+    clock_calls = {"n": 0}
+
+    def advancing_clock():
+        clock_calls["n"] += 1
+        # round 1: fresh (tick.time=5000, age=0). round 2: clock has
+        # advanced past the 5s default execution-quote freshness
+        # threshold, even though the tick itself never changed.
+        return 5000.0 if clock_calls["n"] == 1 else 5010.0
+
+    outcome = _modify(gw, ticket, proposed_stop_price=1998.0, clock=advancing_clock)
+    assert outcome.status == NO_QUOTE
+    assert len(gw.order_send_calls) == calls_before
+    assert clock_calls["n"] >= 2
+
+
+# --- External review finding #4 (2026-09-21): a CANCELLED retcode must
+# never be reported as SENT/success. ---
+
+
+def test_cancelled_retcode_is_not_reported_as_sent():
+    gw = _demo_gateway()
+    ticket = _open_position(gw, direction="BUY", stop_loss=0.0)
+    gw._order_send_responses = [
+        OrderSendResult(retcode=10007, comment="cancelled", broker_order_id=None, broker_deal_id=None,
+                         broker_position_id=None, volume_filled=0.0, price_filled=None, raw={}),
+    ]
+    outcome = _modify(gw, ticket, proposed_stop_price=1990.0)
+    assert outcome.status == CANCELLED
+    assert outcome.status != SENT

@@ -43,6 +43,24 @@ on the compact request token `execution.service` embeds in every order's
 resolves ONLY when every matching candidate agrees — any ambiguity
 (disagreeing states, or more than one distinct position id) stays
 UNKNOWN with `conflict=True`, never guessed.
+
+External review finding #11 (2026-09-21): a token+symbol match ALONE is
+not enough — a token is only ~64 bits of a SHA-256 prefix, and MT5
+comments are broker-limited/broker-mutable. Every candidate must ALSO
+agree with the order's own DIRECTION, be volume-COMPATIBLE (matching
+either the originally requested volume or, once known, the remaining
+pending volume — a RESTING order's broker-reported volume legitimately
+shrinks as partial fills land), and, where the order's own `magic` is
+non-zero, agree on MAGIC too. A candidate failing any of these checks is
+simply NOT counted as a match at all (never added as conflicting
+evidence) — "token matches but direction/volume/magic is wrong" is
+exactly the coincidental-token-collision case this hardening exists to
+reject, not something to escalate into `conflict=True`. Historical
+evidence (deals/orders, which carry real timestamps) is additionally
+required to fall within a TIGHT time window of the order's own
+`created_at_utc` — current broker state (open positions, resting orders)
+carries no timestamp in this codebase's types, so the time check applies
+only where evidence for it actually exists, never fabricated.
 """
 
 from __future__ import annotations
@@ -62,6 +80,13 @@ _MT5_ORDER_STATE_TO_ORDER_STATE: dict[int, OrderState] = {
     5: OrderState.REJECTED,
     6: OrderState.EXPIRED,
 }
+
+# MT5 ENUM_ORDER_TYPE/ENUM_DEAL_TYPE: 0=BUY, 1=SELL for the market-order/
+# market-deal codes this project's three canonical symbols produce.
+_MT5_TYPE_TO_DIRECTION: dict[int, str] = {0: "BUY", 1: "SELL"}
+
+DEFAULT_UNKNOWN_CORRELATION_TIME_WINDOW_SECONDS = 300
+_VOLUME_TOLERANCE = 1e-9
 
 
 @dataclass(frozen=True)
@@ -155,6 +180,35 @@ def resolve_unknown_order(
     )
 
 
+def _order_acceptable_volumes(order: OrderRecord) -> tuple[float, ...]:
+    """Every volume figure a genuine match may legitimately show: the
+    originally requested volume, and — once a partial fill has narrowed
+    it — the current remaining pending volume (a RESTING order's
+    broker-reported volume shrinks as fills land; that is still the SAME
+    order, not a mismatch)."""
+    volumes = [order.requested_volume]
+    if order.remaining_volume is not None:
+        volumes.append(order.remaining_volume)
+    return tuple(volumes)
+
+
+def _volume_compatible(order: OrderRecord, candidate_volume: float) -> bool:
+    return any(abs(candidate_volume - v) <= _VOLUME_TOLERANCE for v in _order_acceptable_volumes(order))
+
+
+def _magic_compatible(order: OrderRecord, candidate_magic: int) -> bool:
+    # order.magic == 0 is this codebase's "unset" default -- treating it
+    # as non-discriminating (rather than requiring candidate_magic == 0
+    # too) avoids a false NON-match against a broker that fills in its
+    # own default magic; direction+volume+token+symbol already carry the
+    # real discriminating weight.
+    return order.magic == 0 or candidate_magic == order.magic
+
+
+def _within_time_window(order: OrderRecord, candidate_time: int, window_seconds: int) -> bool:
+    return abs(candidate_time - order.created_at_utc) <= window_seconds
+
+
 def resolve_unknown_order_without_broker_id(
     order: OrderRecord,
     *,
@@ -162,6 +216,7 @@ def resolve_unknown_order_without_broker_id(
     current_pending_orders: list[PendingOrderSnapshot],
     history_orders: list[HistoricalOrder],
     history_deals: list[HistoricalDeal],
+    time_window_seconds: int = DEFAULT_UNKNOWN_CORRELATION_TIME_WINDOW_SECONDS,
 ) -> UnknownResolution:
     """Secondary correlation path (execution-safety review round 2
     finding #7): resolves an order that lost broker acknowledgement
@@ -172,15 +227,19 @@ def resolve_unknown_order_without_broker_id(
     Correlates on the compact request TOKEN `execution.service` embeds
     in every `OrderRequest.comment` (`execution.request_token
     .embed_request_token()`) — NEVER on the full comment string, since
-    brokers may append/modify/truncate it. Matches are further narrowed
-    by `broker_symbol` (a token match on the wrong symbol is treated as
-    coincidence, not evidence). Resolves ONLY when every matching
-    candidate points to the SAME underlying broker state (same resolved
-    order state, and the same position id where one is present) — any
-    genuine ambiguity (matches disagreeing on state, or on more than one
-    distinct position id) remains UNKNOWN (`conflict=True`), exactly like
-    `resolve_unknown_order()`'s conflicting-evidence case. No match at
-    all also remains UNKNOWN, new entries blocked either way.
+    brokers may append/modify/truncate it — AND (external review finding
+    #11) requires every candidate to also agree on broker symbol,
+    direction, a compatible volume, magic (when the order's own magic is
+    set), and — for historical evidence carrying a real timestamp — a
+    tight time window around the order's `created_at_utc`. A candidate
+    failing any of these is simply excluded, not treated as conflicting
+    evidence. Resolves ONLY when every REMAINING matching candidate
+    points to the SAME underlying broker state (same resolved order
+    state, and the same position id where one is present) — any genuine
+    ambiguity (matches disagreeing on state, or on more than one distinct
+    position id) remains UNKNOWN (`conflict=True`), exactly like
+    `resolve_unknown_order()`'s conflicting-evidence case. No compatible
+    match at all also remains UNKNOWN, new entries blocked either way.
     """
     if order.broker_order_id is not None:
         raise ValueError(
@@ -192,22 +251,39 @@ def resolve_unknown_order_without_broker_id(
     resolutions: list[tuple[OrderState, str | None]] = []
 
     for p in current_positions:
-        if token in p.comment and p.symbol == order.broker_symbol:
+        if (
+            token in p.comment and p.symbol == order.broker_symbol and p.direction == order.direction
+            and _volume_compatible(order, p.volume) and _magic_compatible(order, p.magic)
+        ):
             resolutions.append((OrderState.FILLED, p.broker_position_id))
 
     for o in current_pending_orders:
-        if token in o.comment and o.symbol == order.broker_symbol:
+        if (
+            token in o.comment and o.symbol == order.broker_symbol and o.direction == order.direction
+            and _volume_compatible(order, o.volume) and _magic_compatible(order, o.magic)
+        ):
             resolutions.append((OrderState.RESTING, None))
 
     for d in history_deals:
-        if token in d.comment and d.symbol == order.broker_symbol:
+        deal_direction = _MT5_TYPE_TO_DIRECTION.get(d.type)
+        if (
+            token in d.comment and d.symbol == order.broker_symbol and deal_direction == order.direction
+            and _volume_compatible(order, d.volume) and _magic_compatible(order, d.magic)
+            and _within_time_window(order, d.time, time_window_seconds)
+        ):
             resolutions.append((OrderState.FILLED, str(d.position_id) if d.position_id else None))
 
     for h in history_orders:
-        if token in h.comment and h.symbol == order.broker_symbol:
-            mapped = _MT5_ORDER_STATE_TO_ORDER_STATE.get(h.state)
-            if mapped is not None:
-                resolutions.append((mapped, str(h.position_id) if h.position_id else None))
+        order_direction = _MT5_TYPE_TO_DIRECTION.get(h.type)
+        if not (
+            token in h.comment and h.symbol == order.broker_symbol and order_direction == order.direction
+            and _volume_compatible(order, h.volume_initial) and _magic_compatible(order, h.magic)
+            and _within_time_window(order, h.time_setup, time_window_seconds)
+        ):
+            continue
+        mapped = _MT5_ORDER_STATE_TO_ORDER_STATE.get(h.state)
+        if mapped is not None:
+            resolutions.append((mapped, str(h.position_id) if h.position_id else None))
 
     if not resolutions:
         return UnknownResolution(

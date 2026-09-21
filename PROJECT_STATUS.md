@@ -160,10 +160,14 @@ the exact implementation and test list.
   (`DISABLED`/`LONGONLY`/`SHORTONLY`/`CLOSEONLY`/`FULL`) with
   `allows_new_long`/`allows_new_short`/`allows_any_new_exposure`/
   `allows_close` helper properties. `Tick` carries `time_msc` (default 0)
-  for millisecond-resolution tick-history dedup. Protocol deliberately
-  excludes `order_send`/`order_check`/`positions_get`/`orders_get`/close/
-  modify — waiting on the execution state machine, idempotency, and
-  reconciliation to exist first (directive §118 "no showpiece modules").
+  for millisecond-resolution tick-history dedup. The Protocol now also
+  includes `order_send`/`order_check`/`positions_get`/`orders_get` — the
+  execution state machine, idempotency layer, and reconciliation
+  (`execution/`) that directive §118 required to exist first before these
+  were exposed are built and tested (see `adaptive_scalper/execution/`
+  below); `mt5_gateway.py`'s `order_send`/`order_check` are fake-tested
+  thoroughly but deliberately NOT yet exercised against the real terminal
+  (see the `mt5_gateway.py` entry and the "Not yet built/verified" list).
 - `mt5_gateway.py` — TESTED (live) for `initialize`/`account_info`/
   `terminal_info`/`symbols_get`/`symbol_info`/`symbol_info_tick`/
   `copy_rates_range`/`copy_ticks_range`/`history_orders_get`/
@@ -1050,10 +1054,14 @@ NOT assume a live terminal is present on any other machine or CI.
 ## Operating modes
 
 PAPER + MT5 DEMO only. `ALLOWED_MODES` contains no third value; config
-validation rejects any mode outside `{PAPER, DEMO}`. No `order_send`/
-`order_check` exists anywhere in the codebase yet, so there is no
-real-money execution path to disable — it has never been added, not
-"added and then blocked".
+validation rejects any mode outside `{PAPER, DEMO}`. `order_send`/
+`order_check` now exist (`gateway/protocol.py`, `mt5_gateway.py`,
+`execution/service.py`) but have only ever been exercised against
+`FakeGateway` in tests and, live, DEMO account order verification is
+still pending (see "Not yet built/verified"). There is no code path that
+enables real-money trading: `verify_demo_before_order()` is called fresh
+before every `order_send`/`order_check` and fails closed unless the
+connected account is confirmed DEMO.
 
 ## Allowed executable canonical symbols
 
@@ -1067,9 +1075,12 @@ on no-match/ambiguous), broker-state validation (`symbol_validation`,
 fails closed on disabled/invalid-contract/asset-identity-mismatch/
 no-quote/stale-quote), and (for new exposure specifically) directional
 trade-mode validation (`validate_direction_for_new_exposure`). The
-directive §36 final-gate `BLOCK_SYMBOL_NOT_ALLOWED` check does not exist
-yet as part of a composed gate — there is no final permission gate beyond
-the kill-switch slice (see `core/permission.py` above).
+directive §36 final-gate `BLOCK_SYMBOL_NOT_ALLOWED` check IS implemented
+and composed, in `core/final_permission.py`, alongside `BLOCK_MODE`/
+`BLOCK_STRATEGY_RETIRED`/`BLOCK_DATA_QUALITY`/`BLOCK_STALE_QUOTE`/the
+kill-switch slice from `core/permission.py` — that module is the actual
+complete final trade-permission gate `execution/service.py` consults, not
+just the kill-switch slice on its own.
 
 ## Permanently retired strategies
 
@@ -1416,6 +1427,32 @@ pre-existing gap this review surfaced: nothing in this codebase had ever
 created a `positions` table row for a real (non-reconciliation-recovered)
 entry before.
 
+A further external review of the working tree AHEAD of the 17-findings
+checkpoint's push (`2bd1bf0`) found 16 more findings (NF1-NF16), fixed in
+the same session before resuming backtest/ML/PAPER work: quote-freshness
+`now` frozen across a two-round check instead of using an injectable
+`clock` called independently each round (NF1); the execution-owned
+symbol check trusting the caller's direction/identity evidence instead
+of re-verifying it against fresh symbol metadata (NF2); `execution/
+close.py` lagging `stop_modification.py`'s two-round hardening standard
+(NF3) and collapsing CANCELLED/RESTING/PARTIAL into a single `SENT`
+(NF4); partial-fill residual risk not persisted as durable typed fields
+(NF5-6); `create_local_position()` unable to handle a second partial
+fill into the same `broker_position_id`, `entry_price` persistable as a
+fabricated `0.0`, individual entry deals never persisted, and the local
+`deals` schema dropping broker `fee` (NF7-10); UNKNOWN-without-broker-id
+resolution matching on token+symbol alone (NF11); `run_reconciliation()`
+never reconciling `orders_get()` against local pending/resting orders
+(NF12); exit-fill metrics aggregating only the latest closing deal and
+never computing `realized_slippage` (NF13-14); unbounded duplicate
+incident rows on every reconciliation cycle (NF15); and this file's own
+stale Gateway Protocol/schema-version/"order_send does not exist"
+paragraphs (NF16). **All 16 are now fixed** — see WORKLOG.md and
+BUG_BACKLOG.md's "Fixed" section (search "16 new findings before
+resuming backtest/ML/PAPER work") for full per-finding detail. New:
+`execution/entry_fills.py`, migrations `0015_entry_fills`/
+`0016_order_magic`/`0017_incident_dedup` (schema now 17).
+
 NOT yet done: actually WIRING the full pipeline into one real end-to-end
 runtime loop (market data → features → regime → strategies → selector →
 risk sizing → `execution.service.submit_new_entry` → position manager →
@@ -1455,11 +1492,12 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-13 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+17 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
-`0013_position_risk_quarantine`).
+`0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
+`0016_order_magic`, `0017_incident_dedup`).
 
 ## Local RAG (advisory-only)
 

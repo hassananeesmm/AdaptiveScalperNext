@@ -45,6 +45,33 @@ def insert_bars(conn: sqlite3.Connection, canonical_symbol: str, resolution: str
     return conn.total_changes - before
 
 
+def get_bars(
+    conn: sqlite3.Connection, canonical_symbol: str, resolution: str, from_utc: int, to_utc: int,
+) -> list[Bar]:
+    """Read back stored bars for one symbol/resolution/range, strictly
+    ascending by time (the `UNIQUE(canonical_symbol, resolution, ts_utc)`
+    constraint means there is at most one row per timestamp, so no
+    dedup step is needed here) — the read half of `insert_bars()`, used
+    by `adaptive_scalper/backtest/` and any other offline-research
+    consumer of the historical bar store."""
+    rows = conn.execute(
+        """
+        SELECT ts_utc, open, high, low, close, tick_volume, spread, real_volume
+        FROM bars
+        WHERE canonical_symbol = ? AND resolution = ? AND ts_utc >= ? AND ts_utc <= ?
+        ORDER BY ts_utc ASC
+        """,
+        (canonical_symbol, resolution, from_utc, to_utc),
+    ).fetchall()
+    return [
+        Bar(
+            time=r["ts_utc"], open=r["open"], high=r["high"], low=r["low"], close=r["close"],
+            tick_volume=r["tick_volume"], spread=r["spread"], real_volume=r["real_volume"],
+        )
+        for r in rows
+    ]
+
+
 def insert_ticks(conn: sqlite3.Connection, canonical_symbol: str, ticks: list[Tick]) -> int:
     """Insert ticks, skipping any already present (by canonical_symbol +
     time_msc). Returns the count of rows actually inserted."""

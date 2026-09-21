@@ -7,8 +7,11 @@ import pytest
 from adaptive_scalper.execution.reconciliation import (
     BLOCKING_MISMATCH,
     CLEAN,
+    MISSING_LOCAL_ORDER,
     MISSING_LOCAL_POSITION,
+    ORPHAN_BROKER_ORDER,
     ORPHAN_BROKER_POSITION,
+    PENDING_MISMATCH,
     RECONCILIATION_MISMATCH,
     RECOVERED,
     BrokerPositionSnapshot,
@@ -18,13 +21,16 @@ from adaptive_scalper.execution.reconciliation import (
     find_closing_deals,
     get_unresolved_incidents,
     has_dangerous_unresolved_unknown,
+    reconcile_pending_orders,
     reconcile_positions,
     record_incident,
     resolve_incident,
     run_reconciliation,
 )
+from adaptive_scalper.execution.store import create_order, get_active_orders, transition_order_state
+from adaptive_scalper.execution.state_machine import OrderState
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
-from adaptive_scalper.gateway.types import HistoricalDeal, PositionSnapshot
+from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder, PendingOrderSnapshot, PositionSnapshot
 from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.persistence import connect, migrate
 
@@ -122,6 +128,46 @@ def test_record_and_resolve_incident(db):
 
     resolve_incident(db, incident_id, "resolved: broker confirms FILLED", now_utc=2000)
     assert get_unresolved_incidents(db) == []
+
+
+def test_record_incident_dedup_key_updates_existing_row_instead_of_duplicating(db):
+    # External review finding #15: repeated reconciliation of the SAME
+    # unresolved mismatch must not create an unbounded stream of rows.
+    first_id = record_incident(
+        db, "RECONCILIATION_MISMATCH", "volume mismatch", dedup_key="RECONCILIATION_MISMATCH:pos-1", now_utc=1000,
+    )
+    second_id = record_incident(
+        db, "RECONCILIATION_MISMATCH", "volume mismatch (still)", dedup_key="RECONCILIATION_MISMATCH:pos-1", now_utc=1500,
+    )
+    assert second_id == first_id
+
+    unresolved = get_unresolved_incidents(db)
+    assert len(unresolved) == 1
+    row = unresolved[0]
+    assert row["occurrence_count"] == 2
+    assert row["first_seen_at_utc"] == 1000
+    assert row["last_seen_at_utc"] == 1500
+    assert row["detail"] == "volume mismatch (still)"
+
+
+def test_record_incident_dedup_key_does_not_merge_across_resolved_rows(db):
+    # A NEW occurrence of a problem that was already resolved is a fresh
+    # incident, not a silent reopen of history.
+    first_id = record_incident(db, "RECONCILIATION_MISMATCH", "volume mismatch", dedup_key="k1", now_utc=1000)
+    resolve_incident(db, first_id, "resolved", now_utc=1200)
+
+    second_id = record_incident(db, "RECONCILIATION_MISMATCH", "volume mismatch again", dedup_key="k1", now_utc=2000)
+    assert second_id != first_id
+    unresolved = get_unresolved_incidents(db)
+    assert len(unresolved) == 1
+    assert unresolved[0]["id"] == second_id
+    assert unresolved[0]["occurrence_count"] == 1
+
+
+def test_record_incident_without_dedup_key_always_creates_new_row(db):
+    record_incident(db, "UNKNOWN_OUTCOME", "uncertain", now_utc=1000)
+    record_incident(db, "UNKNOWN_OUTCOME", "uncertain", now_utc=1000)
+    assert len(get_unresolved_incidents(db)) == 2
 
 
 def test_has_dangerous_unresolved_unknown_true_when_present(db):
@@ -227,6 +273,26 @@ def test_run_reconciliation_blocking_records_incident_and_journals(db):
     assert events[0].payload["status"] == BLOCKING_MISMATCH
 
 
+def test_run_reconciliation_does_not_duplicate_incident_across_repeated_cycles(db):
+    # External review finding #15: the same unresolved orphan position,
+    # observed on every ~0.5-1s reconciliation cycle, must accumulate on
+    # ONE incident row, not spawn a new row per cycle.
+    gw = FakeGateway()
+    gw.inject_open_position(PositionSnapshot("pos-orphan", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, ""))
+
+    run_reconciliation(db, gw, "recon-2a", now_utc=5000)
+    run_reconciliation(db, gw, "recon-2b", now_utc=5500)
+    report = run_reconciliation(db, gw, "recon-2c", now_utc=6000)
+    assert report.status == BLOCKING_MISMATCH
+
+    incidents = get_unresolved_incidents(db)
+    assert len(incidents) == 1
+    assert incidents[0]["incident_type"] == ORPHAN_BROKER_POSITION
+    assert incidents[0]["occurrence_count"] == 3
+    assert incidents[0]["first_seen_at_utc"] == 5000
+    assert incidents[0]["last_seen_at_utc"] == 6000
+
+
 def test_run_reconciliation_recovers_from_real_closing_deal(db):
     # broker_position_id must be numeric-string, matching a real MT5
     # ticket, since HistoricalDeal.position_id is compared against it.
@@ -247,6 +313,11 @@ def test_run_reconciliation_recovers_from_real_closing_deal(db):
     assert deal_row is not None
     assert deal_row["price"] == 2010.0
     assert deal_row["profit"] == 10.0
+    # External review finding #10: fee/entry_type/deal_type/broker_order_ticket
+    # /magic/comment must never be silently discarded on recovery either.
+    assert deal_row["entry_type"] == "OUT"
+    assert deal_row["deal_type"] == "SELL"
+    assert deal_row["broker_order_ticket"] == "800"
 
     events = [e for e in get_chain_events(db, "recon-3:position:1") if e.event_type == "POSITION_CLOSED"]
     assert len(events) == 1
@@ -409,6 +480,100 @@ def test_recovery_is_atomic_position_deals_and_journal_together(db):
     row = db.execute("SELECT status FROM positions WHERE broker_position_id = '1'").fetchone()
     assert row["status"] == "OPEN"
     assert db.execute("SELECT * FROM deals WHERE broker_deal_id = '905'").fetchone() is None
+
+
+# --------------------------------------------------------------------------
+# reconcile_pending_orders / run_reconciliation pending-order integration
+# (external review finding #12, 2026-09-21)
+# --------------------------------------------------------------------------
+
+def _local_order(**overrides):
+    defaults = dict(
+        id=1, client_request_id="req-1", chain_key=None, canonical_symbol="XAUUSD",
+        broker_symbol="XAUUSDm", direction="BUY", requested_volume=0.05, stop_loss=None,
+        take_profit=None, state=OrderState.RESTING, broker_order_id="500", broker_position_id=None,
+        last_broker_retcode=None, last_broker_comment=None, created_at_utc=1000, updated_at_utc=1000,
+    )
+    defaults.update(overrides)
+    from adaptive_scalper.execution.store import OrderRecord
+    return OrderRecord(**defaults)
+
+
+def _pending(broker_order_id="500", **overrides):
+    defaults = dict(broker_order_id=broker_order_id, symbol="XAUUSDm", direction="BUY", volume=0.05, price=1990.0, magic=0, comment="")
+    defaults.update(overrides)
+    return PendingOrderSnapshot(**defaults)
+
+
+def test_reconcile_pending_orders_no_findings_when_matching():
+    local = [_local_order()]
+    broker = [_pending()]
+    findings = reconcile_pending_orders(local, broker)
+    assert findings == []
+
+
+def test_reconcile_pending_orders_detects_orphan_broker_order():
+    findings = reconcile_pending_orders([], [_pending()])
+    assert len(findings) == 1
+    assert findings[0].finding_type == ORPHAN_BROKER_ORDER
+    assert findings[0].broker_position_id == "500"  # holds broker_order_id here
+
+
+def test_reconcile_pending_orders_detects_missing_local_order():
+    findings = reconcile_pending_orders([_local_order()], [])
+    assert len(findings) == 1
+    assert findings[0].finding_type == MISSING_LOCAL_ORDER
+
+
+def test_reconcile_pending_orders_detects_symbol_and_direction_mismatch():
+    findings = reconcile_pending_orders([_local_order()], [_pending(symbol="GBPJPYm", direction="SELL")])
+    types = {f.finding_type for f in findings}
+    assert types == {PENDING_MISMATCH}
+    assert len(findings) == 2  # one for symbol, one for direction
+
+
+def test_run_reconciliation_blocks_on_orphan_broker_order(db):
+    gw = FakeGateway()
+    gw.inject_pending_order(_pending())
+    report = run_reconciliation(db, gw, "recon-order-1", now_utc=5000)
+    assert report.status == BLOCKING_MISMATCH
+    assert any(f.finding_type == ORPHAN_BROKER_ORDER for f in report.order_findings)
+    incidents = get_unresolved_incidents(db)
+    assert len(incidents) == 1
+
+
+def test_run_reconciliation_recovers_missing_local_order_as_cancelled(db):
+    order = create_order(db, "req-cancel", "XAUUSD", "XAUUSDm", "BUY", 0.05, now_utc=1000)
+    transition_order_state(db, order.id, OrderState.SUBMITTED, now_utc=1000)
+    transition_order_state(db, order.id, OrderState.RESTING, broker_order_id="500", now_utc=1000)
+
+    gw = FakeGateway(historical_orders=[
+        HistoricalOrder(ticket=500, time_setup=1000, time_done=1010, type=0, state=2, magic=0, position_id=0,
+                         volume_initial=0.05, volume_current=0.0, price_open=1990.0, sl=0.0, tp=0.0,
+                         price_current=1990.0, symbol="XAUUSDm", comment="", external_id=""),
+    ])
+    # broker no longer reports the pending order at all -- MISSING_LOCAL_ORDER
+    report = run_reconciliation(db, gw, "recon-order-2", now_utc=5000)
+    assert "500" in report.recovered_order_ids
+    assert report.status != BLOCKING_MISMATCH or any(f.finding_type != MISSING_LOCAL_ORDER for f in report.order_findings)
+
+    reloaded = [o for o in get_active_orders(db) if o.id == order.id]
+    assert reloaded == []  # no longer active -- CANCELLED is terminal
+    final = db.execute("SELECT state FROM orders WHERE id = ?", (order.id,)).fetchone()
+    assert final["state"] == "CANCELLED"
+
+
+def test_run_reconciliation_stays_blocking_when_missing_local_order_unrepairable(db):
+    order = create_order(db, "req-unknown", "XAUUSD", "XAUUSDm", "BUY", 0.05, now_utc=1000)
+    transition_order_state(db, order.id, OrderState.SUBMITTED, now_utc=1000)
+    transition_order_state(db, order.id, OrderState.RESTING, broker_order_id="501", now_utc=1000)
+
+    gw = FakeGateway()  # no historical evidence at all
+    report = run_reconciliation(db, gw, "recon-order-3", now_utc=5000)
+    assert report.status == BLOCKING_MISMATCH
+    assert "501" in report.unrepaired_order_ids
+    final = db.execute("SELECT state FROM orders WHERE id = ?", (order.id,)).fetchone()
+    assert final["state"] == "RESTING"  # untouched -- never guessed
 
 
 def test_run_reconciliation_is_idempotent_across_repeated_calls(db):
