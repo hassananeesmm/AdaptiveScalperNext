@@ -1559,14 +1559,20 @@ Two real defects found and fixed (7 of the tests fail without the fixes):
 - `adaptive_scalper/knowledge/` (OKF v0.2 — confirmed latest; canonical repo now `GoogleCloudPlatform/open-knowledge-format`) — IMPLEMENTED, CONNECTED (`RuntimeEngine` loads `KnowledgeAdvisor` over `knowledge/` into the evidence-only `AdvisoryPanel`; DEMO journals it as `RAG_USED` with `source: OKF`, `influence: NONE`), TESTED (cloud: `tests/test_knowledge.py`, 38 tests). Safe loader (safe_load, size cap, symlink refusal), OKF section-11 conformance, project policy (provenance, trust tiers, lifecycle/stale/supersession, evidence types stable only when human-reviewed, retired-strategy and symbol scope, control-key ban, credential + raw-record scan, quarantine), direct lookup/search, advisor, retrieval benchmark. Isolation audit: the package imports nothing that can trade/size/permit/touch the kill switch; only the engine and the operator CLI import it.
 - `knowledge/` — the Git-tracked curated bundle: 21 concepts (3 architecture/engineering decisions, 6 active + 2 retired strategy definitions, 1 research finding [draft, unverified], 1 model card [draft], 2 lessons learned [draft], 4 safety procedures, 2 runbooks) + `index.md` (`okf_version: "0.2"`) + `log.md`. Zero validation errors (test-enforced); strategy definitions test-pinned to the code's strategy versions.
 - Benchmark (`docs/KNOWLEDGE_MEMORY.md`): direct OKF vs TF-IDF vs SQLite FTS5/BM25 — no retrieval change justified; TF-IDF RAG index kept.
-- Not yet: `okf`/`rag` CLI commands (Phase 8 checkpoint).
 
 ## ML training job + model walk-forward, DEMO cost evidence (Phases 6-7, 2026-09-24)
 
 - `learning/model_walk_forward.py` — IMPLEMENTED, TESTED (cloud, `tests/test_learning_jobs.py`). Expanding-window folds that train ONLY on the past, purge label overlap (+ optional gap), out-of-fold AUC / Brier / log loss / Brier skill vs the training base rate (must beat it by >= 1%), reliability bins + ECE, subgroup metrics by strategy / regime / session with a stability check. `promotion_ready` is always False.
-- `learning/jobs.py` `run_training_job()` — IMPLEMENTED, TESTED (cloud). One origin per job (BACKTEST or PAPER, never pooled); untouched-OOS runs never read; rows overlapping any reserved OOS range dropped and counted; retired-strategy rows dropped; walk-forward -> final temporal retrain -> registered BASELINE / INSUFFICIENT_DATA (never CURRENT, checked) -> append-only MODEL_WALK_FORWARD trial -> promotion gate evaluated on the true facts and REPORTED only (no state change) -> rollback evidence (previous version's skill). The Stage-1 observer then scores the BASELINE model with zero influence. CLI wiring: Phase 8 checkpoint.
+- `learning/jobs.py` `run_training_job()` — IMPLEMENTED, TESTED (cloud). One origin per job (BACKTEST or PAPER, never pooled); untouched-OOS runs never read; rows overlapping any reserved OOS range dropped and counted; retired-strategy rows dropped; walk-forward -> final temporal retrain -> registered BASELINE / INSUFFICIENT_DATA (never CURRENT, checked) -> append-only MODEL_WALK_FORWARD trial -> promotion gate evaluated on the true facts and REPORTED only (no state change) -> rollback evidence (previous version's skill). The Stage-1 observer then scores the BASELINE model with zero influence. CLI: `learning train`, `model-walk-forward`.
 - Migration `0024_learning_and_cost_evidence`: `backtest_trades.entry_features_json` (persisted decision-time features; pre-0024 rows are excluded from training, never imputed) and `execution_cost_observations`.
 - `costs/observations.py` — IMPLEMENTED, CONNECTED (DEMO entry cycle after `submit_new_entry` returns; engine task `cost_evidence_sweep`, P3, 60s), TESTED (cloud simulated broker, `tests/test_cost_observations.py`). Per DEMO order that reached the broker: quote time, bid/ask/spread, requested vs volume-weighted fill price, adverse slippage, entry commission/fee, retcode/comment, fill type, deal count, the estimate, session, ATR / realized volatility / spread percentile, news proximity; exit commission/fee and swap completed once the position closes. A failure is a WARNING event and never touches the order. `summarize_observations()` is operator evidence (>= 30 filled and closed) — it never writes config or relabels costs. TESTED-LIVE-DEMO: no (BLOCKED-ON-LOCAL-MT5; quote time is broker server time, backlog #14).
+
+## Operator CLI + observer-only dashboard (Phases 8-9, 2026-09-24)
+
+- `adaptive_scalper/cli/` (package; replaces the single `cli.py`) — IMPLEMENTED, CONNECTED, TESTED (cloud: `tests/test_cli.py`, `tests/test_cli_commands.py`). `python -m adaptive_scalper.cli`: doctor, status, health, symbols (captures broker specs), strategies, why-no-trade, journal recent, costs observed, kill-switch status/engage/bootstrap/clear, history bootstrap/status, broker-history import/status (login masked), paper, demo, scan, analyse (`--source mt5|db`, side-effect free), reconcile, news status/refresh/upcoming, backtest, walk-forward, oos, path-stress, purged-validation, models, learning status/train/scores, model-walk-forward, rag status/stats/similar/rebuild-index/verify-index/ingest, okf status/validate/search/benchmark, dashboard. Every broker-facing command refuses a non-DEMO account; `paper`/`demo` print the safety banner, never touch the kill switch, and refuse to start while another runtime's heartbeat is fresh. `OperatorAuthority` is constructed only in `cli/operator.py` (audit updated). Broker-facing commands verified to FAIL cleanly without MetaTrader5; live behaviour is BLOCKED-ON-LOCAL-MT5.
+- Migration `0025_symbol_specs` + `gateway/spec_store.py`: the broker SymbolSpec captured by `symbols`, `history bootstrap` and runtime startup, so offline research runs without a terminal (missing spec = clear error, never invented).
+- `runtime/analysis.py`: side-effect-free analysis (raw regime + every strategy's would-be signal; no journal, no state, no sizing).
+- Dashboard — IMPLEMENTED, CONNECTED (`dashboard` command), TESTED (cloud: `tests/test_dashboard_panels.py`, `tests/test_dashboard_health.py`; also served by uvicorn and rendered in headless Chromium with no JS errors). Observer only: READ-ONLY SQLite connection (`connect_readonly`), never connects to MT5 (the previous `dashboard` command did -- removed), GET-only endpoints, 127.0.0.1 only. 15 panels (overview, components, symbols, positions, orders incl. dangerous UNKNOWN, decisions, risk, news, events/incidents, costs, research incl. spent OOS ranges, learning, memory, knowledge, history), `/ws` live push with polling fallback, per-panel failure isolation, honest NO_DATA/UNAVAILABLE/STALE states. `websockets==17.1` pinned for uvicorn's WebSocket transport.
 
 ## Current git commit
 
@@ -1580,7 +1586,7 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-24 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+25 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
@@ -1588,7 +1594,7 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 `0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
 `0019_paper_pending_entry`, `0020_simulation_provenance`,
 `0021_research_trials`, `0022_runtime`, `0023_rag_ingestion`,
-`0024_learning_and_cost_evidence`).
+`0024_learning_and_cost_evidence`, `0025_symbol_specs`).
 
 ## Local RAG (advisory-only)
 
@@ -1628,8 +1634,8 @@ treated as load-bearing.
 Populated by `rag/ingestion.py` (journal -> typed memories, scheduled
 `rag_ingest` task; see "RAG ingestion + OKF knowledge layer" above) —
 never written from the trading hot path. Queried by the runtime's
-`AdvisoryPanel` (evidence only). `rag *` CLI commands: Phase 8
-checkpoint. Tests: `test_rag_store.py`/`test_rag_index.py`/
+`AdvisoryPanel` (evidence only). CLI: `rag status/stats/similar/
+rebuild-index/verify-index/ingest`. Tests: `test_rag_store.py`/`test_rag_index.py`/
 `test_rag_service.py`/`test_rag_ingestion.py`.
 
 ## Model state / ML self-learning (observer stage)
@@ -1728,8 +1734,8 @@ responds to) is not wired to anything live. 71 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. Latest
-(2026-09-24 Checkpoint E, Linux cloud runner, Python 3.13, `MetaTrader5`
-not installable there): 1345 passed, 7 skipped (`test_mt5_gateway_live.py`
+(2026-09-24 Checkpoint F, Linux cloud runner, Python 3.13, `MetaTrader5`
+not installable there): 1382 passed, 7 skipped (`test_mt5_gateway_live.py`
 — needs the Windows laptop's live MT5 terminal), 0 failed. Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended

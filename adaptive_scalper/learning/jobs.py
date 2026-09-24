@@ -118,24 +118,26 @@ def _previous_walk_forward(conn: sqlite3.Connection, model_key: str, below_versi
             "previous_brier_skill": (metrics.get("walk_forward") or {}).get("brier_skill")}
 
 
-def run_training_job(
-    conn: sqlite3.Connection, *, canonical_symbol: str, artifact_dir: str, source: str = SOURCE_BACKTEST,
-    n_folds: int = DEFAULT_FOLDS, gap_seconds: int = 0, min_samples: int = DEFAULT_MIN_TRAINING_SAMPLES,
-    seed: int = 0, now_utc: int | None = None,
-) -> TrainingJobReport:
+@dataclass(frozen=True)
+class LoadedRows:
+    records: list
+    rows: list[TrainingRow]
+    excluded: int
+    retired: int
+    oos_protected: int
+
+
+def load_training_rows(conn: sqlite3.Connection, *, canonical_symbol: str, source: str) -> LoadedRows:
+    """Persisted trades of ONE origin -> causal rows, minus retired
+    strategies and anything overlapping a reserved OOS range."""
     if canonical_symbol not in ALLOWED_CANONICAL_SYMBOLS:
         raise TrainingJobError(f"{canonical_symbol!r} is not an allowed canonical symbol")
     if source not in _SOURCE_QUERIES:
         raise TrainingJobError(f"source must be one of {sorted(_SOURCE_QUERIES)} (origins are never pooled)")
-    now = now_utc if now_utc is not None else int(time.time())
-    model_key = entry_model_key(canonical_symbol)
-
     records = conn.execute(_SOURCE_QUERIES[source], (canonical_symbol,)).fetchall()
     rows, excluded = build_training_rows_from_records(records)
-
-    retired = [r for r in rows if r.strategy_key in RETIRED_STRATEGY_KEYS]
+    retired = sum(1 for r in rows if r.strategy_key in RETIRED_STRATEGY_KEYS)
     rows = [r for r in rows if r.strategy_key not in RETIRED_STRATEGY_KEYS]
-
     protected = 0
     if rows:
         ranges = _oos_ranges(conn, canonical_symbol, min(r.entry_time_utc for r in rows),
@@ -147,6 +149,20 @@ def run_training_job(
             else:
                 kept.append(row)
         rows = kept
+    return LoadedRows(records, rows, excluded, retired, protected)
+
+
+def run_training_job(
+    conn: sqlite3.Connection, *, canonical_symbol: str, artifact_dir: str, source: str = SOURCE_BACKTEST,
+    n_folds: int = DEFAULT_FOLDS, gap_seconds: int = 0, min_samples: int = DEFAULT_MIN_TRAINING_SAMPLES,
+    seed: int = 0, now_utc: int | None = None,
+) -> TrainingJobReport:
+    now = now_utc if now_utc is not None else int(time.time())
+    model_key = entry_model_key(canonical_symbol)
+
+    loaded = load_training_rows(conn, canonical_symbol=canonical_symbol, source=source)
+    records, rows, excluded, retired, protected = (loaded.records, loaded.rows, loaded.excluded, loaded.retired,
+                                                   loaded.oos_protected)
 
     wf = run_model_walk_forward(rows, n_folds=n_folds, gap_seconds=gap_seconds,
                                 min_train_rows=max(1, min_samples // 2), seed=seed)
@@ -192,7 +208,7 @@ def run_training_job(
     rollback.update({"this_brier_skill": wf.brier_skill, "rollback_target_available": rollback_target})
     return TrainingJobReport(
         model_key=model_key, source=source, candidate_rows=len(records), excluded_rows=excluded,
-        oos_protected_rows=protected, retired_rows=len(retired), rows=len(rows), walk_forward=wf,
+        oos_protected_rows=protected, retired_rows=retired, rows=len(rows), walk_forward=wf,
         training=training, record=record, trial_id=trial_id, promotion_decision=decision,
         promotion_reason=reason, rollback=rollback,
     )

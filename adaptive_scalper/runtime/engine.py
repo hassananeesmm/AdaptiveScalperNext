@@ -45,6 +45,7 @@ from adaptive_scalper.costs.observations import sweep_exit_costs
 from adaptive_scalper.execution.reconciliation import run_reconciliation
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions, quarantine_interrupted_submissions
 from adaptive_scalper.gateway.protocol import Gateway
+from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
 from adaptive_scalper.gateway.symbol_validation import validate_resolved_symbol
 from adaptive_scalper.gateway.types import TradeMode
@@ -157,6 +158,9 @@ class RuntimeEngine:
                 excluded[canonical] = f"{validation.reason}: {validation.detail}"
                 continue
             self.symbols[canonical] = result.broker_symbol
+            spec = self.gateway.symbol_info(result.broker_symbol)
+            if spec is not None:
+                save_symbol_spec(self.conn, canonical, spec, now_utc=now)  # for offline research commands
         for canonical, why in excluded.items():
             record_event(self.conn, "WARNING", "symbols", "SYMBOL_EXCLUDED", why, canonical_symbol=canonical,
                          dedup_key=f"symbol_excluded:{canonical}", now_utc=now)

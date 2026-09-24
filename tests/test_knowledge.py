@@ -392,7 +392,7 @@ def test_no_decision_or_execution_module_imports_the_knowledge_package():
         if any(n.startswith("adaptive_scalper.knowledge") for n in _imports(path)):
             consumers.add(rel)
     # Only the engine (to hand the advisor to the evidence-only panel) and the operator CLI.
-    assert consumers <= {"runtime/engine.py", "cli.py", "cli/okf.py"}, consumers
+    assert consumers <= {"runtime/engine.py", "cli/knowledge.py", "cli/runtime.py", "dashboard/panels.py"}, consumers
 
 
 # ---------------------------------------------------------------------------

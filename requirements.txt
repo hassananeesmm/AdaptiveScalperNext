@@ -8,6 +8,7 @@ pytest==9.1.1
 pydantic==2.13.5
 fastapi==0.141.1
 uvicorn==0.53.0
+websockets==17.1  # uvicorn WebSocket transport for the observer-only dashboard live feed
 httpx==0.28.1
 MetaTrader5==5.0.6180  # Windows-only; import is confined to adaptive_scalper/gateway/mt5_gateway.py
 numpy==2.5.3

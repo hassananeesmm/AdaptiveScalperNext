@@ -89,11 +89,11 @@ def test_kill_switch_bootstrap_and_clear_are_operator_cli_only():
                 imp in imports for imp in (f"adaptive_scalper.core.kill_switch.{name}",)
             ):
                 callers.add(rel)
-    assert callers <= {"cli.py"}
+    assert callers <= {"cli/operator.py"}
 
 
 def test_operator_authority_is_only_constructed_by_the_operator_cli():
-    assert _callers("OperatorAuthority") <= {"cli.py"}
+    assert _callers("OperatorAuthority") <= {"cli/operator.py"}
 
 
 def test_non_operator_subsystems_never_import_operator_authority():

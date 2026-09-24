@@ -41,6 +41,18 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def connect_readonly(db_path: str | Path) -> sqlite3.Connection:
+    """Read-only connection for observers (the dashboard): SQLite itself
+    rejects every write, so an observer bug can never modify trading
+    state. Raises `sqlite3.OperationalError` if the database does not
+    exist yet (an observer never creates it)."""
+    uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+    conn.execute("PRAGMA busy_timeout = 2000")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def _discover_migrations() -> list[tuple[int, str, Path]]:
     migrations = []
     for path in sorted(MIGRATIONS_DIR.glob("*.sql")):

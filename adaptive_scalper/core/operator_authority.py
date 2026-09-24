@@ -12,8 +12,8 @@ arbitrary code from doing `OperatorAuthority("whoever")` and calling
 `clear()` with it — the real enforcement boundary is code review plus
 which packages are ever allowed to import this module.
 
-Intended construction sites: `adaptive_scalper/cli.py` operator commands
-(`kill-switch clear`) and, once it exists, the dashboard's authenticated
+Intended construction site: `adaptive_scalper/cli/operator.py` operator commands
+(`kill-switch bootstrap` / `kill-switch clear`). The dashboard is observer-only and has no
 operator-action endpoint. `adaptive_scalper/strategies/`,
 `adaptive_scalper/learning/`, `adaptive_scalper/rag/`, and
 `adaptive_scalper/portfolio/`/`risk/` (the risk governor engages, it does

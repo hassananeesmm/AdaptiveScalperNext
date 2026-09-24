@@ -2015,3 +2015,25 @@ harmless duplicated `RegimeTracker.confirmed_regime` property) are left
 for the QA phase.
 
 Full suite: 1345 passed, 7 skipped (live MT5 only), 0 failed.
+
+## Session: Checkpoint F -- complete operator CLI + observer-only dashboard (2026-09-24, cloud)
+
+Phases 8-9. `cli.py` became the `adaptive_scalper/cli/` package (system,
+operator, data, runtime, research, learning, knowledge, dashboard) so no
+single file owns ~35 commands; the operator-authority audit now pins
+`cli/operator.py`. New `kill-switch bootstrap` (explicit operator id +
+reason; cannot touch an ENGAGED switch). Found: the old `dashboard`
+command connected the dashboard process to MT5 (a second terminal client
+next to the runtime, contradicting "observer only") -- removed; the
+dashboard now opens SQLite read-only and learns terminal state from the
+runtime's heartbeat. Found: offline research had no way to get a
+SymbolSpec without MT5 -- migration 0025 snapshots it. Research commands
+run over stored history and record VALIDATION / OOS usage and trials, so
+`oos` is genuinely one-shot from the CLI too (tested: overlap refused,
+spent refused, analysis-reuse labelled).
+
+Dashboard verified three ways: TestClient (REST + WebSocket), a real
+uvicorn process (page, /api/panels, websockets client), and headless
+Chromium (15 panels rendered, live feed, no JS errors).
+
+Full suite: 1382 passed, 7 skipped (live MT5 only), 0 failed.
