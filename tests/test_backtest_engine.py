@@ -255,10 +255,15 @@ def test_run_backtest_resume_regime_tracker_reproduces_continuous_processing():
     # have decided. Proof: cycling through the SAME range in two chunks
     # WITH resume_regime_tracker must match one continuous call exactly;
     # WITHOUT it, the two are not guaranteed to (and empirically don't).
+    # Boundary 203 is deliberately NOT a multiple of this fixture's
+    # 5-bar trade cycle: at e.g. 200 an unresumed tracker happens to
+    # re-confirm TRENDING_UP before it matters, so the negative half below
+    # would be vacuous there. The positive half holds at every boundary.
     bars = _trending_bars(220)
     lookback = _config().feature_lookback
+    boundary = 203
     first = run_backtest(
-        bars[:200], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        bars[:boundary], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
         force_close_at_range_end=False,
     )
     assert first.open_position is not None  # otherwise this test proves nothing about resuming
@@ -273,7 +278,7 @@ def test_run_backtest_resume_regime_tracker_reproduces_continuous_processing():
         for t in reference.trades if t.entry_time_utc >= boundary_entry_time
     )
 
-    resume_window = bars[200 - lookback - 1:220]
+    resume_window = bars[boundary - lookback - 1:220]
     # A resuming (PAPER-style) caller must also carry forward the REAL
     # accumulated equity `first`'s own run ended at -- never restart
     # sizing from the static config default, which would under/over-size

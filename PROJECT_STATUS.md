@@ -1494,6 +1494,8 @@ marked IMPLEMENTED/CONNECTED/TESTED above.
 - `backtest/oos.py` — `run_untouched_oos()`: the only sanctioned way to run genuine OOS validation. Fails closed with `DatasetContaminatedError` if the exact (content-checksummed) bar range was ever previously used for `TRAINING`/`VALIDATION`/`WALK_FORWARD_FOLD`, or already spent as `OOS` once before (repeat use defeats the point of a holdout) unless `allow_oos_reuse=True` is passed explicitly.
 - `backtest/monte_carlo.py` — `run_monte_carlo()`: trade-ORDER resampling (random permutation, never resampling-with-replacement, which would fabricate outcomes that never happened) over a completed run's REALIZED P/L sequence. Deterministic given the same `seed` (a documented `random.Random(seed)` instance, no hidden global RNG state). Reports final-equity/max-drawdown distributions (mean/median/p5/p95/min/max) and probability of ruin (equity ever touching `ruin_equity_fraction * initial_equity`).
 
+Correctness checkpoint (2026-09-24, regression suite `tests/test_backtest_correctness_regressions.py`, 41 tests): `backtest/engine.py` now (1) fills an adaptive FULL_CLOSE at the NEXT bar's open, never the decision bar's own (already-past) open, and fills the bounded range-end close at the last bar's CLOSE (`simulate_fill(..., at="close")`); (2) treats the entry bar as a full bar — its high/low are checked against the new SL/TP and it is reviewed at its close, and the regime tracker updates on it (it was previously skipped with `continue`); (3) triggers SL/TP on the executable side (bid for a long, ask for a short), fills a gapped-through stop at the open less slippage, and marks open positions at the bid/ask like MT5 `position.profit`; (4) tracks a monotonic `peak_r` from 0.0 exactly like the live `position_management_state` (previously `peak_r=current_r`, so giveback protection could never fire in simulation); (5) charges every cost exactly once — execution prices embed spread/slippage, commission and per-UTC-rollover swap are deducted at close, and `SimulatedTrade.total_cost` reports all of entry friction, exit friction, commission and swap (previously entry friction was double-deducted, and commission, swap and exit friction were never charged/reported); (6) returns `BacktestResult.pending_entry` and accepts `resume_pending_entry`, and carries a decided-but-unfilled exit as `OpenPositionState.pending_exit_reason`. `backtest/oos.py` now refuses any OOS range that OVERLAPS (any resolution, any checksum, same symbol) a range used for TRAINING/VALIDATION/WALK_FORWARD_FOLD or previously spent as OOS, via `dataset.find_overlapping_usage()` — previously only the exact checksum was checked, so a one-bar-shifted window passed.
+
 NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracked under the pending CLI/dashboard tasks); nothing has run this against REAL historical bars yet (only synthetic bars in tests) — a real run needs `history/store.get_bars()` (added this checkpoint) to pull an actual bootstrapped range.
 
 ## PAPER mode (directive section 132)
@@ -1503,6 +1505,8 @@ NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracke
 - `paper/engine.py` — `run_paper_cycle()`, the ONLY entry point. Reuses `backtest.engine.run_backtest()`'s exact production decision cores via its incremental mode (see above), adding no decision logic of its own — its whole job is correct WINDOWING (computing exactly the bar slice the resume contract needs from whatever full bar history the caller supplies, so callers never have to get this right by hand) and STATE PERSISTENCE (newly-closed trades and the resumable position/regime-tracker state are recorded atomically — `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK` — so a crash between "decide" and "persist" is always safely retryable).
 - `paper/state.py` — `paper_session_state`/`paper_trades` persistence (migration `0018_paper`), deliberately SEPARATE tables from `positions`/`orders`/`deals` (real broker evidence) — directive section 82: "Evidence classes must not silently receive identical weight." A simulated PAPER position is never reachable by `execution/reconciliation.py`'s broker-truth recovery path, and vice versa. Every recorded trade carries `origin='PAPER_LIVE_DATA'`. `record_paper_trades()` is idempotent (`INSERT OR IGNORE` keyed on `(session_key, entry_time_utc, direction)`) — a retried cycle re-deriving the SAME deterministic trades from the SAME unprocessed window is a safe no-op.
 - A real, non-trivial bug was caught and fixed while proving incremental correctness: `regimes.classifier.RegimeTracker`'s hysteresis state (confirmed/candidate/candidate_count) was NOT resumable across calls — an incremental PAPER cycle restarted it from `UNKNOWN` every time, genuinely diverging from what a continuously-running tracker would decide. Fixed by adding `RegimeTracker.state`/`initial_candidate`/`initial_candidate_count` and threading a new `RegimeTrackerState` through `run_backtest()`'s resume contract and `paper/state.py`'s persistence. Proven by `tests/test_paper_engine.py::test_run_paper_cycle_incremental_feeding_matches_a_single_shot_backtest`: cycling through the same bar range in growing chunks now produces IDENTICAL final state (equity, every trade, the still-open position) to one continuous `run_backtest()` call.
+
+- Pending state across cycles (2026-09-24): an entry selected on a cycle's last bar is persisted in `paper_session_state.pending_entry_json` (migration `0019_paper_pending_entry`) and fills at the next cycle's first new bar; a FULL_CLOSE decided on a cycle's last bar travels in `open_position_json` as `pending_exit_reason`; `peak_r` travels there too. A cycle with ONE new bar now runs (it was a no-op, so live PAPER lagged a bar), and a bar history with fewer than `feature_lookback+1` already-processed bars before the first new bar raises instead of silently skipping bars. Proven by `test_incremental_paper_cycles_match_a_single_continuous_run` (3 seeded random walks x chunk sizes 2/3/7/25, real strategies, slippage + commission): final equity, every trade, the open position and the pending entry are identical to one continuous run.
 
 NOT yet done: no `Gateway` is wired to this at all yet — a future runtime-engine caller (task: "wire full runtime engine") must fetch real bars from the live MT5 terminal via a `SynchronizedGateway` and pass them into `run_paper_cycle()` on a real schedule; no CLI command or dashboard panel surfaces PAPER state yet; PAPER burn-in itself (directive section 132: "Run PAPER burn-in before DEMO") hasn't run.
 
@@ -1518,12 +1522,13 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-18 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+19 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
 `0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
-`0016_order_magic`, `0017_incident_dedup`, `0018_paper`).
+`0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
+`0019_paper_pending_entry`).
 
 ## Local RAG (advisory-only)
 
@@ -1662,8 +1667,13 @@ responds to) is not wired to anything live. 71 tests
 ## Tests
 
 Run `pytest` for the exact current count — it changes every session and
-duplicating a specific number here goes stale immediately. As of this
-entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
+duplicating a specific number here goes stale immediately. Latest
+(2026-09-24, Linux cloud runner, Python 3.13, `MetaTrader5` not
+installable there): 1138 passed, 7 skipped (`test_mt5_gateway_live.py`
+— needs the Windows laptop's live MT5 terminal), 1 failed
+(`test_guardrails.py::test_outside_project_root` — asserts Windows
+`C:\` path semantics, fails identically before and after this
+checkpoint on Linux; see BUG_BACKLOG.md item 12). Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended
 `test_execution_service.py`, `test_execution_close.py`,

@@ -98,7 +98,77 @@ delete) once fixed, with the fixing commit/date noted.
    semantic instead); flag for a real design once/if a netting-mode
    account is ever connected.
 
+10. [SEVERITY: MEDIUM, SUBSYSTEM: paper] `paper/engine.run_paper_cycle()`
+   treats EVERY supplied bar as new on a session's first-ever cycle. A
+   caller that seeds a fresh session with deep history gets that history
+   replayed as trades labeled `PAPER_LIVE_DATA` (directive section 82
+   evidence-class mixing). The runtime orchestrator (next checkpoint)
+   must seed a new session with only a trailing `feature_lookback+1`-bar
+   context window, or `run_paper_cycle()` must gain an explicit
+   "start from now" cursor. Not reachable today: nothing calls it yet.
+
+11. [SEVERITY: LOW, SUBSYSTEM: backtest] `backtest/oos.run_untouched_oos()`
+   checks the usage ledger, runs, THEN records its own usage, in
+   separate transactions. Two concurrent OOS runs over overlapping
+   ranges could both pass the check. Single-process research use only
+   today; wrap check+record in one `BEGIN IMMEDIATE` if OOS runs ever
+   become concurrent.
+
+12. [SEVERITY: LOW, SUBSYSTEM: tooling/tests] `tests/test_guardrails.py::
+   test_outside_project_root` asserts Windows path semantics
+   (`C:\Windows\...` is outside `C:\AdaptiveScalperNext`) and fails when
+   pytest runs on Linux (the cloud runner), because `os.path` there
+   doesn't parse drive letters. The guardrail hook only ever runs on the
+   Windows laptop, where the test passes. Not a trading-logic defect;
+   fix is to use `ntpath` explicitly in `.claude/hooks/guardrails.py` or
+   mark the test Windows-only -- left for the owner's decision since the
+   hook is the project's own PreToolUse safety gate.
+
+13. [SEVERITY: LOW, SUBSYSTEM: backtest] `holding_seconds` in the
+   backtest/PAPER review is `bar.time - entry_time_utc` (bar OPEN times),
+   so a review at a bar's close under-counts the real holding time by
+   one bar. With `max_holding_seconds=600` on M5 that is a one-bar-late
+   max-holding exit. Needs the resolution's bar duration to fix
+   honestly; deliberately not changed in the 2026-09-24 correctness
+   checkpoint to keep that change reviewable.
+
 ## Fixed
+
+- ~~[SEVERITY: HIGH, SUBSYSTEM: backtest/paper] Six PAPER/backtest
+  correctness defects in `backtest/engine.py`, `paper/`, and
+  `backtest/oos.py` (2026-09-24 review): (1) a selected entry on the
+  last bar of an incremental call was a local variable and was silently
+  DROPPED at every PAPER cycle boundary; (2) an adaptive FULL_CLOSE
+  decided at bar i's close filled at bar i's own OPEN (a price from
+  before the information existed) and the range-end close filled at
+  the last bar's open; (3) the entry bar was skipped (`continue`), so a
+  stop or target hit inside the entry bar was never seen and the regime
+  tracker missed that bar; stops triggered on mid instead of bid/ask
+  and a gapped-through stop filled at the stop price; (4) `peak_r` was
+  passed as `current_r` every bar, so profit-giveback protection could
+  never fire in simulation (live persists a monotonic peak); (5) entry
+  spread+slippage was deducted a second time from P/L already computed
+  from the entry execution price, while commission, swap and exit
+  friction were never charged or reported; (6) OOS contamination was
+  checked on the exact checksum only, so any shifted/nested/other-
+  resolution overlap passed. Also: a PAPER cycle with exactly one new
+  bar was a no-op (live PAPER lagged one bar), and too-short bar
+  history could make a cycle skip new bars silently.~~ Fixed 2026-09-24.
+  New: `backtest.types.PendingEntryState`, `OpenPositionState.peak_r`/
+  `.pending_exit_reason`, `BacktestResult.pending_entry`,
+  `run_backtest(resume_pending_entry=...)`, `simulate_fill(at=...)`,
+  `dataset.find_overlapping_usage()`, migration
+  `0019_paper_pending_entry`. Regression suite:
+  `tests/test_backtest_correctness_regressions.py` (41 tests, including
+  a real-strategy incremental-vs-continuous property test over 12
+  seed/chunk combinations). Two existing tests were corrected, not
+  weakened: `test_backtest_engine.py`'s regime-resume test moved its
+  boundary from bar 200 (where an unresumed tracker happens not to
+  diverge on that clean-trend fixture) to 203; with-resume was verified
+  to match at every boundary 60-214. `test_backtest_oos.py`'s
+  "unrelated dataset" test used the same calendar period with different
+  prices -- which IS contamination -- so it now uses a genuinely
+  disjoint period, and the same-period case is asserted to block.
 
 - ~~[SEVERITY: HIGH, SUBSYSTEM: backtest/paper] While building PAPER mode
   (directive section 132), `run_backtest()` was extended with an

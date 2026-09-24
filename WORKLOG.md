@@ -1826,3 +1826,49 @@ directory scan).
 Full suite: 1104 passed, 0 failed, 0 skipped (up from 1083). No secrets,
 credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
 for commit (verified via `git status`/`git diff` before committing).
+
+## Session: PAPER/backtest correctness checkpoint (2026-09-24, cloud)
+
+Cloud session (Linux, Python 3.13 venv; `MetaTrader5` is Windows-only
+and was not installed; no live broker access attempted). Read
+MASTER_BUILD_DIRECTIVE.md/PROJECT_STATUS.md/WORKLOG.md/BUG_BACKLOG.md
+first. Baseline before any change: 1096 passed, 7 skipped
+(`test_mt5_gateway_live.py`, no terminal), 1 failed
+(`test_guardrails.py::test_outside_project_root`, Windows path
+semantics on Linux -- BUG_BACKLOG item 12).
+
+Wrote `tests/test_backtest_correctness_regressions.py` FIRST and
+confirmed it failed against the unmodified code (24 failures), then
+fixed. A scripted stub strategy is monkeypatched into
+`backtest.engine.build_active_registry` so each defect triggers at an
+exact bar with hand-computed prices; a seeded random-walk property test
+exercises the real strategies.
+
+Fixed in `backtest/engine.py` (restructured per-bar loop: fill prior
+decisions at open -> features/regime on every bar -> SL/TP + review of
+the open trade including the entry bar -> scan):
+- pending entry / pending exit returned and resumable across calls;
+- adaptive FULL_CLOSE fills at the next bar's open; range-end close at
+  the last bar's close (`simulate_fill(..., at="close")`);
+- entry bar fully managed; SL/TP trigger on bid/ask; gapped stops fill
+  at the open less slippage; positions marked at bid/ask;
+- monotonic `peak_r` from 0.0 (parity with live `state_store`);
+- cost accounting: no double-counted entry friction, commission and
+  per-rollover swap charged, `total_cost` = entry + exit friction +
+  commission + swap, so `gross = net + total_cost` = mid-to-mid P/L.
+Fixed in `paper/`: `pending_entry_json` (migration 0019), single-new-bar
+cycles now run, short-history guard. Fixed in `backtest/oos.py`: overlap
+(not exact-checksum) contamination check via
+`dataset.find_overlapping_usage()`.
+
+The property test also caught the one-new-bar PAPER lag, which none of
+the named defects covered.
+
+Two existing tests corrected, not weakened -- details in BUG_BACKLOG
+"Fixed". New open items 10-13 recorded in BUG_BACKLOG (first-cycle deep
+history labeled PAPER_LIVE_DATA; non-atomic OOS check/record; Linux run
+of the Windows-path guardrail test; holding_seconds one bar short).
+
+Full suite: 1138 passed, 7 skipped (live MT5 only), 1 failed (pre-
+existing Windows-path guardrail test, unchanged). No secrets,
+credentials, runtime DB, logs or model artifacts staged.

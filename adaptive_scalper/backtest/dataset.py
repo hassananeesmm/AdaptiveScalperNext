@@ -143,3 +143,23 @@ def has_dataset_been_used_as(conn: sqlite3.Connection, dataset_id: str, used_for
         "SELECT COUNT(*) AS n FROM dataset_usage WHERE dataset_id = ? AND used_for = ?", (dataset_id, used_for),
     ).fetchone()
     return row["n"] > 0
+
+
+def find_overlapping_usage(
+    conn: sqlite3.Connection, canonical_symbol: str, range_start_utc: int, range_end_utc: int, used_for: str,
+) -> list[sqlite3.Row]:
+    """Every recorded `used_for` usage of ANY dataset of `canonical_symbol`
+    whose time range intersects `[range_start_utc, range_end_utc]`,
+    regardless of resolution or content checksum -- an M1 training range
+    and an M5 "OOS" range over the same calendar period are the same
+    market, and a one-bar-shifted window is not a fresh holdout."""
+    return conn.execute(
+        """
+        SELECT d.dataset_id, d.resolution, d.range_start_utc, d.range_end_utc, u.used_by_run_id
+        FROM dataset_usage u JOIN datasets d ON d.dataset_id = u.dataset_id
+        WHERE d.canonical_symbol = ? AND u.used_for = ?
+          AND d.range_start_utc <= ? AND d.range_end_utc >= ?
+        ORDER BY d.range_start_utc
+        """,
+        (canonical_symbol, used_for, range_end_utc, range_start_utc),
+    ).fetchall()

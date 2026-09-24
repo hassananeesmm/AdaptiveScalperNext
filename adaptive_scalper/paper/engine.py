@@ -58,8 +58,14 @@ def _slice_resume_window(
     if last_processed_bar_time_utc is None:
         return bars
     new_start = next((i for i, b in enumerate(bars) if b.time > last_processed_bar_time_utc), len(bars))
-    context_start = max(0, new_start - feature_lookback - 1)
-    return bars[context_start:]
+    if new_start < len(bars) and new_start < feature_lookback + 1:
+        # Too little context before the first new bar: run_backtest() would
+        # start deciding PAST the new bars and the cursor would skip them.
+        raise ValueError(
+            f"bar history must include at least feature_lookback+1 ({feature_lookback + 1}) already-processed "
+            f"bars before the first new bar; got {new_start}"
+        )
+    return bars[max(0, new_start - feature_lookback - 1):]
 
 
 def run_paper_cycle(
@@ -84,7 +90,8 @@ def run_paper_cycle(
         bars, last_processed_bar_time_utc=session.last_processed_bar_time_utc,
         feature_lookback=config.feature_lookback,
     )
-    if len(window) < config.feature_lookback + 3:
+    # One genuinely new bar is enough: live closed bars arrive one at a time.
+    if len(window) < config.feature_lookback + 2:
         return PaperCycleResult(
             ran=False, session_key=key, new_trades=(), equity=session.equity,
             open_position=session.open_position, last_processed_bar_time_utc=session.last_processed_bar_time_utc,
@@ -96,8 +103,8 @@ def run_paper_cycle(
     run_config = replace(config, initial_equity=session.equity)
     result = run_backtest(
         window, canonical_symbol, resolution, symbol_spec, config=run_config, now_utc=now,
-        resume_open_position=session.open_position, resume_regime_tracker=session.regime_tracker_state,
-        force_close_at_range_end=False,
+        resume_open_position=session.open_position, resume_pending_entry=session.pending_entry,
+        resume_regime_tracker=session.regime_tracker_state, force_close_at_range_end=False,
     )
 
     conn.execute("BEGIN IMMEDIATE")
@@ -106,7 +113,7 @@ def run_paper_cycle(
         save_session_state(
             conn, key, equity=result.metrics.final_equity, last_processed_bar_time_utc=window[-1].time,
             open_position=result.open_position, regime_tracker_state=result.final_regime_tracker_state,
-            now_utc=now,
+            pending_entry=result.pending_entry, now_utc=now,
         )
         conn.execute("COMMIT")
     except sqlite3.Error:

@@ -13,7 +13,7 @@ import sqlite3
 import time
 from dataclasses import asdict, dataclass
 
-from adaptive_scalper.backtest.types import OpenPositionState, RegimeTrackerState, SimulatedTrade
+from adaptive_scalper.backtest.types import OpenPositionState, PendingEntryState, RegimeTrackerState, SimulatedTrade
 
 
 @dataclass(frozen=True)
@@ -25,11 +25,15 @@ class PaperSessionState:
     last_processed_bar_time_utc: int | None
     open_position: OpenPositionState | None
     regime_tracker_state: RegimeTrackerState | None
+    pending_entry: PendingEntryState | None = None
 
 
 def _row_to_session(row: sqlite3.Row) -> PaperSessionState:
     open_position = (
         OpenPositionState(**json.loads(row["open_position_json"])) if row["open_position_json"] else None
+    )
+    pending_entry = (
+        PendingEntryState(**json.loads(row["pending_entry_json"])) if row["pending_entry_json"] else None
     )
     regime_tracker_state = (
         RegimeTrackerState(row["regime_confirmed"], row["regime_candidate"], row["regime_candidate_count"])
@@ -38,7 +42,7 @@ def _row_to_session(row: sqlite3.Row) -> PaperSessionState:
     return PaperSessionState(
         session_key=row["session_key"], canonical_symbol=row["canonical_symbol"], resolution=row["resolution"],
         equity=row["equity"], last_processed_bar_time_utc=row["last_processed_bar_time_utc"],
-        open_position=open_position, regime_tracker_state=regime_tracker_state,
+        open_position=open_position, regime_tracker_state=regime_tracker_state, pending_entry=pending_entry,
     )
 
 
@@ -75,20 +79,22 @@ def save_session_state(
     conn: sqlite3.Connection, session_key: str, *,
     equity: float, last_processed_bar_time_utc: int, open_position: OpenPositionState | None,
     regime_tracker_state: RegimeTrackerState | None = None,
+    pending_entry: PendingEntryState | None = None,
     now_utc: int | None = None,
 ) -> None:
     now = now_utc if now_utc is not None else int(time.time())
     open_position_json = json.dumps(asdict(open_position)) if open_position is not None else None
+    pending_entry_json = json.dumps(asdict(pending_entry)) if pending_entry is not None else None
     regime_confirmed = regime_tracker_state.confirmed if regime_tracker_state is not None else None
     regime_candidate = regime_tracker_state.candidate if regime_tracker_state is not None else None
     regime_candidate_count = regime_tracker_state.candidate_count if regime_tracker_state is not None else 0
     conn.execute(
         "UPDATE paper_session_state SET equity = ?, last_processed_bar_time_utc = ?, "
         "open_position_json = ?, regime_confirmed = ?, regime_candidate = ?, regime_candidate_count = ?, "
-        "updated_at_utc = ? WHERE session_key = ?",
+        "pending_entry_json = ?, updated_at_utc = ? WHERE session_key = ?",
         (
             equity, last_processed_bar_time_utc, open_position_json, regime_confirmed, regime_candidate,
-            regime_candidate_count, now, session_key,
+            regime_candidate_count, pending_entry_json, now, session_key,
         ),
     )
 

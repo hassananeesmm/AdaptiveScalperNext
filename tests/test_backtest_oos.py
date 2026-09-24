@@ -129,9 +129,11 @@ def test_run_untouched_oos_allows_explicit_reuse_when_flagged(db):
 
 
 def test_run_untouched_oos_does_not_block_on_an_unrelated_dataset(db):
-    # A DIFFERENT bar range (different content -> different checksum ->
-    # different dataset_id) used for TRAINING must not block THIS range.
-    training_bars = _trending_bars(200, start_price=1000.0)
+    # A DIFFERENT, non-overlapping time range used for TRAINING must not
+    # block THIS range. (Same-period data with different content IS
+    # contamination -- see test_backtest_correctness_regressions.py's
+    # overlapping-OOS tests.)
+    training_bars = _trending_bars(200, start_price=1000.0, start_time=1_700_000_000 - 400 * 300)
     strategies = tuple(s.key for s in build_active_registry().all_active())
     training_snapshot = build_dataset_snapshot(
         training_bars, canonical_symbol=CANONICAL_SYMBOL, resolution=RESOLUTION, strategies=strategies,

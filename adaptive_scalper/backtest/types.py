@@ -123,9 +123,34 @@ class OpenPositionState:
     stop_price: float
     target_price: float | None
     initial_stop_distance_price: float
+    # Entry-side friction (half spread + slippage) in money, already
+    # embedded in `entry_price`; exit friction/commission/swap are added
+    # only when the trade closes.
     total_cost: float
     entry_features: dict[str, float | None] | None = None
     entry_raw_confidence: float | None = None
+    # Monotonic running maximum of current_r, starting at 0.0 -- the same
+    # contract as live `position_management_state.peak_r`.
+    peak_r: float = 0.0
+    # A FULL_CLOSE decided at the last processed bar's close; it fills at
+    # the NEXT bar's open, which may belong to the next PAPER cycle.
+    pending_exit_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class PendingEntryState:
+    """A selected entry signal decided at a bar's close that has not yet
+    filled -- its earliest causal fill is the NEXT bar's open, which may
+    arrive in the next PAPER cycle."""
+
+    strategy_key: str
+    direction: str
+    stop_distance: float
+    target_distance: float
+    regime: str
+    raw_confidence: float
+    signal_time_utc: int
+    entry_features: dict[str, float | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +173,9 @@ class BacktestResult:
     # of this run -- an incremental caller passes it back in as
     # `run_backtest(..., resume_regime_tracker=...)` next call.
     final_regime_tracker_state: RegimeTrackerState | None = None
+    # Set only when `force_close_at_range_end=False` and a signal was
+    # selected on the final bar -- pass back as `resume_pending_entry`.
+    pending_entry: PendingEntryState | None = None
 
 
 @dataclass(frozen=True)

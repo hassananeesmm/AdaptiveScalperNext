@@ -59,12 +59,13 @@ def _spread_price(bar: Bar, point_size: float) -> float:
     return max(0.0, bar.spread) * point_size
 
 
-def simulate_fill(bar: Bar, direction: str, point_size: float, assumptions: FillAssumptions) -> SimulatedFill:
-    """One realistic fill at `bar`'s reference price. Real backtest/PAPER
-    callers use `bar.open` (the causal, no-lookahead reference price for
-    a signal decided on a PRIOR bar's close) or `bar.close` (for an
-    urgent SL/TP-triggered exit reacting within the same bar), never a
-    price this bar's own subsequent movement could reveal is optimistic.
+def simulate_fill(
+    bar: Bar, direction: str, point_size: float, assumptions: FillAssumptions, *, at: str = "open",
+) -> SimulatedFill:
+    """One realistic fill at `bar`'s reference price. `at="open"` (the
+    default) is the causal, no-lookahead reference for anything decided
+    on a PRIOR bar's close; `at="close"` is only for the bounded-backtest
+    range-end convention, where no later bar exists to fill at.
 
     BUY pays the ask (reference + half the spread + slippage, both
     working against the trader); SELL pays the bid (reference - half the
@@ -75,10 +76,12 @@ def simulate_fill(bar: Bar, direction: str, point_size: float, assumptions: Fill
     """
     if direction not in ("BUY", "SELL"):
         raise ValueError(f"direction must be 'BUY' or 'SELL', got {direction!r}")
+    if at not in ("open", "close"):
+        raise ValueError(f"at must be 'open' or 'close', got {at!r}")
 
     spread_price = _spread_price(bar, point_size)
     half_spread = spread_price / 2.0
-    reference = bar.open
+    reference = bar.open if at == "open" else bar.close
 
     if direction == "BUY":
         price = reference + half_spread + assumptions.slippage_price

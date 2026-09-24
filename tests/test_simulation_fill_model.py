@@ -86,3 +86,12 @@ def test_money_from_price_distance_rejects_invalid_contract_spec():
         money_from_price_distance(1.0, 0.1, tick_size=0.0, tick_value=1.0)
     with pytest.raises(ValueError):
         money_from_price_distance(1.0, 0.1, tick_size=0.01, tick_value=0.0)
+
+
+def test_fill_at_close_uses_the_close_as_reference():
+    bar = _bar(open=2000.0, close=2003.0, spread=20)
+    assumptions = FillAssumptions(slippage_price=0.05, commission_monetary_per_lot=0.0)
+    fill = simulate_fill(bar, "SELL", point_size=0.01, assumptions=assumptions, at="close")
+    assert fill.price == pytest.approx(2003.0 - 0.10 - 0.05)
+    with pytest.raises(ValueError):
+        simulate_fill(bar, "SELL", point_size=0.01, assumptions=assumptions, at="high")
