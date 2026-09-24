@@ -2155,3 +2155,33 @@ masked), terminal launched by the defect above and still running:
 - **BUG_BACKLOG #14 confirmed:** `tick.time` is +10800 s (UTC+3) ahead of the
   real UTC clock on all three symbols. Stored bars are server time labelled
   `ts_utc` (FX history ends Friday 23:55 "UTC"; the FX close is 21:00 UTC).
+
+## Session: Windows validation, checkpoint W2 -- broker server time (BUG_BACKLOG #14) (2026-09-25)
+
+Measured: IC Markets DEMO `tick.time` = UTC + 10800 s on XAUUSD/GBPJPY/BTCUSD
+(2026-09-24 20:12 UTC, US DST in effect); stored bars were server time labelled
+`ts_utc`. News times are parsed offset-aware (true UTC), so bar-vs-news windows
+were 3 h apart and every DEMO entry would have failed `execution_future_timestamp`.
+
+Fix (central, at the gateway boundary; details in BUG_BACKLOG #14):
+`gateway/server_time.py` (`[mt5] server_time_rule`, "UTC+2/US_DST" in
+`config/default.toml`); `Mt5Gateway` converts ticks, bars, deals and orders to
+UTC and range inputs to server time; `create_live_gateway(rule)` takes the rule
+explicitly; startup refuses quotes in the future under the rule
+(`SERVER_CLOCK_MISMATCH`) and records `server_clock` state; `doctor` prints the
+per-symbol verdict; migration 27 marks pre-existing MT5 rows
+`SERVER_UNCONVERTED` and the runtime/history/research commands refuse them until
+`history convert-server-time` (backup first, one transaction, one shot);
+`BAR_TIME_BASIS` joins the PAPER/backtest fingerprint.
+
+A test caught an overstated claim: at the autumn fall-back two UTC hours share
+one server hour, so UTC->server->UTC is not exact there (the broker's own data
+merges that hour). Server->UTC is still one-to-one, which keeps bar keys unique;
+the test now states that property.
+
+Tests: new `test_server_time.py`, `test_mt5_gateway_time_conversion.py`,
+`test_time_basis.py`, 3 engine startup tests in `test_runtime.py`, a fingerprint
+test, and a live test. Full suite (Windows): 1481 passed, 9 skipped (8 opt-in
+live MT5, 1 symlink privilege), 0 failed; fingerprint-affected modules re-run
+after the last edit: 115 passed. Live (`ASN_LIVE_MT5=1`): 8 passed, including
+`test_configured_server_time_rule_matches_live_quotes`.

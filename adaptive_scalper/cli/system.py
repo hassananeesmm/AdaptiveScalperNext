@@ -34,15 +34,35 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         problems.append(f"database integrity: {integrity}")
     version = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
     ks = kill_switch.get_state(conn)
+    from adaptive_scalper.history.time_basis import get_basis
+
+    time_basis = get_basis(conn)["basis"]
+    if time_basis != "UTC":
+        problems.append("stored MT5 rows are in broker server time: run `history convert-server-time` "
+                        "(BUG_BACKLOG #14)")
     conn.close()
 
     mt5 = "not checked"
+    server_clock = "not checked"
     try:
-        gw = open_gateway(require_demo=False)
+        gw = open_gateway(cfg, require_demo=False)
         account = gw.account_info()
         mt5 = f"reachable, account trade mode {account.trade_mode.name if account else 'UNKNOWN'}"
         if account is not None and account.trade_mode.name != "DEMO":
             problems.append("connected account is not DEMO: REAL-MONEY EXECUTION IS DISABLED, runtime will refuse")
+        from adaptive_scalper.gateway.server_time import MISMATCH, classify_quote_clock
+        from adaptive_scalper.gateway.symbol_resolver import resolve_all
+
+        verdicts = {}
+        for canonical, result in sorted(resolve_all(gw.symbols_get()).items()):
+            tick = gw.symbol_info_tick(result.broker_symbol) if result.resolved else None
+            if tick is not None and tick.time:
+                verdict, residual = classify_quote_clock(tick.time, time.time())
+                verdicts[canonical] = f"{verdict} ({residual:+.0f}s)"
+        server_clock = ", ".join(f"{k} {v}" for k, v in verdicts.items()) or "no quotes"
+        if any(v.startswith(MISMATCH) for v in verdicts.values()):
+            problems.append(f"quotes are in the future under server_time_rule={cfg.mt5.server_time_rule}: "
+                            "the runtime will refuse to start")
         gw.shutdown()
     except CliError as exc:
         mt5 = f"unavailable: {exc}"
@@ -50,7 +70,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print(f"config: OK ({args.config}, mode={cfg.mode}; allowed modes {sorted(ALLOWED_MODES)})")
     print(f"database: integrity={integrity} schema={version} ({cfg.database.path})")
     print(f"kill switch: {ks.status.value} (blocks new entries: {ks.blocks_new_entries})")
+    print(f"mt5 time: server_time_rule={cfg.mt5.server_time_rule}, stored rows {time_basis}")
     print(f"mt5: {mt5}")
+    print(f"mt5 server clock vs UTC: {server_clock}")
     print("real-money execution: DISABLED")
     for problem in problems:
         print(f"PROBLEM: {problem}")
@@ -90,8 +112,8 @@ def cmd_health(args: argparse.Namespace) -> int:
 
 
 def cmd_symbols(args: argparse.Namespace) -> int:
-    _, conn = open_db(args.config)
-    gw = open_gateway(require_demo=False)  # read-only resolution; the account check is reported by `doctor`
+    cfg, conn = open_db(args.config)
+    gw = open_gateway(cfg, require_demo=False)  # read-only resolution; the account check is reported by `doctor`
     try:
         results = resolve_all(gw.symbols_get())
         persist_all(conn, results)

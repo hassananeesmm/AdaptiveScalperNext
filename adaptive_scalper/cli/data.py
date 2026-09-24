@@ -24,8 +24,8 @@ def cmd_history_bootstrap(args: argparse.Namespace) -> int:
     """Chunked, resumable bar (+ optional tick) download for every
     canonical symbol that resolves right now. One symbol's failure never
     aborts the others."""
-    _, conn = open_db(args.config)
-    gw = open_gateway()
+    cfg, conn = open_db(args.config, require_utc_history=True)
+    gw = open_gateway(cfg)
     resolutions_result = resolve_all(gw.symbols_get())
     now_utc = int(time.time())
     resolutions = tuple(args.resolutions) if args.resolutions else SUPPORTED_BAR_RESOLUTIONS
@@ -95,8 +95,8 @@ def cmd_history_status(args: argparse.Namespace) -> int:
 
 
 def cmd_broker_history_import(args: argparse.Namespace) -> int:
-    _, conn = open_db(args.config)
-    gw = open_gateway()
+    cfg, conn = open_db(args.config, require_utc_history=True)
+    gw = open_gateway(cfg)
     account = gw.account_info()
     now_utc = int(time.time())
     orders, deals = account_history.import_account_history(conn, gw, account, now_utc - args.days * 86400, now_utc)
@@ -108,13 +108,36 @@ def cmd_broker_history_import(args: argparse.Namespace) -> int:
 
 
 def cmd_broker_history_status(args: argparse.Namespace) -> int:
-    _, conn = open_db(args.config)
-    gw = open_gateway()
+    cfg, conn = open_db(args.config)
+    gw = open_gateway(cfg)
     account = gw.account_info()
     gw.shutdown()
     cov = account_history.coverage(conn, account.login, account.server)
     conn.close()
     print_json({"login": _mask(account.login), "server": account.server, **cov})
+    return 0
+
+
+def cmd_history_convert_server_time(args: argparse.Namespace) -> int:
+    """One-shot conversion of rows stored before schema 27 from the broker
+    server clock to UTC (BUG_BACKLOG #14). Backs the database up first;
+    refuses a database that is already UTC. Never touches MT5."""
+    from pathlib import Path
+
+    from adaptive_scalper.cli.common import CliError
+    from adaptive_scalper.history.time_basis import TimeBasisError, convert_server_time_to_utc
+
+    cfg, conn = open_db(args.config)
+    rule = args.rule or cfg.mt5.server_time_rule
+    try:
+        report = convert_server_time_to_utc(conn, rule, db_path=cfg.database.path,
+                                            backup_dir=Path(cfg.database.path).parent / "backups",
+                                            now_utc=int(time.time()))
+    except (TimeBasisError, ValueError) as exc:
+        raise CliError(str(exc)) from exc
+    finally:
+        conn.close()
+    print_json(report)
     return 0
 
 
@@ -128,6 +151,10 @@ def register(sub) -> None:
     boot.add_argument("--resolutions", nargs="+", choices=SUPPORTED_BAR_RESOLUTIONS)
     boot.set_defaults(func=cmd_history_bootstrap)
     hist_sub.add_parser("status", help="coverage per configured symbol/resolution").set_defaults(func=cmd_history_status)
+    conv = hist_sub.add_parser("convert-server-time",
+                               help="one-shot: back up, then convert pre-schema-27 MT5 rows from server time to UTC")
+    conv.add_argument("--rule", default=None, help="server clock rule (default: [mt5] server_time_rule)")
+    conv.set_defaults(func=cmd_history_convert_server_time)
 
     bh = sub.add_parser("broker-history", help="the DEMO account's own order/deal history")
     bh_sub = bh.add_subparsers(dest="broker_history_command", required=True)

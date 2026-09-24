@@ -21,10 +21,15 @@ import os
 import pytest
 
 from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS
+from adaptive_scalper.config.loader import load_config
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway, Mt5NotAvailableError
 from adaptive_scalper.gateway.symbol_resolver import resolve_all
 from adaptive_scalper.gateway.types import AccountSnapshot, TerminalSnapshot, TradeMode
+
+
+# The configured broker server clock (BUG_BACKLOG #14), as the runtime uses it.
+_RULE = load_config("config/default.toml").mt5.server_time_rule
 
 
 def _mt5_available() -> bool:
@@ -33,7 +38,7 @@ def _mt5_available() -> bool:
     if os.environ.get("ASN_LIVE_MT5") != "1":
         return False
     try:
-        gw = Mt5Gateway()
+        gw = Mt5Gateway(_RULE)
         ok = gw.initialize()
         gw.shutdown()
         return ok
@@ -48,7 +53,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture()
 def gateway():
-    gw = Mt5Gateway()
+    gw = Mt5Gateway(_RULE)
     assert gw.initialize() is True
     yield gw
     gw.shutdown()
@@ -115,3 +120,23 @@ def test_symbol_info_tick_for_a_resolved_canonical_symbol(gateway):
     assert tick is not None
     assert tick.bid > 0
     assert tick.ask >= tick.bid
+
+
+def test_configured_server_time_rule_matches_live_quotes(gateway):
+    """BUG_BACKLOG #14: with `[mt5] server_time_rule` applied, a fresh quote's
+    converted time is within the tolerance of the real UTC clock."""
+    import time
+
+    from adaptive_scalper.gateway.server_time import INCONCLUSIVE, VERIFIED, classify_quote_clock
+
+    results = resolve_all(gateway.symbols_get())
+    verdicts = {}
+    for canonical, result in results.items():
+        if result.resolved:
+            tick = gateway.symbol_info_tick(result.broker_symbol)
+            if tick is not None and tick.time:
+                verdicts[canonical] = classify_quote_clock(tick.time, time.time())
+    if not verdicts or all(v[0] == INCONCLUSIVE for v in verdicts.values()):
+        pytest.skip(f"no fresh quote (market closed?): {verdicts}")
+    assert any(v[0] == VERIFIED for v in verdicts.values()), verdicts
+    assert all(v[0] != "MISMATCH" for v in verdicts.values()), verdicts

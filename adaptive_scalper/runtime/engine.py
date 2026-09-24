@@ -45,10 +45,13 @@ from adaptive_scalper.costs.observations import sweep_exit_costs
 from adaptive_scalper.execution.reconciliation import run_reconciliation
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions, quarantine_interrupted_submissions
 from adaptive_scalper.gateway.protocol import Gateway
+from adaptive_scalper.gateway.server_time import INCONCLUSIVE, MISMATCH, VERIFIED, classify_quote_clock
 from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
 from adaptive_scalper.gateway.symbol_validation import validate_resolved_symbol
 from adaptive_scalper.gateway.types import TradeMode
+from adaptive_scalper.history.time_basis import TimeBasisError
+from adaptive_scalper.history.time_basis import require_utc as require_utc_time_basis
 from adaptive_scalper.knowledge.advisor import KnowledgeAdvisor
 from adaptive_scalper.learning.observer import EntryObserver
 from adaptive_scalper.news.providers.cache import CacheProvider
@@ -115,6 +118,37 @@ class RuntimeEngine:
         self._stop = False
 
     # ------------------------------------------------------------------
+    def _verify_server_clock(self, now: int) -> dict:
+        """Check `[mt5] server_time_rule` against live quotes (BUG_BACKLOG #14).
+        The gateway already converted the quote times to UTC, so a quote in
+        the future proves the rule wrong: refuse to start rather than shift
+        every bar, news window and quote-freshness check. Stale quotes only
+        (market closed) are INCONCLUSIVE and recorded as a WARNING."""
+        rule = self.config.mt5.server_time_rule
+        per_symbol = {}
+        for canonical, broker_symbol in self.symbols.items():
+            tick = self.gateway.symbol_info_tick(broker_symbol)
+            if tick is None or not tick.time:
+                continue
+            verdict, residual = classify_quote_clock(tick.time, self.clock())
+            per_symbol[canonical] = {"verdict": verdict, "tick_minus_utc_seconds": round(residual, 1)}
+        verdicts = {v["verdict"] for v in per_symbol.values()}
+        overall = MISMATCH if MISMATCH in verdicts else VERIFIED if VERIFIED in verdicts else INCONCLUSIVE
+        state = {"rule": rule, "verdict": overall, "symbols": per_symbol, "at": now}
+        put_state(self.conn, "server_clock", state, now_utc=now)
+        if overall == MISMATCH:
+            record_event(self.conn, "CRITICAL", "gateway", "SERVER_CLOCK_MISMATCH",
+                         f"quotes are in the future under server_time_rule={rule!r}: {per_symbol}", now_utc=now)
+            raise RuntimeStartupError(
+                f"MT5 quote times do not match [mt5] server_time_rule={rule!r} ({per_symbol}); "
+                f"set the broker's server clock rule (see config/default.toml)"
+            )
+        if overall == INCONCLUSIVE:
+            record_event(self.conn, "WARNING", "gateway", "SERVER_CLOCK_UNVERIFIED",
+                         f"no fresh quote to verify server_time_rule={rule!r} (market closed?): {per_symbol}",
+                         dedup_key="server_clock_unverified", now_utc=now)
+        return state
+
     def now(self) -> int:
         return int(self.clock())
 
@@ -133,6 +167,10 @@ class RuntimeEngine:
         if integrity != "ok":
             raise RuntimeStartupError(f"database integrity check failed: {integrity}")
         kill = get_kill_switch_state(self.conn)  # READ only -- never bootstrapped or cleared here
+        try:
+            require_utc_time_basis(self.conn)
+        except TimeBasisError as exc:
+            raise RuntimeStartupError(str(exc)) from exc
 
         if not self.gateway.initialize():
             raise RuntimeStartupError("MT5 terminal could not be initialized -- start MT5 and log in to a DEMO account")
@@ -166,6 +204,7 @@ class RuntimeEngine:
                          dedup_key=f"symbol_excluded:{canonical}", now_utc=now)
         if not self.symbols:
             raise RuntimeStartupError(f"no canonical symbol resolved and validated: {excluded}")
+        server_clock = self._verify_server_clock(now)
 
         registry = build_active_registry()
         active = {s.key for s in registry.all_active()}
@@ -214,6 +253,7 @@ class RuntimeEngine:
             "kill_switch": kill.status.value, "kill_switch_blocks_new_entries": kill.blocks_new_entries,
             "account_server": account.server, "account_trade_mode": account.trade_mode.name,
             "recovery": recovery, "news": self.news.health(now).value,
+            "server_clock": server_clock["verdict"],
         }
         put_state(self.conn, "startup", summary, now_utc=now)
         record_event(self.conn, "INFO", "engine", "ENGINE_STARTED", f"{self.mode} runtime started", now_utc=now)

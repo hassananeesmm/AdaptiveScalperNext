@@ -64,7 +64,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     from adaptive_scalper.backtest.engine import run_backtest
     from adaptive_scalper.backtest.persistence import record_backtest_run
 
-    cfg, conn = open_db(args.config)
+    cfg, conn = open_db(args.config, require_utc_history=True)
     bars, spec, config, news = _inputs(args, conn, cfg)
     now = int(time.time())
     result = run_backtest(bars, args.symbol, args.resolution, spec, config=config, now_utc=now)
@@ -85,7 +85,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 def cmd_walk_forward(args: argparse.Namespace) -> int:
     from adaptive_scalper.backtest.walk_forward import run_walk_forward
 
-    cfg, conn = open_db(args.config)
+    cfg, conn = open_db(args.config, require_utc_history=True)
     bars, spec, config, news = _inputs(args, conn, cfg)
     now = int(time.time())
     prefix = f"wf:{args.symbol}:{args.resolution}:{now}"
@@ -109,7 +109,7 @@ def cmd_walk_forward(args: argparse.Namespace) -> int:
 def cmd_oos(args: argparse.Namespace) -> int:
     from adaptive_scalper.backtest.oos import DatasetContaminatedError, run_untouched_oos
 
-    cfg, conn = open_db(args.config)
+    cfg, conn = open_db(args.config, require_utc_history=True)
     bars, spec, config, news = _inputs(args, conn, cfg)
     now = int(time.time())
     run_id = f"oos:{args.symbol}:{args.resolution}:{now}"

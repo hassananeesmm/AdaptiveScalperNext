@@ -438,3 +438,13 @@ def test_the_exit_review_timing_version_is_part_of_the_session_fingerprint():
     finally:
         fp.EXIT_REVIEW_TIMING_VERSION = original
     assert before != older  # a PAPER session from the old timing cannot silently resume
+
+
+def test_the_bar_time_basis_is_part_of_the_session_fingerprint(monkeypatch):
+    # BUG_BACKLOG #14: a session started on server-time bars must not resume on UTC bars.
+    import adaptive_scalper.backtest.fingerprint as fp
+
+    utc, _ = fp.compute_config_fingerprint(config(), canonical_symbol=SYMBOL, resolutions=(RES,), strategies=())
+    monkeypatch.setattr(fp, "BAR_TIME_BASIS", "SERVER")
+    server, _ = fp.compute_config_fingerprint(config(), canonical_symbol=SYMBOL, resolutions=(RES,), strategies=())
+    assert utc != server

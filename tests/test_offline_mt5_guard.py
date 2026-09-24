@@ -18,7 +18,7 @@ from adaptive_scalper.gateway.mt5_gateway import Mt5NotAvailableError
 
 
 def test_the_live_gateway_cannot_initialize_inside_the_offline_suite():
-    gateway = create_live_gateway()
+    gateway = create_live_gateway("UTC")
     with pytest.raises(Mt5NotAvailableError, match="blocked in the offline test suite"):
         gateway.initialize()
 
@@ -26,8 +26,10 @@ def test_the_live_gateway_cannot_initialize_inside_the_offline_suite():
 def test_the_cli_broker_path_fails_closed_inside_the_offline_suite():
     from adaptive_scalper.cli.common import CliError, open_gateway
 
+    from adaptive_scalper.config.loader import AppConfig
+
     with pytest.raises(CliError, match="MetaTrader5 unavailable"):
-        open_gateway(require_demo=False)
+        open_gateway(AppConfig(), require_demo=False)
 
 
 def test_the_live_mt5_tests_are_opt_in():

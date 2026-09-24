@@ -87,16 +87,44 @@ delete) once fixed, with the fixing commit/date noted.
    semantic instead); flag for a real design once/if a netting-mode
    account is ever connected.
 
-14. [SEVERITY: HIGH until verified, SUBSYSTEM: gateway/runtime] BLOCKED-ON-
-   LOCAL-MT5. `Mt5Gateway` passes MT5 bar/tick timestamps through
-   unconverted. Many brokers stamp them in SERVER time (e.g. UTC+2/+3),
-   not UTC. The runtime judges bar closure against the symbol's own tick
-   clock (safe either way), but `validate_execution_quote()` compares the
-   tick time with this machine's UTC clock and news windows are UTC: with
-   a server-time offset every DEMO entry would fail closed
-   (`execution_future_timestamp`) and PAPER news windows would be offset.
-   Must be measured on the Windows laptop (tick.time vs UTC) and, if
-   offset, converted once inside `Mt5Gateway` -- never guessed here.
+14. [SEVERITY: HIGH -> fixed 2026-09-25, winter half pending observation,
+   SUBSYSTEM: gateway/runtime/history] **Measured on the laptop**: IC Markets
+   DEMO `tick.time` was +10800 s (UTC+3) ahead of the real UTC clock on all
+   three symbols (2026-09-24 20:12 UTC, US DST in effect), and the 1.5M stored
+   bars were server time labelled `ts_utc` (FX history ended Friday 23:55
+   "UTC"; the FX close is 21:00 UTC). Fixed on `windows-validation`:
+   - `gateway/server_time.py`: explicit `[mt5] server_time_rule` ("UTC" or
+     "UTC+2/US_DST" = New York + 7 h); `Mt5Gateway` converts every MT5 time
+     (ticks, bars, deals, orders) to UTC and range inputs to server time.
+   - Startup refuses when a converted quote is in the future
+     (`SERVER_CLOCK_MISMATCH`); stale quotes only -> `SERVER_CLOCK_UNVERIFIED`
+     WARNING (the execution-time quote-freshness checks still fail closed).
+     `doctor` prints the per-symbol verdict.
+   - Schema 27 marks pre-existing MT5 rows `SERVER_UNCONVERTED`; runtime,
+     history sync, backtest/walk-forward/OOS, training and `analyse --source
+     db` refuse such a database until `history convert-server-time` (backs up
+     first, one transaction, one shot) converts it. Audit records (journal,
+     decision chains, runtime events) are never rewritten.
+   - `BAR_TIME_BASIS` is part of the PAPER/backtest config fingerprint.
+   Still to observe: the winter (UTC+2) half of the rule after the US DST
+   change on 2026-11-01 -- startup re-checks it against live quotes. The
+   repeated server hour at each autumn fall-back cannot be disambiguated
+   (the broker's own data merges it); it maps to the earlier UTC hour.
+
+21. [SEVERITY: LOW, SUBSYSTEM: gateway] Two MT5 terminals are installed on the
+   laptop (`C:\Program Files\MetaTrader 5` and `...\MetaTrader 5 IC Markets
+   Global`). `mt5.initialize()` takes no path, so it attaches to a running
+   terminal or launches one the SDK picks (it launched IC Markets Global,
+   logged in to `ICMarketsSC-Demo`). Safety does not depend on which one: every
+   broker-facing path verifies the account is DEMO first. Pinning a terminal
+   path in config would make the choice explicit; not done yet.
+
+22. [SEVERITY: INFO, SUBSYSTEM: operations] Observed 2026-09-25: the terminal's
+   Algo Trading was already ENABLED (terminal `trade_allowed=true`) before any
+   DEMO session; this session did not enable it. PAPER never sends; DEMO
+   entries are blocked while the kill switch is UNINITIALIZED. LOCAL_MT5_HANDOFF
+   step U assumes the operator enables Algo Trading only at DEMO time -- the
+   operator may prefer to turn it off until then.
 
 15. [SEVERITY: LOW, SUBSYSTEM: position_management] `re_entry.evaluate_reentry`
    requires `original_raw_confidence + 0.08` for a same-direction

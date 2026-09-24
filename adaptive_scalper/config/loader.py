@@ -134,6 +134,20 @@ class DatabaseConfig(BaseModel):
     path: str = "data/adaptive_scalper.sqlite3"
 
 
+class Mt5Config(BaseModel):
+    # The broker server clock MT5 stamps every time with (BUG_BACKLOG #14,
+    # gateway/server_time.py). "UTC" = no conversion. The runtime refuses to
+    # start when a live quote proves the rule wrong.
+    server_time_rule: str = "UTC"
+
+    @field_validator("server_time_rule")
+    @classmethod
+    def _known_rule(cls, value: str) -> str:
+        from adaptive_scalper.gateway.server_time import validate_rule
+
+        return validate_rule(value)
+
+
 _COST_PROVENANCES = ("UNVERIFIED_ASSUMPTION", "BROKER_SPEC_ESTIMATE", "BROKER_DEMO_CONFIRMED")
 
 
@@ -222,6 +236,7 @@ class AppConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    mt5: Mt5Config = Field(default_factory=Mt5Config)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     costs: dict[str, SymbolCostConfig] = Field(default_factory=dict)
 

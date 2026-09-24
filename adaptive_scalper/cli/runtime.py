@@ -51,7 +51,7 @@ def _run_engine(args: argparse.Namespace, mode: str) -> int:
     for line in BANNERS[mode]:
         print(f"*** {line} ***")
     try:
-        gateway = create_live_gateway()
+        gateway = create_live_gateway(cfg.mt5.server_time_rule)
     except Mt5NotAvailableError as exc:
         raise CliError(f"MetaTrader5 unavailable: {exc}") from exc
     engine = RuntimeEngine(cfg, conn, gateway)
@@ -112,8 +112,8 @@ def _bars_and_spec(args, cfg: AppConfig, conn, symbol: str, gw):
 
 
 def _analyse(args, symbols: list[str]) -> dict:
-    cfg, conn = open_db(args.config)
-    gw = open_gateway() if args.source == "mt5" else None
+    cfg, conn = open_db(args.config, require_utc_history=args.source == "db")
+    gw = open_gateway(cfg) if args.source == "mt5" else None
     out = {}
     try:
         for symbol in symbols:
@@ -159,8 +159,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     from adaptive_scalper.execution.reconciliation import run_reconciliation
     from adaptive_scalper.execution.recovery import apply_unknown_resolutions
 
-    _, conn = open_db(args.config)
-    gw = open_gateway()
+    cfg, conn = open_db(args.config)
+    gw = open_gateway(cfg)
     now = int(time.time())
     try:
         report = run_reconciliation(conn, gw, f"cli-reconcile:{now}", now_utc=now)
@@ -180,7 +180,7 @@ def cmd_order_check_probe(args: argparse.Namespace) -> int:
     from adaptive_scalper.execution.order_check_probe import CHECKED, result_dict, run_order_check_probe
 
     cfg, conn = open_db(args.config)
-    gw = open_gateway()
+    gw = open_gateway(cfg)
     try:
         result = run_order_check_probe(conn, gw, canonical_symbol=args.symbol, direction=args.direction,
                                        risk_per_trade_pct=cfg.risk.risk_per_trade_pct, magic=cfg.runtime.magic)

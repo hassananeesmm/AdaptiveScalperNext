@@ -30,6 +30,15 @@ fail_closed = true
 [database]
 path = "data/adaptive_scalper.sqlite3"
 
+[mt5]
+# Broker server clock (BUG_BACKLOG #14). IC Markets DEMO measured on the laptop
+# 2026-09-24: tick.time = UTC+3 while US DST was in effect -> "UTC+2/US_DST"
+# (UTC+2, UTC+3 during US DST; New York + 7 h). The winter (UTC+2) half is the
+# broker's documented convention, not yet observed here: startup re-checks the
+# rule against a live quote and refuses to start if a quote proves it wrong.
+# Use "UTC" for a broker whose server clock is UTC.
+server_time_rule = "UTC+2/US_DST"
+
 [runtime]
 # Directive section 16 cadences. Position reviews always run at least as
 # often as entry scans.

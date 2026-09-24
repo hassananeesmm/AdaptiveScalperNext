@@ -31,6 +31,10 @@ RISK_POLICY_VERSION = 1
 # 2: holding time measured to the review bar's close (BUG_BACKLOG #13), so a
 # PAPER session started under v1 timing halts instead of mixing semantics.
 EXIT_REVIEW_TIMING_VERSION = 2
+# Bar times are real UTC from schema 27 on (Mt5Gateway converts the broker
+# server clock, BUG_BACKLOG #14). A PAPER session started on server-time bars
+# halts instead of resuming with its bar cursor hours off.
+BAR_TIME_BASIS = "UTC"
 
 
 def describe_config(
@@ -52,6 +56,7 @@ def describe_config(
         "fill_assumptions": asdict(config.fill_assumptions),
         "adaptive_exit": asdict(config.adaptive_exit_params),
         "exit_review_timing_version": EXIT_REVIEW_TIMING_VERSION,
+        "bar_time_basis": BAR_TIME_BASIS,
         "min_net_edge_price": config.min_net_edge_price,
         "min_raw_confidence": config.min_raw_confidence,
         "uncertainty_margin_pct": config.uncertainty_margin_pct,

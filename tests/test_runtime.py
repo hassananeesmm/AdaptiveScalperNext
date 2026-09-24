@@ -7,6 +7,8 @@ every broker call still routed through the chaos fault plan.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
@@ -57,6 +59,38 @@ def test_startup_refuses_when_the_terminal_cannot_initialize(tmp_path):
     gateway.initialize = lambda: False
     engine, _, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway)
     with pytest.raises(RuntimeStartupError, match="could not be initialized"):
+        engine.startup()
+
+
+def test_startup_refuses_quotes_in_the_future_under_the_server_time_rule(tmp_path):
+    # BUG_BACKLOG #14: a UTC+3 server read with rule "UTC" puts every quote
+    # three hours in the future -- refuse rather than shift every time.
+    clock = FakeClock(START_AT)
+    gateway = LiveMarketGateway(clock, default_market())
+    live_tick = gateway._live_tick
+
+    def server_clock_tick(name):
+        tick = live_tick(name)
+        return dataclasses.replace(tick, time=tick.time + 3 * 3600) if tick else None
+
+    gateway._live_tick = server_clock_tick
+    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock, gateway=gateway)
+    with pytest.raises(RuntimeStartupError, match="server_time_rule"):
+        engine.startup()
+    assert get_state(conn, "server_clock")["verdict"] == "MISMATCH"
+
+
+def test_startup_records_a_verified_server_clock(tmp_path):
+    clock = FakeClock(START_AT)
+    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock)
+    assert engine.startup()["server_clock"] == "VERIFIED"
+
+
+def test_startup_refuses_history_still_in_server_time(tmp_path):
+    clock = FakeClock(START_AT)
+    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock)
+    conn.execute("UPDATE mt5_time_basis SET basis = 'SERVER_UNCONVERTED'")
+    with pytest.raises(RuntimeStartupError, match="convert-server-time"):
         engine.startup()
 
 

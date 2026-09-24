@@ -14,6 +14,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from adaptive_scalper.gateway.server_time import (
+    RULE_UTC,
+    server_ms_to_utc_ms,
+    server_to_utc,
+    utc_to_server,
+    validate_rule,
+)
 from adaptive_scalper.gateway.types import (
     AccountSnapshot,
     Bar,
@@ -109,39 +116,39 @@ def _symbol_spec(raw) -> SymbolSpec:
     )
 
 
-def _tick(raw) -> Tick:
+def _tick(raw, rule: str) -> Tick:
     return Tick(
-        time=raw.time,
+        time=server_to_utc(rule, raw.time),
         bid=raw.bid,
         ask=raw.ask,
         last=raw.last,
         volume=raw.volume,
-        time_msc=int(getattr(raw, "time_msc", raw.time * 1000)),
+        time_msc=server_ms_to_utc_ms(rule, int(getattr(raw, "time_msc", raw.time * 1000))),
     )
 
 
-def _tick_row(raw) -> Tick:
+def _tick_row(raw, rule: str) -> Tick:
     # copy_ticks_range returns a numpy structured array, like
     # copy_rates_from_pos/copy_rates_range — field access via __getitem__,
     # not attribute access (see _bar's comment).
     return Tick(
-        time=int(raw["time"]),
+        time=server_to_utc(rule, int(raw["time"])),
         bid=float(raw["bid"]),
         ask=float(raw["ask"]),
         last=float(raw["last"]),
         volume=float(raw["volume"]),
-        time_msc=int(raw["time_msc"]),
+        time_msc=server_ms_to_utc_ms(rule, int(raw["time_msc"])),
     )
 
 
-def _historical_order(raw) -> HistoricalOrder:
+def _historical_order(raw, rule: str) -> HistoricalOrder:
     # history_orders_get returns namedtuple-like TradeOrder objects with
     # normal attribute access (unlike copy_rates_*/copy_ticks_*, which
     # return numpy structured arrays) — no __getitem__ needed here.
     return HistoricalOrder(
         ticket=raw.ticket,
-        time_setup=raw.time_setup,
-        time_done=raw.time_done if raw.time_done else None,
+        time_setup=server_to_utc(rule, raw.time_setup),
+        time_done=server_to_utc(rule, raw.time_done) if raw.time_done else None,
         type=raw.type,
         state=raw.state,
         magic=raw.magic,
@@ -158,11 +165,11 @@ def _historical_order(raw) -> HistoricalOrder:
     )
 
 
-def _historical_deal(raw) -> HistoricalDeal:
+def _historical_deal(raw, rule: str) -> HistoricalDeal:
     return HistoricalDeal(
         ticket=raw.ticket,
         order=raw.order,
-        time=raw.time,
+        time=server_to_utc(rule, raw.time),
         type=raw.type,
         entry=raw.entry,
         magic=raw.magic,
@@ -179,11 +186,11 @@ def _historical_deal(raw) -> HistoricalDeal:
     )
 
 
-def _bar(raw) -> Bar:
+def _bar(raw, rule: str) -> Bar:
     # copy_rates_from_pos returns a numpy structured array; each row is a
     # numpy.void accessed by field name via __getitem__, not attribute access.
     return Bar(
-        time=int(raw["time"]),
+        time=server_to_utc(rule, int(raw["time"])),
         open=float(raw["open"]),
         high=float(raw["high"]),
         low=float(raw["low"]),
@@ -342,8 +349,14 @@ class Mt5Gateway:
     logic lives here — only calling the SDK and converting its output to
     our internal types."""
 
-    def __init__(self) -> None:
+    def __init__(self, server_time_rule: str = RULE_UTC) -> None:
         self._mt5 = None
+        # Every MT5 time is the broker's server clock; convert at this
+        # boundary so everything past the gateway is real UTC (server_time.py).
+        self.server_time_rule = validate_rule(server_time_rule)
+
+    def _server_dt(self, utc_ts: int) -> datetime:
+        return datetime.fromtimestamp(utc_to_server(self.server_time_rule, utc_ts), tz=timezone.utc)
 
     def initialize(self) -> bool:
         self._mt5 = _import_mt5()
@@ -371,13 +384,13 @@ class Mt5Gateway:
 
     def symbol_info_tick(self, name: str) -> Tick | None:
         raw = self._mt5.symbol_info_tick(name)
-        return _tick(raw) if raw is not None else None
+        return _tick(raw, self.server_time_rule) if raw is not None else None
 
     def copy_rates_from_pos(self, name: str, timeframe: int, start_pos: int, count: int) -> list[Bar]:
         raw = self._mt5.copy_rates_from_pos(name, timeframe, start_pos, count)
         if raw is None:
             return []
-        return [_bar(row) for row in raw]
+        return [_bar(row, self.server_time_rule) for row in raw]
 
     def copy_rates_range(
         self, name: str, resolution: str, date_from_utc: int, date_to_utc: int
@@ -389,36 +402,36 @@ class Mt5Gateway:
                 f"{sorted(_RESOLUTION_TO_MT5_ATTR)}"
             )
         timeframe = getattr(self._mt5, attr)
-        date_from = datetime.fromtimestamp(date_from_utc, tz=timezone.utc)
-        date_to = datetime.fromtimestamp(date_to_utc, tz=timezone.utc)
+        date_from = self._server_dt(date_from_utc)
+        date_to = self._server_dt(date_to_utc)
         raw = self._mt5.copy_rates_range(name, timeframe, date_from, date_to)
         if raw is None:
             return []
-        return [_bar(row) for row in raw]
+        return [_bar(row, self.server_time_rule) for row in raw]
 
     def copy_ticks_range(self, name: str, date_from_utc: int, date_to_utc: int) -> list[Tick]:
-        date_from = datetime.fromtimestamp(date_from_utc, tz=timezone.utc)
-        date_to = datetime.fromtimestamp(date_to_utc, tz=timezone.utc)
+        date_from = self._server_dt(date_from_utc)
+        date_to = self._server_dt(date_to_utc)
         raw = self._mt5.copy_ticks_range(name, date_from, date_to, self._mt5.COPY_TICKS_ALL)
         if raw is None:
             return []
-        return [_tick_row(row) for row in raw]
+        return [_tick_row(row, self.server_time_rule) for row in raw]
 
     def history_orders_get(self, date_from_utc: int, date_to_utc: int) -> list[HistoricalOrder]:
-        date_from = datetime.fromtimestamp(date_from_utc, tz=timezone.utc)
-        date_to = datetime.fromtimestamp(date_to_utc, tz=timezone.utc)
+        date_from = self._server_dt(date_from_utc)
+        date_to = self._server_dt(date_to_utc)
         raw = self._mt5.history_orders_get(date_from, date_to)
         if raw is None:
             return []
-        return [_historical_order(row) for row in raw]
+        return [_historical_order(row, self.server_time_rule) for row in raw]
 
     def history_deals_get(self, date_from_utc: int, date_to_utc: int) -> list[HistoricalDeal]:
-        date_from = datetime.fromtimestamp(date_from_utc, tz=timezone.utc)
-        date_to = datetime.fromtimestamp(date_to_utc, tz=timezone.utc)
+        date_from = self._server_dt(date_from_utc)
+        date_to = self._server_dt(date_to_utc)
         raw = self._mt5.history_deals_get(date_from, date_to)
         if raw is None:
             return []
-        return [_historical_deal(row) for row in raw]
+        return [_historical_deal(row, self.server_time_rule) for row in raw]
 
     def positions_get(self) -> list[PositionSnapshot]:
         raw = self._mt5.positions_get()

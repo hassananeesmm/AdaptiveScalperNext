@@ -122,7 +122,7 @@ class SymbolSpec:
 
 @dataclass(frozen=True)
 class Tick:
-    time: int  # epoch seconds, broker/server time
+    time: int  # epoch seconds, UTC (Mt5Gateway converts the broker server clock)
     bid: float
     ask: float
     last: float
@@ -137,7 +137,7 @@ class Tick:
 
 @dataclass(frozen=True)
 class Bar:
-    time: int  # epoch seconds, bar open time, broker/server time
+    time: int  # epoch seconds, bar open time, UTC (converted from the server clock)
     open: float
     high: float
     low: float

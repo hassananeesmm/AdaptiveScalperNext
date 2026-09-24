@@ -44,7 +44,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_train(args: argparse.Namespace) -> int:
-    cfg, conn = open_db(args.config)
+    cfg, conn = open_db(args.config, require_utc_history=True)
     artifact_dir = args.artifact_dir or str(Path(cfg.database.path).parent / "models")
     report = run_training_job(conn, canonical_symbol=args.symbol, artifact_dir=artifact_dir, source=args.source,
                               n_folds=args.folds, gap_seconds=args.gap_seconds, min_samples=args.min_samples,
@@ -65,7 +65,7 @@ def cmd_scores(args: argparse.Namespace) -> int:
 
 
 def cmd_model_walk_forward(args: argparse.Namespace) -> int:
-    _, conn = open_db(args.config)
+    _, conn = open_db(args.config, require_utc_history=True)
     loaded = load_training_rows(conn, canonical_symbol=args.symbol, source=args.source)
     result = run_model_walk_forward(loaded.rows, n_folds=args.folds, gap_seconds=args.gap_seconds,
                                     min_train_rows=args.min_train_rows, seed=args.seed)

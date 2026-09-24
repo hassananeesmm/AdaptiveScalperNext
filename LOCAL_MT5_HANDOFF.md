@@ -64,7 +64,23 @@ steps B–D.
 %PY% -m adaptive_scalper.cli doctor
 ```
 
-Opening the database migrates it to schema 26. `doctor` prints `schema=26`.
+Opening the database migrates it to schema 27. `doctor` prints `schema=27`. Back the
+database up first if it already holds data (the Windows session used SQLite's online
+backup API into `data\backups\`).
+
+**Server clock (BUG_BACKLOG #14).** MT5 stamps every time with the broker's server
+clock. `[mt5] server_time_rule` in `config/default.toml` is `"UTC+2/US_DST"`, measured
+on the IC Markets DEMO terminal (UTC+3 while US DST is in effect). `doctor` prints
+`mt5 server clock vs UTC:` per symbol; `VERIFIED` means the rule matches live quotes.
+A database that already held MT5 rows before schema 27 is marked `SERVER_UNCONVERTED`
+and the runtime, history and research commands refuse it until you run, once:
+
+```bat
+%PY% -m adaptive_scalper.cli history convert-server-time
+```
+
+It backs the database up to `data\backups\` first and converts the stored bars, ticks,
+broker history and history cursors in one transaction.
 
 ## E. Byte-compile
 
