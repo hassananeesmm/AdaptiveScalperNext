@@ -37,9 +37,10 @@ def test_a_restarted_demo_engine_keeps_managing_the_open_position_without_duplic
     summary = restarted.startup()
     assert summary["recovery"]["reconciliation"] == "CLEAN"
     assert summary["recovery"]["quarantined_orders"] == []
-    reviews_before = _count(conn2, "SELECT COUNT(*) FROM journal_events WHERE event_type = 'POSITION_REVIEWED'")
+    last_review = "SELECT MAX(last_review_at_utc) FROM position_management_state"
+    reviewed_before = _count(conn2, last_review)
     step(restarted, clock, seconds=10, tick=1)
-    assert _count(conn2, "SELECT COUNT(*) FROM journal_events WHERE event_type = 'POSITION_REVIEWED'") > reviews_before
+    assert _count(conn2, last_review) > reviewed_before                    # the position is still reviewed
     assert _count(conn2, "SELECT COUNT(*) FROM orders") == orders_before   # nothing re-submitted on restart
     assert gateway.calls["order_send"] == sends_before
     assert kill_switch_state(conn2).status.value == "DISENGAGED"          # untouched by restart

@@ -27,6 +27,10 @@ from adaptive_scalper.simulation.fill_model import FILL_MODEL_VERSION
 
 # Bumped whenever the meaning of RiskLimits/its enforcement changes.
 RISK_POLICY_VERSION = 1
+# Bumped whenever WHEN a simulated open trade is reviewed/exited changes.
+# 2: holding time measured to the review bar's close (BUG_BACKLOG #13), so a
+# PAPER session started under v1 timing halts instead of mixing semantics.
+EXIT_REVIEW_TIMING_VERSION = 2
 
 
 def describe_config(
@@ -47,6 +51,7 @@ def describe_config(
         "fill_model_version": FILL_MODEL_VERSION,
         "fill_assumptions": asdict(config.fill_assumptions),
         "adaptive_exit": asdict(config.adaptive_exit_params),
+        "exit_review_timing_version": EXIT_REVIEW_TIMING_VERSION,
         "min_net_edge_price": config.min_net_edge_price,
         "min_raw_confidence": config.min_raw_confidence,
         "uncertainty_margin_pct": config.uncertainty_margin_pct,

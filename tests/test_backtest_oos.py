@@ -148,3 +148,76 @@ def test_run_untouched_oos_does_not_block_on_an_unrelated_dataset(db):
         config=_config(), now_utc=2_000_000_000,
     )
     assert result.canonical_symbol == CANONICAL_SYMBOL
+
+
+# --------------------------------------------------------------------------
+# atomic check-and-reserve (BUG_BACKLOG #11)
+# --------------------------------------------------------------------------
+
+def test_an_oos_run_records_exactly_one_usage_row_for_its_own_dataset(db):
+    bars = _trending_bars(200)
+    result = run_untouched_oos(bars, "XAUUSD", "M5", _symbol_spec(), conn=db, run_id="oos-a", config=_config())
+    rows = db.execute("SELECT dataset_id, used_for FROM dataset_usage WHERE used_by_run_id = 'oos-a'").fetchall()
+    assert [(r["dataset_id"], r["used_for"]) for r in rows] == [(result.dataset_id, "OOS")]
+    run = db.execute("SELECT dataset_id FROM backtest_runs WHERE run_id = 'oos-a'").fetchone()
+    assert run["dataset_id"] == result.dataset_id
+
+
+def test_the_range_is_reserved_before_the_backtest_runs(db, monkeypatch):
+    import adaptive_scalper.backtest.oos as oos_module
+
+    def crash(*_a, **_k):
+        raise RuntimeError("process died mid-backtest")
+
+    monkeypatch.setattr(oos_module, "run_backtest", crash)
+    bars = _trending_bars(200)
+    with pytest.raises(RuntimeError):
+        run_untouched_oos(bars, "XAUUSD", "M5", _symbol_spec(), conn=db, run_id="oos-crash", config=_config())
+    monkeypatch.undo()
+    # the crashed run already looked at nothing, but the range is spent: never a second "first" OOS
+    with pytest.raises(DatasetContaminatedError):
+        run_untouched_oos(bars, "XAUUSD", "M5", _symbol_spec(), conn=db, run_id="oos-retry", config=_config())
+
+
+def test_a_refused_run_reserves_nothing(db):
+    bars = _trending_bars(200)
+    snapshot = build_dataset_snapshot(bars, canonical_symbol="XAUUSD", resolution="M5", strategies=("x",),
+                                      feature_schema_version=1, origin=EvidenceOrigin.BACKTEST, now_utc=1)
+    record_dataset(db, snapshot)
+    record_dataset_usage(db, snapshot.dataset_id, "design", "TRAINING", now_utc=1)
+    before = db.execute("SELECT COUNT(*) FROM dataset_usage").fetchone()[0]
+    with pytest.raises(DatasetContaminatedError):
+        run_untouched_oos(bars, "XAUUSD", "M5", _symbol_spec(), conn=db, run_id="oos-b", config=_config())
+    assert db.execute("SELECT COUNT(*) FROM dataset_usage").fetchone()[0] == before
+    assert not db.in_transaction
+
+
+def test_two_connections_cannot_both_claim_the_same_range(tmp_path):
+    import threading
+
+    path = tmp_path / "race.sqlite3"
+    setup = connect(path)
+    migrate(setup)
+    setup.close()
+    bars = _trending_bars(200)
+    outcomes: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def worker(name: str) -> None:
+        conn = connect(path)
+        conn.execute("PRAGMA busy_timeout = 10000")
+        barrier.wait()
+        try:
+            run_untouched_oos(bars, "XAUUSD", "M5", _symbol_spec(), conn=conn, run_id=name, config=_config())
+            outcomes.append("ran")
+        except DatasetContaminatedError:
+            outcomes.append("refused")
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=worker, args=(f"oos-{i}",)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(outcomes) == ["ran", "refused"]

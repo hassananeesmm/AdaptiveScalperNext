@@ -64,17 +64,6 @@ delete) once fixed, with the fixing commit/date noted.
    `order_check_probes` (LOCAL_MT5_HANDOFF.md steps L-M). Still
    BLOCKED-ON-LOCAL-MT5 until the laptop records the real retcode here.
 
-7. [SEVERITY: LOW, SUBSYSTEM: execution] `execution/reconciliation
-   .run_reconciliation()`'s `BrokerPositionSnapshot` construction passes
-   the broker's raw `symbol` string (e.g. `"XAUUSDm"`) directly as
-   `canonical_symbol`, without translating it through the broker-name
-   resolver (`gateway/symbol_resolver.py`). Works today only because
-   `reconcile_positions()` never actually compares `canonical_symbol`
-   values against each other — it keys entirely on `broker_position_id`
-   — but this is fragile if that function's contract ever changes. Needs
-   a real translation step once reconciliation is wired into the runtime
-   loop.
-
 4. [SEVERITY: LOW, SUBSYSTEM: history] Tick history storage
    (`adaptive_scalper/history/store.py`) dedupes on
    `(canonical_symbol, time_msc)`. A future MT5 build/broker whose tick feed
@@ -98,21 +87,6 @@ delete) once fixed, with the fixing commit/date noted.
    semantic instead); flag for a real design once/if a netting-mode
    account is ever connected.
 
-11. [SEVERITY: LOW, SUBSYSTEM: backtest] `backtest/oos.run_untouched_oos()`
-   checks the usage ledger, runs, THEN records its own usage, in
-   separate transactions. Two concurrent OOS runs over overlapping
-   ranges could both pass the check. Single-process research use only
-   today; wrap check+record in one `BEGIN IMMEDIATE` if OOS runs ever
-   become concurrent.
-
-13. [SEVERITY: LOW, SUBSYSTEM: backtest] `holding_seconds` in the
-   backtest/PAPER review is `bar.time - entry_time_utc` (bar OPEN times),
-   so a review at a bar's close under-counts the real holding time by
-   one bar. With `max_holding_seconds=600` on M5 that is a one-bar-late
-   max-holding exit. Needs the resolution's bar duration to fix
-   honestly; deliberately not changed in the 2026-09-24 correctness
-   checkpoint to keep that change reviewable.
-
 14. [SEVERITY: HIGH until verified, SUBSYSTEM: gateway/runtime] BLOCKED-ON-
    LOCAL-MT5. `Mt5Gateway` passes MT5 bar/tick timestamps through
    unconverted. Many brokers stamp them in SERVER time (e.g. UTC+2/+3),
@@ -131,11 +105,6 @@ delete) once fixed, with the fixing commit/date noted.
    runtime simulation with saturated 1.0 confidences). Conservative by
    design; revisit only with evidence (directive section 27 lists fresh
    setup fingerprints / regime transitions as alternatives).
-
-16. [SEVERITY: LOW, SUBSYSTEM: journal] `position_management.manager`
-   journals `POSITION_REVIEWED` on every review; at the runtime's ~1s
-   cadence that is ~3600 immutable rows per open position per hour.
-   Correct but heavy; consider journaling only action/state changes.
 
 17. [SEVERITY: LOW, SUBSYSTEM: release] `pip-audit` in the cloud audits
    every pinned requirement except `MetaTrader5` (Windows-only wheel, not
@@ -159,6 +128,31 @@ delete) once fixed, with the fixing commit/date noted.
    the one-time manual checks.
 
 ## Fixed
+
+- ~~#7 [LOW, execution] reconciliation passed the broker's raw symbol as
+  `canonical_symbol`.~~ Fixed 2026-09-24 (Checkpoint I): translated through
+  the persisted `symbol_mapping` (`broker_to_canonical_map`); an unmapped
+  instrument is labelled `UNMAPPED:<name>`, never passed off as canonical;
+  a proven symbol mismatch is a blocking finding.
+  `tests/test_execution_reconciliation.py`.
+- ~~#11 [LOW, backtest] OOS check and record were separate transactions.~~
+  Fixed 2026-09-24 (Checkpoint I): overlap check + usage reservation are one
+  `BEGIN IMMEDIATE` transaction before the backtest runs (a crashed run still
+  spends its range). Two-connection race test + crash test, both verified to
+  fail on the old code. `tests/test_backtest_oos.py`.
+- ~~#13 [LOW, backtest] holding time measured to the review bar's open (max-
+  holding exits one bar late).~~ Fixed 2026-09-24 (Checkpoint I): measured to
+  the bar close; `EXIT_REVIEW_TIMING_VERSION = 2` in the PAPER session
+  fingerprint so an old session halts instead of mixing timings. Three
+  resume tests' split points moved (the fixture's trade cycle changed from 5
+  to 3 bars; assertions unchanged, resumed==continuous re-verified at every
+  boundary 60-214). `tests/test_simulation_phase0.py` (verified to fail on
+  the old code).
+- ~~#16 [LOW, journal] `POSITION_REVIEWED` on every ~1 s review.~~ Fixed
+  2026-09-24 (Checkpoint I): an unchanged HOLD is journaled at most every
+  60 s; first reviews, actions, quarantine and action/regime changes always
+  are; `position_management_state` still records every review.
+  `tests/test_position_management_manager.py`.
 
 - ~~[SEVERITY: MEDIUM, SUBSYSTEM: dashboard] The `dashboard` command
   initialized its own MT5 connection (a second terminal client beside the

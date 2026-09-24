@@ -78,7 +78,7 @@ Opening the database migrates it to schema 26. `doctor` prints `schema=26`.
 %PY% -m pytest -q
 ```
 
-In the cloud the result was 1440 passed, with the 7 live-MT5 tests skipped. With the
+In the cloud the result was 1451 passed, with the 7 live-MT5 tests skipped. With the
 terminal running on the laptop, those 7 run too; see step G.
 
 ## G. Run the Windows-specific tests
@@ -372,7 +372,7 @@ Each one is BLOCKED-ON-LOCAL-MT5 or needs Windows:
 | Running the `.bat` launchers and `.ps1` scripts (verified statically in the cloud) | steps G and Y |
 | Real `order_check` success-retcode convention (BUG_BACKLOG #5) | steps L and M |
 | Broker timestamp convention: server time vs UTC (BUG_BACKLOG #14) | steps J and P: compare the tick time with UTC |
-| Reconciliation broker-symbol translation (BUG_BACKLOG #7) | step X |
+| Reconciliation broker-symbol translation on a real account (logic fixed and tested, BUG_BACKLOG #7) | step X |
 | Real historical data, backtests and OOS | step O |
 | PAPER on live data, restart continuity, burn-in | steps P–R |
 | DEMO execution-cost evidence | steps S and X |

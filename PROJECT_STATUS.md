@@ -1355,6 +1355,14 @@ and `orders_get()` both correctly return empty lists (0 open positions,
 0 pending orders) through the real gateway, matching direct
 `MetaTrader5` module calls.
 
+## Backlog fixes (Checkpoint I, 2026-09-24)
+
+BUG_BACKLOG #7 (reconciliation symbol translation), #11 (atomic OOS
+check-and-reserve), #13 (holding time to bar close; exit-timing version in
+the PAPER fingerprint) and #16 (HOLD review journaling heartbeat) fixed and
+tested in the cloud. Remaining open items are Windows/MT5-local or
+design-level (see BUG_BACKLOG.md).
+
 ## Current next task
 
 Cloud work is complete; the next tasks are the user's, on the laptop:

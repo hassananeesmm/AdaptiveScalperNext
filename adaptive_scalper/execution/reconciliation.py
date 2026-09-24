@@ -125,6 +125,24 @@ class ReconciliationFinding:
     detail: str
 
 
+UNMAPPED_PREFIX = "UNMAPPED:"
+
+
+def broker_to_canonical_map(conn: sqlite3.Connection) -> dict[str, str]:
+    """Reverse of the persisted symbol resolution (`symbol_mapping`,
+    resolved rows only): broker name -> canonical symbol. BUG_BACKLOG #7."""
+    rows = conn.execute("SELECT canonical, broker_symbol FROM symbol_mapping WHERE resolved = 1 "
+                        "AND broker_symbol IS NOT NULL").fetchall()
+    return {r["broker_symbol"]: r["canonical"] for r in rows}
+
+
+def canonical_for_broker_symbol(mapping: dict[str, str], broker_symbol: str) -> str:
+    """A broker symbol with no resolved mapping (e.g. a manual trade on an
+    instrument this system never trades) is labelled explicitly, never
+    passed off as a canonical symbol."""
+    return mapping.get(broker_symbol, f"{UNMAPPED_PREFIX}{broker_symbol}")
+
+
 def get_open_positions(conn: sqlite3.Connection) -> list[LocalPositionRecord]:
     rows = conn.execute("SELECT * FROM positions WHERE status = 'OPEN'").fetchall()
     return [
@@ -180,6 +198,12 @@ def reconcile_positions(
             findings.append(ReconciliationFinding(
                 RECONCILIATION_MISMATCH, pid,
                 f"direction mismatch: local={lp.direction} broker={bp.direction} — "
+                f"should never happen under normal operation, investigate immediately",
+            ))
+        if not bp.canonical_symbol.startswith(UNMAPPED_PREFIX) and lp.canonical_symbol != bp.canonical_symbol:
+            findings.append(ReconciliationFinding(
+                RECONCILIATION_MISMATCH, pid,
+                f"symbol mismatch: local={lp.canonical_symbol} broker={bp.canonical_symbol} — "
                 f"should never happen under normal operation, investigate immediately",
             ))
 
@@ -575,8 +599,11 @@ def run_reconciliation(
     now = now_utc if now_utc is not None else int(time.time())
 
     broker_raw = gateway.positions_get()
+    symbol_map = broker_to_canonical_map(conn)
     broker_positions = [
-        BrokerPositionSnapshot(p.broker_position_id, p.symbol, p.direction, p.volume) for p in broker_raw
+        BrokerPositionSnapshot(p.broker_position_id, canonical_for_broker_symbol(symbol_map, p.symbol), p.direction,
+                               p.volume)
+        for p in broker_raw
     ]
     local_positions = {p.broker_position_id: p for p in get_open_positions(conn)}
     findings = reconcile_positions(list(local_positions.values()), broker_positions)

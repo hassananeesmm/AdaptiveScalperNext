@@ -588,3 +588,35 @@ def test_run_reconciliation_is_idempotent_across_repeated_calls(db):
     events = get_chain_events(db, "recon-4")
     assert len(events) == 2
     assert all(e.event_type == "RECONCILIATION_ACTION" for e in events)
+
+
+# --------------------------------------------------------------------------
+# broker -> canonical symbol translation (BUG_BACKLOG #7)
+# --------------------------------------------------------------------------
+
+def test_broker_symbols_are_translated_through_the_persisted_mapping(tmp_path):
+    from adaptive_scalper.execution.reconciliation import broker_to_canonical_map, canonical_for_broker_symbol
+    from adaptive_scalper.gateway.symbol_resolver import ResolutionResult, persist_resolution
+    from adaptive_scalper.persistence import connect, migrate
+
+    conn = connect(tmp_path / "map.sqlite3")
+    migrate(conn)
+    persist_resolution(conn, ResolutionResult("XAUUSD", "XAUUSDm", True, "exact"))
+    persist_resolution(conn, ResolutionResult("BTCUSD", None, False, "not offered"))
+    mapping = broker_to_canonical_map(conn)
+    assert mapping == {"XAUUSDm": "XAUUSD"}
+    assert canonical_for_broker_symbol(mapping, "XAUUSDm") == "XAUUSD"
+    assert canonical_for_broker_symbol(mapping, "EURUSD") == "UNMAPPED:EURUSD"  # never passed off as canonical
+
+
+def test_a_proven_symbol_mismatch_is_a_blocking_finding():
+    findings = reconcile_positions([_local(canonical_symbol="XAUUSD")], [_broker(canonical_symbol="GBPJPY")])
+    assert [f.finding_type for f in findings] == [RECONCILIATION_MISMATCH]
+    assert "symbol mismatch" in findings[0].detail
+
+
+def test_an_unmapped_broker_symbol_is_labelled_not_flagged_as_a_mismatch():
+    findings = reconcile_positions([_local()], [_broker(canonical_symbol="UNMAPPED:XAUUSDm")])
+    assert findings == []
+    orphan = reconcile_positions([], [_broker(canonical_symbol="UNMAPPED:EURUSD")])
+    assert "UNMAPPED:EURUSD" in orphan[0].detail

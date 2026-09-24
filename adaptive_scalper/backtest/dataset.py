@@ -88,9 +88,10 @@ def build_dataset_snapshot(
     )
 
 
-def record_dataset(conn: sqlite3.Connection, snapshot: DatasetSnapshot) -> None:
+def record_dataset(conn: sqlite3.Connection, snapshot: DatasetSnapshot, *, commit: bool = True) -> None:
     """Idempotent on `dataset_id` (content-derived, so a repeat call for
-    the identical bar range/content is a safe no-op)."""
+    the identical bar range/content is a safe no-op). `commit=False` lets
+    a caller include it in its own transaction."""
     import json
 
     existing = conn.execute("SELECT id FROM datasets WHERE dataset_id = ?", (snapshot.dataset_id,)).fetchone()
@@ -120,18 +121,21 @@ def record_dataset(conn: sqlite3.Connection, snapshot: DatasetSnapshot) -> None:
             snapshot.checksum,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def record_dataset_usage(
     conn: sqlite3.Connection, dataset_id: str, used_by_run_id: str, used_for: str, *, now_utc: int | None = None,
+    commit: bool = True,
 ) -> None:
     now = now_utc if now_utc is not None else int(time.time())
     conn.execute(
         "INSERT INTO dataset_usage (dataset_id, used_by_run_id, used_for, used_at_utc) VALUES (?, ?, ?, ?)",
         (dataset_id, used_by_run_id, used_for, now),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def has_dataset_been_used_as(conn: sqlite3.Connection, dataset_id: str, used_for: str) -> bool:

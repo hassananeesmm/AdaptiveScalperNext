@@ -403,3 +403,38 @@ def test_the_usage_ledger_accepts_the_new_research_purposes(db):
         _used(db, _B[:50], purpose)
     with pytest.raises(sqlite3.IntegrityError):
         _used(db, _B[:50], "SOMETHING_ELSE")
+
+
+# ---------------------------------------------------------------------------
+# holding time is measured to the review bar's CLOSE (BUG_BACKLOG #13)
+# ---------------------------------------------------------------------------
+
+def test_max_holding_exit_is_decided_at_the_bar_close_where_holding_reaches_the_limit(monkeypatch):
+    from dataclasses import replace as dc_replace
+
+    from sim_helpers import QUIET_EXIT
+
+    install(monkeypatch, {t(FIRE): "BUY"})
+    exits = dc_replace(QUIET_EXIT, max_holding_enabled=True, max_holding_seconds=2 * STEP)
+    result = _run(bars(), config(adaptive_exit_params=exits))
+    (trade,) = result.trades
+    # signal at bar 30's close -> fill at bar 31's open (t(31)). Held 2 bars
+    # at bar 32's CLOSE -> decided there (recorded under bar 32's timestamp),
+    # filled at bar 33's open. Measuring to the bar OPEN decided one bar late.
+    assert trade.entry_time_utc == t(FIRE + 1)
+    assert trade.exit_decision_time_utc == t(FIRE + 2)
+    assert trade.exit_time_utc == t(FIRE + 3)
+    assert "max holding" in trade.exit_reason
+
+
+def test_the_exit_review_timing_version_is_part_of_the_session_fingerprint():
+    import adaptive_scalper.backtest.fingerprint as fp
+
+    before, _ = fp.compute_config_fingerprint(config(), canonical_symbol=SYMBOL, resolutions=(RES,), strategies=())
+    original = fp.EXIT_REVIEW_TIMING_VERSION
+    try:
+        fp.EXIT_REVIEW_TIMING_VERSION = original - 1
+        older, _ = fp.compute_config_fingerprint(config(), canonical_symbol=SYMBOL, resolutions=(RES,), strategies=())
+    finally:
+        fp.EXIT_REVIEW_TIMING_VERSION = original
+    assert before != older  # a PAPER session from the old timing cannot silently resume

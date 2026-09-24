@@ -134,10 +134,39 @@ def _reconciliation_chain_key(position_id: int) -> str:
     return f"position-manager:{position_id}"
 
 
+# An unchanged HOLD review is journaled at most this often (BUG_BACKLOG
+# #16: every ~1 s review used to add an immutable row -- ~3600/position/
+# hour). Every review still updates `position_management_state`
+# (`last_review_at_utc`, peak R); every action, quarantine, first review
+# and change of action or regime is always journaled.
+REVIEW_JOURNAL_HEARTBEAT_SECONDS = 60
+
+
+def _should_journal_review(conn, inp: PositionReviewInput, now: int, action: str, quarantined: bool) -> bool:
+    if action != HOLD or quarantined:
+        return True
+    row = conn.execute(
+        "SELECT je.event_timestamp_utc, je.payload_json FROM journal_events je "
+        "JOIN decision_chains dc ON dc.id = je.chain_id "
+        "WHERE dc.chain_key = ? AND je.event_type = 'POSITION_REVIEWED' ORDER BY je.id DESC LIMIT 1",
+        (_review_chain_key(inp.position_id),),
+    ).fetchone()
+    if row is None:
+        return True
+    import json
+
+    last = json.loads(row["payload_json"])
+    if last.get("selected_action") != HOLD or last.get("quarantined") or last.get("current_regime") != inp.current_regime:
+        return True
+    return now - row["event_timestamp_utc"] >= REVIEW_JOURNAL_HEARTBEAT_SECONDS
+
+
 def _journal_position_reviewed(
     conn, inp: PositionReviewInput, now: int, *,
     current_r: float | None, peak_r: float, action: str, reasons: tuple[str, ...], quarantined: bool,
 ) -> None:
+    if not _should_journal_review(conn, inp, now, action, quarantined):
+        return
     append_event(
         conn, _review_chain_key(inp.position_id), "POSITION_REVIEWED", now, inp.canonical_symbol,
         {

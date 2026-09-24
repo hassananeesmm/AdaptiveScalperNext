@@ -20,7 +20,12 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from adaptive_scalper.backtest.dataset import build_dataset_snapshot, find_overlapping_usage
+from adaptive_scalper.backtest.dataset import (
+    build_dataset_snapshot,
+    find_overlapping_usage,
+    record_dataset,
+    record_dataset_usage,
+)
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.persistence import record_backtest_run
 from adaptive_scalper.backtest.types import BacktestConfig, BacktestResult
@@ -68,32 +73,44 @@ def run_untouched_oos(
             conn, canonical_symbol, snapshot.range_start_utc, snapshot.range_end_utc, used_for,
         )
 
-    for used_for in _CONTAMINATING_USES:
-        hits = overlapping(used_for)
-        if hits:
-            first = hits[0]
-            raise DatasetContaminatedError(
-                f"requested OOS range {snapshot.range_start_utc}..{snapshot.range_end_utc} overlaps dataset "
-                f"{first['dataset_id']!r} ({first['resolution']}, origin={first['origin']}, "
-                f"{first['range_start_utc']}..{first['range_end_utc']}) already used for {used_for} by run "
-                f"{first['used_by_run_id']!r} -- "
-                "it can no longer serve as untouched OOS evidence"
-            )
-    if not allow_oos_reuse:
-        # An analysis-only reuse run has LOOKED at the range too, so it
-        # spends it exactly like an OOS run would.
-        hits = overlapping("OOS") + overlapping("OOS_ANALYSIS_REUSE")
-        if hits:
-            raise DatasetContaminatedError(
-                f"requested OOS range overlaps dataset {hits[0]['dataset_id']!r}, which was already run as OOS "
-                "once before -- repeated OOS runs over the same holdout defeat its purpose "
-                "(pass allow_oos_reuse=True only if this is a deliberate, documented exception)"
-            )
+    # Check-and-reserve is ONE write transaction (BUG_BACKLOG #11): two
+    # concurrent OOS runs over overlapping ranges can never both pass. The
+    # reservation happens BEFORE the backtest runs, so a run that crashes
+    # midway still spends its range -- the conservative outcome.
+    used_for_label = "OOS_ANALYSIS_REUSE" if allow_oos_reuse else "OOS"
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for used_for in _CONTAMINATING_USES:
+            hits = overlapping(used_for)
+            if hits:
+                first = hits[0]
+                raise DatasetContaminatedError(
+                    f"requested OOS range {snapshot.range_start_utc}..{snapshot.range_end_utc} overlaps dataset "
+                    f"{first['dataset_id']!r} ({first['resolution']}, origin={first['origin']}, "
+                    f"{first['range_start_utc']}..{first['range_end_utc']}) already used for {used_for} by run "
+                    f"{first['used_by_run_id']!r} -- "
+                    "it can no longer serve as untouched OOS evidence"
+                )
+        if not allow_oos_reuse:
+            # An analysis-only reuse run has LOOKED at the range too, so it
+            # spends it exactly like an OOS run would.
+            hits = overlapping("OOS") + overlapping("OOS_ANALYSIS_REUSE")
+            if hits:
+                raise DatasetContaminatedError(
+                    f"requested OOS range overlaps dataset {hits[0]['dataset_id']!r}, which was already run as OOS "
+                    "once before -- repeated OOS runs over the same holdout defeat its purpose "
+                    "(pass allow_oos_reuse=True only if this is a deliberate, documented exception)"
+                )
+        record_dataset(conn, snapshot, commit=False)
+        record_dataset_usage(conn, snapshot.dataset_id, run_id, used_for_label, now_utc=now, commit=False)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
     result = run_backtest(bars, canonical_symbol, resolution, symbol_spec, config=config, now_utc=now)
     record_backtest_run(
-        conn, result, bars, run_id=run_id, run_type="OOS",
-        used_for="OOS_ANALYSIS_REUSE" if allow_oos_reuse else "OOS",
-        strategies=strategies, feature_schema_version=1, now_utc=now,
+        conn, result, bars, run_id=run_id, run_type="OOS", used_for=used_for_label,
+        strategies=strategies, feature_schema_version=1, now_utc=now, record_usage=False,
     )
     return result

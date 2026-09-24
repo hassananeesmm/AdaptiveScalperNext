@@ -9,7 +9,7 @@
 | Check | Command | Result |
 |---|---|---|
 | Byte-compile | `python -m compileall -q adaptive_scalper tests` | OK |
-| Full test suite | `python -m pytest -q -rs` | **1440 passed, 7 skipped, 0 failed** |
+| Full test suite | `python -m pytest -q -rs` | **1451 passed, 7 skipped, 0 failed** |
 | Skipped tests | `tests/test_mt5_gateway_live.py` (7) | need the laptop's live MT5 terminal: BLOCKED-ON-LOCAL-MT5 |
 | Lint (pyflakes + syntax) | `ruff check adaptive_scalper tests --select F,E9` (ruff 0.16.8) | all checks passed (20 older findings fixed) |
 | Security: Bandit 1.9.4 | `bandit -r adaptive_scalper` | 0 high, 6 medium, 3 low; all triaged as false positives (below) |
@@ -60,5 +60,5 @@ Each is enforced by an AST or source audit:
 
 ## Not verified in the cloud
 
-See `LOCAL_MT5_HANDOFF.md` → "Items the cloud could not verify", and BUG_BACKLOG items 5, 7,
-14, 17, 18 and 20.
+See `LOCAL_MT5_HANDOFF.md` → "Items the cloud could not verify", and BUG_BACKLOG items 5, 14, 17, 18
+and 20.

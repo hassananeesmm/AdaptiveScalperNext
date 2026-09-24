@@ -441,3 +441,45 @@ def test_full_close_aggregates_multiple_closing_deals(db):
     # total_profit=12.0+8.0=20.0; total_commission=-0.3-0.2=-0.5; realized_net=19.5; fill_r=19.5/20.0
     assert state.fill_r == pytest.approx(19.5 / 20.0)
     assert state.broker_response_at_utc == 1010  # the LATEST deal's time
+
+
+# --------------------------------------------------------------------------
+# review journaling volume (BUG_BACKLOG #16)
+# --------------------------------------------------------------------------
+
+def _reviewed(db, position_id):
+    return [e for e in get_chain_events(db, _review_chain_key(position_id)) if e.event_type == "POSITION_REVIEWED"]
+
+
+def test_an_unchanged_hold_is_journaled_at_most_once_per_heartbeat(db):
+    from adaptive_scalper.position_management.manager import REVIEW_JOURNAL_HEARTBEAT_SECONDS
+    from adaptive_scalper.position_management.state_store import get_state as get_pm_state
+
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+    for now in range(1010, 1010 + 30):  # one review per second
+        review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=now,
+                             clock=lambda: float(now))
+    assert len(_reviewed(db, position_id)) == 1
+    assert get_pm_state(db, position_id).last_review_at_utc == 1039  # every review still recorded in state
+    later = 1010 + REVIEW_JOURNAL_HEARTBEAT_SECONDS
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=later,
+                         clock=lambda: float(later))
+    assert len(_reviewed(db, position_id)) == 2  # heartbeat
+
+
+def test_a_regime_change_or_an_action_is_always_journaled(db):
+    gw = _demo_gateway()
+    ticket = _open_position(gw)
+    position_id = _insert_local_position(db, ticket)
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=1010,
+                         clock=lambda: 1010.0)
+    changed = _base_input(position_id, ticket, unrealized_pnl=2.0)
+    changed = type(changed)(**{**changed.__dict__, "current_regime": "RANGE"})
+    review_position_once(db, gw, changed, now_utc=1011, clock=lambda: 1011.0)
+    assert len(_reviewed(db, position_id)) == 2
+    review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=8.0), now_utc=1012,
+                         clock=lambda: 1012.0)  # breakeven stop move: an action
+    reviewed = _reviewed(db, position_id)
+    assert len(reviewed) == 3 and reviewed[-1].payload["selected_action"] != "HOLD"

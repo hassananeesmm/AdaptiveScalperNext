@@ -183,7 +183,10 @@ def test_run_backtest_captures_entry_features_for_ml_training():
 
 
 def test_run_backtest_force_close_false_leaves_a_still_open_trade_unclosed():
-    bars = _trending_bars(200)
+    # 201 bars: the range must END while a trade is open (entries recur every
+    # 3 bars on this trend, so 200 bars ends on a pending entry instead since
+    # max-holding exits moved to the correct bar-close time, BUG_BACKLOG #13).
+    bars = _trending_bars(201)
     result = run_backtest(
         bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
         force_close_at_range_end=False,
@@ -205,15 +208,15 @@ def test_run_backtest_resume_open_position_continues_the_same_trade_into_a_later
     # A resuming (PAPER-style) caller passes a window of [feature_lookback
     # bars of trailing CONTEXT] + [only the genuinely NEW bars] -- never
     # the full history again, which would re-decide already-processed bars.
-    bars = _trending_bars(220)
+    bars = _trending_bars(220)  # split at 201: the first window must end with a trade OPEN
     lookback = _config().feature_lookback
     first = run_backtest(
-        bars[:200], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        bars[:201], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
         force_close_at_range_end=False,
     )
     assert first.open_position is not None
 
-    resume_window = bars[200 - lookback - 1:220]
+    resume_window = bars[201 - lookback - 1:220]
     second = run_backtest(
         resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
         resume_open_position=first.open_position, force_close_at_range_end=False,
@@ -226,13 +229,13 @@ def test_run_backtest_resume_open_position_continues_the_same_trade_into_a_later
 
 
 def test_run_backtest_resume_open_position_never_reopens_a_new_entry_before_managing_the_resumed_one():
-    bars = _trending_bars(220)
+    bars = _trending_bars(220)  # split at 201: the first window must end with a trade OPEN
     lookback = _config().feature_lookback
     first = run_backtest(
-        bars[:200], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
+        bars[:201], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
         force_close_at_range_end=False,
     )
-    resume_window = bars[200 - lookback - 1:220]
+    resume_window = bars[201 - lookback - 1:220]
     second = run_backtest(
         resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
         resume_open_position=first.open_position, force_close_at_range_end=False,
@@ -253,13 +256,15 @@ def test_run_backtest_resume_regime_tracker_reproduces_continuous_processing():
     # have decided. Proof: cycling through the SAME range in two chunks
     # WITH resume_regime_tracker must match one continuous call exactly;
     # WITHOUT it, the two are not guaranteed to (and empirically don't).
-    # Boundary 203 is deliberately NOT a multiple of this fixture's
-    # 5-bar trade cycle: at e.g. 200 an unresumed tracker happens to
-    # re-confirm TRENDING_UP before it matters, so the negative half below
-    # would be vacuous there. The positive half holds at every boundary.
+    # Boundary 202 is deliberately chosen against this fixture's 3-bar
+    # trade cycle (it was 5 bars until max-holding exits moved to the
+    # correct bar-close time, BUG_BACKLOG #13): it must end on an OPEN
+    # trade, and at e.g. 201 an unresumed tracker happens to re-confirm
+    # TRENDING_UP before it matters, so the negative half below would be
+    # vacuous there. The positive half holds at every boundary 60-214.
     bars = _trending_bars(220)
     lookback = _config().feature_lookback
-    boundary = 203
+    boundary = 202
     first = run_backtest(
         bars[:boundary], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
         force_close_at_range_end=False,

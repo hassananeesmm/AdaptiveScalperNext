@@ -2064,3 +2064,27 @@ Windows-only); secret scan fixtures only.
 
 Full suite: 1440 passed, 7 skipped (live MT5 only), 0 failed.
 
+## Session: Checkpoint I -- cloud-fixable backlog items (2026-09-24, cloud)
+
+With all directive work that can run in the cloud done, fixed the open
+BUG_BACKLOG items that need no MT5: #7 (reconciliation now translates broker
+symbols through `symbol_mapping`; unmapped ones are labelled
+`UNMAPPED:<name>`), #11 (OOS overlap check + usage reservation in one
+`BEGIN IMMEDIATE` transaction, before the backtest; a two-connection race
+test and a crash test both fail on the old code), #13 (holding time measured
+to the review bar's close -- max-holding exits were one bar late in backtest
+and PAPER; `EXIT_REVIEW_TIMING_VERSION` added to the PAPER fingerprint so an
+old session halts rather than mixing timings; the new regression test fails
+on the old code), #16 (unchanged HOLD reviews journaled at most every 60 s;
+all actions/changes still journaled; state records every review).
+
+#13 changed the synthetic trend fixture's trade cycle from 5 to 3 bars, so
+three backtest-resume tests needed new split points to keep their
+precondition (a trade open at the split). Assertions unchanged; the
+resumed==continuous property was re-verified at every boundary 60-214 and
+the chosen boundary keeps the "without resume it diverges" half meaningful.
+The runtime restart test now asserts `last_review_at_utc` advances (a direct
+proof of continued management) instead of counting journal rows.
+
+Full suite: 1451 passed, 7 skipped (live MT5 only), 0 failed.
+

@@ -423,7 +423,8 @@ def run_backtest(
                 )
                 open_trade = None
             else:
-                _review_open_trade(open_trade, bar, features, confirmed_regime, active_strategies, symbol_spec, config)
+                _review_open_trade(open_trade, bar, features, confirmed_regime, active_strategies, symbol_spec, config,
+                                   bar_seconds=resolution_seconds(resolution))
 
         # 4. Scan for a new entry only when flat, outside any supplied
         # news-block window, and while no daily-loss/drawdown ceiling is
@@ -597,10 +598,13 @@ def _revalidate_and_open(
 
 def _review_open_trade(
     open_trade: _OpenTrade, bar: Bar, features, confirmed_regime: str, active_strategies,
-    symbol_spec: SymbolSpec, config: BacktestConfig,
+    symbol_spec: SymbolSpec, config: BacktestConfig, *, bar_seconds: int,
 ) -> None:
     """Bar-close review: updates peak_r/stop in place, or sets a
-    `pending_exit_reason` that fills at the next bar's open."""
+    `pending_exit_reason` that fills at the next bar's open. The review
+    happens at the bar's CLOSE (`bar.time + bar_seconds`), so that is the
+    holding time's end (BUG_BACKLOG #13: measuring to the bar's open made
+    max-holding exits one bar late)."""
     mark = _mark_price(open_trade, bar, symbol_spec.point)
     unrealized_pnl = money_from_price_distance(
         (mark - open_trade.entry_price) if open_trade.direction == "BUY" else (open_trade.entry_price - mark),
@@ -614,7 +618,7 @@ def _review_open_trade(
         open_trade.peak_r = current_r
         open_trade.peak_r_time_utc = bar.time
 
-    holding_seconds = bar.time - open_trade.entry_time_utc
+    holding_seconds = bar.time + bar_seconds - open_trade.entry_time_utc
     setup_signal = _reevaluate_setup(active_strategies, open_trade, features, confirmed_regime)
     cost = _estimate_cost(bar, symbol_spec, config)
     current_net_edge = (

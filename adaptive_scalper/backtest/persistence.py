@@ -49,8 +49,12 @@ def record_backtest_run(
     strategies: tuple[str, ...],
     feature_schema_version: int,
     now_utc: int | None = None,
+    record_usage: bool = True,
 ) -> None:
-    """Idempotent on `run_id`: a repeat call for the SAME run_id is a
+    """`record_usage=False` when the caller already reserved the dataset
+    usage itself (untouched OOS does, atomically with its overlap check).
+
+    Idempotent on `run_id`: a repeat call for the SAME run_id is a
     no-op, never a duplicate row or a silently-overwritten one -- a
     caller re-running the same fold after a crash gets back the original
     recorded result, not a second, possibly-different one.
@@ -67,7 +71,8 @@ def record_backtest_run(
         origin=result.origin, now_utc=now,
     )
     record_dataset(conn, snapshot)
-    record_dataset_usage(conn, snapshot.dataset_id, run_id, used_for, now_utc=now)
+    if record_usage:
+        record_dataset_usage(conn, snapshot.dataset_id, run_id, used_for, now_utc=now)
 
     m = result.metrics
     conn.execute(
