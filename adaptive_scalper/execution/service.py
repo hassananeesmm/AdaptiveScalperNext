@@ -324,9 +324,14 @@ def submit_new_entry(
         magic=magic, comment=embed_request_token(client_request_id, comment), filling_type=filling_type,
     )
 
-    check = gateway.order_check(request)
-    if check.retcode not in order_check_success_retcodes:
-        detail = f"order_check failed: retcode={check.retcode} comment={check.comment!r}"
+    try:
+        check = gateway.order_check(request)
+    except Exception as exc:  # transport failure BEFORE anything was sent: blocked, never retried blindly
+        check = None
+        detail = f"order_check raised {type(exc).__name__}: {exc} -- nothing was sent"
+    if check is None or check.retcode not in order_check_success_retcodes:
+        if check is not None:
+            detail = f"order_check failed: retcode={check.retcode} comment={check.comment!r}"
         append_event(
             conn, chain_key, "ENTRY_BLOCKED", now, canonical_symbol,
             {"decision": BLOCK_BROKER_CONSTRAINT, "reason": detail}, strategy_key=None,
@@ -383,7 +388,13 @@ def submit_new_entry(
         )
         return SubmissionOutcome(BLOCKED_BROKER_CONSTRAINT, order, detail)
 
-    recheck = gateway.order_check(request)
+    try:
+        recheck = gateway.order_check(request)
+    except Exception as exc:
+        return SubmissionOutcome(
+            BLOCKED_BROKER_CONSTRAINT, order,
+            f"pre-send order_check recheck raised {type(exc).__name__}: {exc} -- nothing was sent",
+        )
     if recheck.retcode not in order_check_success_retcodes:
         detail = f"pre-send order_check recheck failed: retcode={recheck.retcode} comment={recheck.comment!r}"
         return SubmissionOutcome(BLOCKED_BROKER_CONSTRAINT, order, detail)
@@ -402,7 +413,22 @@ def submit_new_entry(
     order = transition_order_state(conn, order.id, OrderState.SUBMITTED, detail="order_check passed", now_utc=now)
     append_event(conn, chain_key, "ORDER_SUBMITTED", now, canonical_symbol, {"request": "DEAL"}, strategy_key=None)
 
-    result = gateway.order_send(request)
+    try:
+        result = gateway.order_send(request)
+    except Exception as exc:
+        # The request may or may not have reached the broker. That is
+        # exactly directive section 30's UNKNOWN: never resent, new
+        # exposure blocked (UNKNOWN_OUTCOME incident) until broker truth
+        # resolves it (execution.recovery.apply_unknown_resolutions).
+        detail = f"order_send raised {type(exc).__name__}: {exc} -- outcome unknown, never resent"
+        order = transition_order_state(conn, order.id, OrderState.UNKNOWN, detail=detail, now_utc=now)
+        append_event(
+            conn, chain_key, "ORDER_UNKNOWN", now, canonical_symbol,
+            {"detail": detail, "context": "order_send raised"}, strategy_key=None,
+        )
+        from adaptive_scalper.execution.reconciliation import record_incident
+        record_incident(conn, "UNKNOWN_OUTCOME", detail, order_id=order.id, now_utc=now)
+        return SubmissionOutcome(UNKNOWN, order, detail)
     interpretation = interpret_retcode(result.retcode)
 
     if interpretation.is_definitive_rejection:

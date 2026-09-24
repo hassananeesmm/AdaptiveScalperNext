@@ -274,7 +274,10 @@ def close_position_safely(
         deviation_points=deviation_points, filling_type=round1.filling_type,
     )
 
-    check: OrderCheckResult = gateway.order_check(request)
+    try:
+        check: OrderCheckResult = gateway.order_check(request)
+    except Exception as exc:
+        return CloseOutcome(BROKER_CONSTRAINT, f"order_check raised {type(exc).__name__}: {exc} -- nothing was sent")
     if check.retcode not in order_check_success_retcodes:
         return CloseOutcome(BROKER_CONSTRAINT, f"order_check failed: retcode={check.retcode} comment={check.comment!r}")
 
@@ -295,18 +298,30 @@ def close_position_safely(
     if final_request.filling_type != request.filling_type or final_request.volume != request.volume:
         # The request genuinely changed between rounds -- the SAME exact
         # request that will be sent must itself pass order_check.
-        recheck: OrderCheckResult = gateway.order_check(final_request)
+        try:
+            recheck: OrderCheckResult = gateway.order_check(final_request)
+        except Exception as exc:
+            return CloseOutcome(
+                BROKER_CONSTRAINT, f"order_check of the rebuilt request raised {type(exc).__name__}: {exc} -- nothing was sent",
+            )
         if recheck.retcode not in order_check_success_retcodes:
             return CloseOutcome(
                 BROKER_CONSTRAINT,
                 f"order_check of the rebuilt request failed: retcode={recheck.retcode} comment={recheck.comment!r}",
             )
 
-    result = gateway.order_send(final_request)
-    interpretation = interpret_retcode(result.retcode)
-    outcome = _classify_close_result(interpretation, result, final_request.volume)
+    try:
+        result = gateway.order_send(final_request)
+    except Exception as exc:
+        # May or may not have reached the broker: UNKNOWN, never resent;
+        # broker truth (reconciliation below / next cycle) decides.
+        result = None
+        outcome = CloseOutcome(UNKNOWN, f"order_send raised {type(exc).__name__}: {exc} -- close outcome unknown")
+    else:
+        interpretation = interpret_retcode(result.retcode)
+        outcome = _classify_close_result(interpretation, result, final_request.volume)
 
-    if conn is not None and outcome.status == PARTIAL_CLOSE and result.volume_filled:
+    if conn is not None and result is not None and outcome.status == PARTIAL_CLOSE and result.volume_filled:
         _apply_partial_close_to_local_state(conn, broker_position_id, result.volume_filled)
 
     if conn is not None and reconciliation_chain_key is not None and outcome.status in REAL_EXPOSURE_CHANGE_STATUSES:

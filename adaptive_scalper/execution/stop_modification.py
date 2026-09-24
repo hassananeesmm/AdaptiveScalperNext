@@ -245,7 +245,12 @@ def modify_protective_stop_safely(
         magic=magic, comment=comment,
     )
 
-    check: OrderCheckResult = gateway.order_check(request)
+    try:
+        check: OrderCheckResult = gateway.order_check(request)
+    except Exception as exc:
+        return StopModificationOutcome(
+            BROKER_CONSTRAINT, f"order_check raised {type(exc).__name__}: {exc} -- nothing was sent",
+        )
     if check.retcode not in order_check_success_retcodes:
         return StopModificationOutcome(
             BROKER_CONSTRAINT, f"order_check failed: retcode={check.retcode} comment={check.comment!r}",
@@ -268,14 +273,22 @@ def modify_protective_stop_safely(
         # The request genuinely changed between rounds (broker-side stop
         # movement, a newer TP) — the SAME exact request that will be sent
         # must itself pass order_check; the round-1 check does not cover it.
-        recheck: OrderCheckResult = gateway.order_check(final_request)
+        try:
+            recheck: OrderCheckResult = gateway.order_check(final_request)
+        except Exception as exc:
+            return StopModificationOutcome(
+                BROKER_CONSTRAINT, f"order_check of the rebuilt request raised {type(exc).__name__}: {exc} -- nothing was sent",
+            )
         if recheck.retcode not in order_check_success_retcodes:
             return StopModificationOutcome(
                 BROKER_CONSTRAINT,
                 f"order_check of the rebuilt request failed: retcode={recheck.retcode} comment={recheck.comment!r}",
             )
 
-    result = gateway.order_send(final_request)
+    try:
+        result = gateway.order_send(final_request)
+    except Exception as exc:
+        return StopModificationOutcome(UNKNOWN, f"order_send raised {type(exc).__name__}: {exc} -- stop change unknown")
     interpretation = interpret_retcode(result.retcode)
 
     # External review finding #4 (2026-09-21): only POSITIVE broker proof

@@ -1916,3 +1916,27 @@ New tests: `tests/test_simulation_phase0.py` (35), shared helpers
 `tests/sim_helpers.py`, `chunk=1` added to the incremental-equivalence
 property test. `python -m compileall adaptive_scalper`: OK. Full suite
 (Linux, Python 3.13): 1177 passed, 7 skipped (live MT5 only), 0 failed.
+
+## Session: Checkpoint B -- research validation layer + broker chaos harness (2026-09-24, cloud)
+
+Phase 1: new `adaptive_scalper/research/` (splits: label intervals,
+purge, embargo, purged K-fold, CPCV + paths; stats: PSR, expected max
+Sharpe, DSR, PBO/CSCV; ledger: append-only `research_trials`, migration
+0021). Own implementations from the published definitions instead of the
+`purgedcv` package (no dependency/license to track); verified by 22
+hand-constructed tests and an AST isolation check in both directions.
+
+Phase 2: `tests/chaos_harness.py` (deterministic `ChaosGateway`, fault
+plan per method/call, `SimulatedCrash` as BaseException) and
+`tests/test_broker_chaos.py` (38 scenarios). The harness found two real
+defects, fixed in the same checkpoint:
+1. `order_send` exceptions escaped the entry/close/SLTP services; an
+   entry order stayed SUBMITTED with no incident (new exposure NOT
+   blocked). Now UNKNOWN + incident (entries) / UNKNOWN + reconciliation
+   (closes); `order_check` exceptions block without sending.
+2. No startup quarantine of SUBMITTED/ACCEPTED orders left by a dead
+   process, and no code applied UNKNOWN resolutions. New
+   `execution/recovery.py`.
+Verified the tests bite: with the three exception fixes reverted, 7 fail.
+
+compileall OK; full suite 1237 passed, 7 skipped (live MT5 only), 0 failed.

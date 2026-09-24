@@ -1521,6 +1521,26 @@ NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracke
 
 NOT yet done: no `Gateway` is wired to this at all yet — a future runtime-engine caller (task: "wire full runtime engine") must fetch real bars from the live MT5 terminal via a `SynchronizedGateway` and pass them into `run_paper_cycle()` on a real schedule; no CLI command or dashboard panel surfaces PAPER state yet; PAPER burn-in itself (directive section 132: "Run PAPER burn-in before DEMO") hasn't run.
 
+## Research validation layer (Phase 1, 2026-09-24)
+
+`adaptive_scalper/research/` — IMPLEMENTED, TESTED (cloud, `tests/test_research_validation.py`, 22 tests). Research-only: nothing on the execution-critical path imports it and it imports nothing that reaches a broker, the kill switch or risk sizing (both directions AST-checked).
+
+- `splits.py` — `LabelInterval`, purging (training samples whose label interval overlaps any test sample), embargo (samples starting within `embargo_seconds` after a test block), `purged_kfold()`, `cpcv_splits()` (C(N,k) combinatorial purged CV), `cpcv_path_count()`/`cpcv_paths()`. Time-ordered only; unsorted input is refused.
+- `stats.py` — `probabilistic_sharpe_ratio()`, `expected_max_sharpe()`, `deflated_sharpe_ratio()`, `probability_of_backtest_overfitting()` (CSCV). PBO reports `computable=False` (never 0) with fewer than 2 trials or an odd/too-small group count.
+- `ledger.py` + migration `0021_research_trials` — append-only (triggers) trial ledger; `family_trial_count()` counts FAILED/ABANDONED trials too, and `family_sharpe_variance()` feeds DSR.
+- Implemented from the published definitions rather than via the third-party `purgedcv` package (no new dependency, no license question); every function is checked against a hand-constructed case (e.g. a purge/embargo split worked by hand, E[max of 1000 N(0,1)] against a seeded simulation, PBO = 0 for a dominant config and = 1 for an always-reversing pair).
+- NOT yet wired: no CLI command runs these yet (Phase 8), and the model walk-forward (Phase 6) will be their first real consumer.
+
+## Broker chaos harness and execution recovery (Phase 2, 2026-09-24)
+
+`tests/chaos_harness.py` — `ChaosGateway`, a deterministic `FakeGateway` with a per-method, per-call fault plan (`raise_`, `returns`, `mutate_then_default`, `default_then_raise` = the broker did it but the ack was lost, `default_then_return`) and `SimulatedCrash` (a `BaseException`, so it passes through `except Exception` like a real process death). `tests/test_broker_chaos.py` (38 tests, TESTED cloud): DEMO->REAL, disconnect, terminal/broker permission off, CLOSEONLY/SHORTONLY, identity change, stale/future/missing quote between the two pre-send rounds; `order_check` timeout/bad retcode; `order_send` timeout, lost ack after a real fill (exception and TIMEOUT retcode), UNKNOWN with a broker id resolved later from order history, ambiguous token correlation (duplicate exposure), DONE_PARTIAL, PLACED, duplicate callback; crash between proposal/check, after send, after ack before position resolution, during a close; kill switch blocks entries but never liquidates or blocks a close; close refused on REAL; close/SLTP send timeouts; position vanishing mid-close; partial closing fill; orphan broker position; vanished local position; vanished resting order; DB locked before submission; kill-switch engage under a lock.
+
+Two real defects found and fixed (7 of the tests fail without the fixes):
+
+- An exception from `order_send` escaped `execution/service.py`, `close.py` and `stop_modification.py`, leaving an entry order SUBMITTED with no incident — new exposure was NOT blocked although the broker may have filled it. Now: `order_check` exceptions block (nothing was sent); `order_send` exceptions are UNKNOWN (entry: order -> UNKNOWN + `UNKNOWN_OUTCOME` incident; close: UNKNOWN + immediate reconciliation), never resent.
+- `execution/unknown.py`'s resolvers were never applied, and nothing quarantined orders a dead process left SUBMITTED/ACCEPTED, so an UNKNOWN either never blocked or blocked forever. New `execution/recovery.py`: `quarantine_interrupted_submissions()` (startup only) and `apply_unknown_resolutions()` — on positive broker proof only, UNKNOWN -> FILLED/PARTIAL (entry deals + local position from IN-deal evidence, strategy key recovered from the decision chain) or REJECTED/CANCELLED/EXPIRED, resolving the incident; conflicting/resting/no evidence stays blocked (-> PENDING_RECONCILIATION on conflict/resting).
+- Runtime-level chaos (news provider down, RAG/ML/OKF/dashboard failures) is covered with the runtime orchestrator (Phase 3).
+
 ## Current git commit
 
 See the latest entry in WORKLOG.md for the current commit hash — this
@@ -1533,13 +1553,14 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-20 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+21 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
 `0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
 `0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
-`0019_paper_pending_entry`, `0020_simulation_provenance`).
+`0019_paper_pending_entry`, `0020_simulation_provenance`,
+`0021_research_trials`).
 
 ## Local RAG (advisory-only)
 
@@ -1679,8 +1700,8 @@ responds to) is not wired to anything live. 71 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. Latest
-(2026-09-24 Checkpoint A, Linux cloud runner, Python 3.13, `MetaTrader5`
-not installable there): 1177 passed, 7 skipped (`test_mt5_gateway_live.py`
+(2026-09-24 Checkpoint B, Linux cloud runner, Python 3.13, `MetaTrader5`
+not installable there): 1237 passed, 7 skipped (`test_mt5_gateway_live.py`
 — needs the Windows laptop's live MT5 terminal), 0 failed. Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended

@@ -115,6 +115,21 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~[SEVERITY: CRITICAL, SUBSYSTEM: execution] (found by the Phase 2
+  broker chaos harness) An exception raised by `Gateway.order_send()`
+  propagated out of `execution/service.py`, leaving the entry order
+  SUBMITTED with no `UNKNOWN_OUTCOME` incident, so new exposure was not
+  blocked even though the broker may already hold the position; the same
+  exception escaped `close.py`/`stop_modification.py`. A process that
+  died after SUBMITTED/ACCEPTED left the same unblocked state, and no
+  code ever APPLIED an UNKNOWN resolution, so any recorded UNKNOWN
+  blocked new entries forever.~~ Fixed 2026-09-24: exceptions from
+  `order_check` block (nothing sent); from `order_send` become UNKNOWN
+  (+ incident for entries, + reconciliation for closes), never resent.
+  New `execution/recovery.py` (`quarantine_interrupted_submissions()` at
+  startup, `apply_unknown_resolutions()` on positive broker proof only).
+  Regressions: `tests/test_broker_chaos.py` (7 fail without the fix).
+
 - ~~[SEVERITY: MEDIUM, SUBSYSTEM: paper] (was open item 10)
   `run_paper_cycle()` treated EVERY supplied bar as new on a session's
   first cycle, so seeding a fresh session with deep history replayed it
