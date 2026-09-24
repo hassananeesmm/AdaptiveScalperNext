@@ -283,11 +283,12 @@ def test_okf_validate_fails_on_a_bad_bundle(env, tmp_path, capsys):
 
 @pytest.mark.parametrize("args", [["symbols"], ["reconcile"], ["history", "bootstrap"], ["broker-history", "status"],
                                   ["scan"], ["paper"], ["demo"], ["order-check-probe", "--symbol", "XAUUSD"]])
-def test_broker_commands_fail_cleanly_without_metatrader5(env, capsys, args, monkeypatch):
-    import adaptive_scalper.gateway.mt5_gateway as mt5_module
-
-    if mt5_module.__dict__.get("mt5") is not None:
-        pytest.skip("MetaTrader5 is installed here; covered by LOCAL_MT5_HANDOFF.md")
+def test_broker_commands_fail_cleanly_without_metatrader5(env, capsys, args):
+    # tests/conftest.py makes MetaTrader5 unavailable on every machine, so this
+    # runs (and never reaches a real terminal) on Windows as well as in the cloud.
+    # The previous skip guard looked for a module global `mt5` that never exists
+    # (the import is lazy), so on Windows it ran these commands against the
+    # live terminal.
     assert run(env, *args) == 1
     err = capsys.readouterr().err
     assert "FAIL" in err and ("MetaTrader5" in err or "MT5" in err)

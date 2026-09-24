@@ -2088,3 +2088,70 @@ proof of continued management) instead of counting journal rows.
 
 Full suite: 1451 passed, 7 skipped (live MT5 only), 0 failed.
 
+
+## Session: Windows validation, checkpoint W1 -- inspection, data protection, test-suite safety (2026-09-25, Windows laptop)
+
+Branch `windows-validation` created from `cloud-review` @ `ba02cf5` (clean tree,
+tracking `origin/claude/pensive-newton-tckoid`). Not merged into `main`.
+
+Data protection:
+- `data/adaptive_scalper.sqlite3` (218 MB, WAL mode, no -wal/-shm present, no
+  process holding it) was at schema **8**, not 26: 1,504,038 bars, 2,222 broker
+  account deals, 2,234 broker account orders, 393 decision chains.
+- Backed up with SQLite's online backup API to
+  `data/backups/adaptive_scalper.pre-windows-validation.20260924T200037Z.sqlite3`
+  (integrity ok; `data/` is git-ignored).
+- Migrations 9-26 audited: CREATE / ADD COLUMN only, no DROP/RENAME/DELETE.
+  Rehearsed on a copy: only `schema_migrations` row count changed (8 -> 26),
+  integrity ok, second run a no-op. Then applied to the real DB: schema 26,
+  integrity ok.
+
+Environment: Windows 11 Home 10.0.26200; `.venv` Python 3.13.15; SQLite
+3.50.4; git 2.55. The venv lacked two new pins (`websockets==17.1`,
+`PyYAML==6.0.3`); installed from `requirements.txt` only (no pip self-upgrade).
+`pip check` clean; `MetaTrader5` 5.0.6180 imports. Two MT5 terminals are
+installed (`MetaTrader 5`, `MetaTrader 5 IC Markets Global`).
+
+Defect found and fixed (test safety): the first Windows run of the "offline"
+suite **launched the live MT5 terminal** (terminal64 parent = the pytest
+process). `tests/test_cli_commands.py::test_broker_commands_fail_cleanly_without_metatrader5`
+skipped only if `mt5_gateway` had a module global `mt5`, which the lazy
+`_import_mt5()` never creates, so on Windows it ran `symbols`, `reconcile`,
+`history bootstrap` (and would have run `paper`, `demo`, `order-check-probe`)
+against the DEMO terminal. The run was killed during `history bootstrap`; the
+temp databases show 0 orders and 0 order_check probes (only read-only calls
+ran; `paper`/`demo`/`order-check-probe` never started). Fix:
+- `tests/conftest.py`: autouse fixture blocks `_import_mt5` in every test
+  except `test_mt5_gateway_live.py` (the only MetaTrader5 import path).
+- The broken skip removed, so the fail-closed CLI behaviour is now verified on
+  Windows too.
+- `test_mt5_gateway_live.py` is opt-in (`ASN_LIVE_MT5=1`) because its
+  collection-time `initialize()` launches the terminal;
+  `scripts/windows_verify.ps1` sets it for its live step only.
+- Regression tests: `tests/test_offline_mt5_guard.py`.
+
+Windows compatibility: `test_oversized_and_symlinked_files_are_refused` failed
+with WinError 1314 (non-admin users cannot create symlinks). Split into
+`test_oversized_files_are_refused` (always runs) and
+`test_symlinked_files_are_refused` (skips with the OS error only when the
+symlink cannot be created). No assertion weakened.
+
+Full suite on Windows before the symlink split:
+`.venv\Scripts\python.exe -m pytest -q -rs` -> 1453 passed, 1 failed (symlink
+privilege), 7 skipped (live MT5, opt-in), 278 s; no terminal process spawned.
+
+Read-only broker facts (scratch script, no order_check/order_send; login
+masked), terminal launched by the defect above and still running:
+- account trade mode DEMO, `ICMarketsSC-Demo`, company Raw Trading Ltd, USD,
+  hedging margin mode; account trade_allowed, trade_expert true; build 6191.
+- **Terminal Algo Trading is already ENABLED** (terminal trade_allowed=true).
+  Not enabled by this session. PAPER does not use it; kill switch is
+  UNINITIALIZED so the DEMO runtime would block all new entries.
+- 0 positions, 0 pending orders.
+- XAUUSD 'Gold vs US Dollar', GBPJPY 'Great Britain Pound vs Japanese Yen',
+  BTCUSD 'Bitcoin (USD)': exact-name matches; vol_min 0.01, step 0.01; stops
+  and freeze level 0; filling_mode 2; `cli symbols` resolved and captured all
+  three.
+- **BUG_BACKLOG #14 confirmed:** `tick.time` is +10800 s (UTC+3) ahead of the
+  real UTC clock on all three symbols. Stored bars are server time labelled
+  `ts_utc` (FX history ends Friday 23:55 "UTC"; the FX close is 21:00 UTC).

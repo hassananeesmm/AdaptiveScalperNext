@@ -2,16 +2,21 @@
 
 Unlike every other test in this suite, this one is NOT portable — it
 requires an actual MT5 terminal installed, running, and logged in on the
-machine pytest runs on. It skips itself automatically when that isn't the
-case, so it never breaks CI or another developer's machine (directive
+machine pytest runs on. It is opt-in: it runs only with ASN_LIVE_MT5=1
+(set by scripts/windows_verify.ps1 for its live step), because
+`initialize()` launches the installed terminal. Otherwise, or when no
+terminal is reachable, it skips, so it never breaks CI or another
+developer's machine (directive
 section 119: report actual results, never fabricate them — skipping
 honestly is the correct behavior here, not a workaround).
 
 Read-only only. No order_send/order_check call exists anywhere in this
-file or in Mt5Gateway itself yet (see gateway/protocol.py).
+file.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -23,6 +28,10 @@ from adaptive_scalper.gateway.types import AccountSnapshot, TerminalSnapshot, Tr
 
 
 def _mt5_available() -> bool:
+    # Opt-in: `initialize()` launches the installed terminal, so collecting
+    # this file must never do that implicitly during an ordinary `pytest`.
+    if os.environ.get("ASN_LIVE_MT5") != "1":
+        return False
     try:
         gw = Mt5Gateway()
         ok = gw.initialize()
@@ -33,7 +42,7 @@ def _mt5_available() -> bool:
 
 
 pytestmark = pytest.mark.skipif(
-    not _mt5_available(), reason="no live MT5 terminal available on this machine"
+    not _mt5_available(), reason="live MT5 tests are opt-in (ASN_LIVE_MT5=1) and need a reachable terminal"
 )
 
 

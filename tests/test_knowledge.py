@@ -148,13 +148,21 @@ def test_yaml_is_loaded_safely(tmp_path):
     assert _codes(bundle, "x.md") == {"OKF_FRONTMATTER_INVALID"}
 
 
-def test_oversized_and_symlinked_files_are_refused(tmp_path):
-    outside = tmp_path / "outside.md"
-    outside.write_text(_concept())
+def test_oversized_files_are_refused(tmp_path):
     root = _bundle(tmp_path / "b", {"big.md": _concept(body="x" * 300_000)})
-    (root / "link.md").symlink_to(outside)
     bundle = load_bundle(root)
     assert _codes(bundle, "big.md") == {"LOAD_FILE_TOO_LARGE"}
+
+
+def test_symlinked_files_are_refused(tmp_path):
+    outside = tmp_path / "outside.md"
+    outside.write_text(_concept())
+    root = _bundle(tmp_path / "b", {"ok.md": _concept()})
+    try:
+        (root / "link.md").symlink_to(outside)
+    except OSError as exc:  # Windows without Developer Mode / SeCreateSymbolicLinkPrivilege
+        pytest.skip(f"this OS user cannot create symlinks: {exc}")
+    bundle = load_bundle(root)
     assert _codes(bundle, "link.md") == {"LOAD_SYMLINK_REFUSED"}
 
 

@@ -50,7 +50,8 @@ Step "Symbols resolve and specs captured" { & $Py -m adaptive_scalper.cli symbol
 Step "OKF knowledge bundle valid" { & $Py -m adaptive_scalper.cli okf validate }
 Step "Full test suite (fake/cloud tests)" { & $Py -m pytest -q }
 if (-not $SkipLiveTests) {
-    Step "Live MT5 DEMO terminal tests" { & $Py -m pytest -q tests/test_mt5_gateway_live.py -rs }
+    # Opt-in: these tests call initialize(), which launches the terminal.
+    Step "Live MT5 DEMO terminal tests" { $env:ASN_LIVE_MT5 = "1"; try { & $Py -m pytest -q tests/test_mt5_gateway_live.py -rs } finally { Remove-Item Env:ASN_LIVE_MT5 -ErrorAction SilentlyContinue } }
 }
 Step "Kill switch state (read only)" { & $Py -m adaptive_scalper.cli kill-switch status }
 
