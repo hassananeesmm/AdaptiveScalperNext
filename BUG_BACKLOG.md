@@ -113,6 +113,30 @@ delete) once fixed, with the fixing commit/date noted.
    honestly; deliberately not changed in the 2026-09-24 correctness
    checkpoint to keep that change reviewable.
 
+14. [SEVERITY: HIGH until verified, SUBSYSTEM: gateway/runtime] BLOCKED-ON-
+   LOCAL-MT5. `Mt5Gateway` passes MT5 bar/tick timestamps through
+   unconverted. Many brokers stamp them in SERVER time (e.g. UTC+2/+3),
+   not UTC. The runtime judges bar closure against the symbol's own tick
+   clock (safe either way), but `validate_execution_quote()` compares the
+   tick time with this machine's UTC clock and news windows are UTC: with
+   a server-time offset every DEMO entry would fail closed
+   (`execution_future_timestamp`) and PAPER news windows would be offset.
+   Must be measured on the Windows laptop (tick.time vs UTC) and, if
+   offset, converted once inside `Mt5Gateway` -- never guessed here.
+
+15. [SEVERITY: LOW, SUBSYSTEM: position_management] `re_entry.evaluate_reentry`
+   requires `original_raw_confidence + 0.08` for a same-direction
+   re-entry, so after a trade entered at raw_confidence >= 0.93 a same-
+   direction re-entry on that symbol can never qualify (observed in the
+   runtime simulation with saturated 1.0 confidences). Conservative by
+   design; revisit only with evidence (directive section 27 lists fresh
+   setup fingerprints / regime transitions as alternatives).
+
+16. [SEVERITY: LOW, SUBSYSTEM: journal] `position_management.manager`
+   journals `POSITION_REVIEWED` on every review; at the runtime's ~1s
+   cadence that is ~3600 immutable rows per open position per hour.
+   Correct but heavy; consider journaling only action/state changes.
+
 ## Fixed
 
 - ~~[SEVERITY: CRITICAL, SUBSYSTEM: execution] (found by the Phase 2

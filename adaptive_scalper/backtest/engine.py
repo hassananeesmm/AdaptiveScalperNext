@@ -271,8 +271,15 @@ def run_backtest(
     origin: EvidenceOrigin = EvidenceOrigin.BACKTEST,
     external_open_positions: tuple[PositionExposure, ...] = (),
     correlation_matrix: dict[tuple[str, str], CorrelationResult] | None = None,
+    entry_block_reason: str | None = None,
 ) -> BacktestResult:
-    """`resume_open_position`/`resume_pending_entry`/`resume_regime_tracker`/
+    """`entry_block_reason`: a GLOBAL new-entry block the caller is under
+    for this whole call (kill switch not DISENGAGED, news calendar
+    unavailable...). No entry is scanned or filled -- a pending entry is
+    dropped with this reason -- while existing positions are still
+    managed exactly as usual (directive sections 37/42/45).
+
+    `resume_open_position`/`resume_pending_entry`/`resume_regime_tracker`/
     `resume_risk_state`/`force_close_at_range_end=False` are for an
     ONGOING incremental caller (PAPER mode, `adaptive_scalper/paper/`) that
     calls this repeatedly as new bars arrive, rather than once over a
@@ -378,6 +385,8 @@ def run_backtest(
                 decision_time=open_trade.pending_exit_decision_time_utc or bar.time,
             )
             open_trade = None
+        elif pending_entry is not None and open_trade is None and entry_block_reason is not None:
+            reject(pending_entry, bar, entry_block_reason, "global new-entry block in force at fill time")
         elif pending_entry is not None and open_trade is None:
             outcome = _revalidate_and_open(
                 pending_entry, bar, equity=equity, risk_state=risk_state, symbol_spec=symbol_spec,
@@ -420,7 +429,7 @@ def run_backtest(
         # news-block window, and while no daily-loss/drawdown ceiling is
         # reached (directive section 45: a globally blocked state does not
         # keep evaluating strategies). A selection fills at the next open.
-        if open_trade is None and not _in_news_window(bar.time, config.news_windows):
+        if open_trade is None and entry_block_reason is None and not _in_news_window(bar.time, config.news_windows):
             if _risk_halt_reason(risk_state, equity, config.risk_limits) is not None:
                 halted_scans += 1
                 continue

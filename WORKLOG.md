@@ -1940,3 +1940,32 @@ defects, fixed in the same checkpoint:
 Verified the tests bite: with the three exception fixes reverted, 7 fail.
 
 compileall OK; full suite 1237 passed, 7 skipped (live MT5 only), 0 failed.
+
+## Session: Checkpoint C -- runtime orchestrator (2026-09-24, cloud)
+
+Phase 3. New `adaptive_scalper/runtime/` (engine, scheduler, demo, paper,
+market_data, news_monitor, advisory, state, logging_setup),
+`gateway/factory.py`, `learning/observer.py`, migration 0022, `[runtime]`
+and `[costs.SYMBOL]` config sections, `run_backtest`/`run_paper_cycle`
+`entry_block_reason`, `run_reconciliation(journal_clean=False)`.
+
+Test harness: `tests/runtime_helpers.py` (`LiveMarketGateway` reveals
+pre-generated bars as a fake clock advances; every call still goes through
+the chaos fault plan). The first end-to-end DEMO run exposed a harness
+bug (fills priced from a static tick -> price 0) and the system failed
+SAFE on it: the order went UNKNOWN (no positive-price deal evidence) and
+the resulting orphan blocked the other two symbols through reconciliation
+in the same cycle. The runtime chaos test then exposed a real hardening
+gap: a RAG object whose methods raise crashed startup, because the engine
+trusted RAG's own never-raises contract -- every advisory call site is now
+isolated (`safe_rag_record`, guarded rebuild).
+
+Architecture audits added (`tests/test_runtime_architecture.py`): single
+`Mt5Gateway()` construction site, order_send/order_check allow-lists,
+kill-switch bootstrap/clear and `OperatorAuthority` operator-CLI-only, no
+LIVE/REAL mode strings.
+
+New backlog: #14 broker timestamp timezone (BLOCKED-ON-LOCAL-MT5), #15
+saturated-confidence re-entry, #16 per-second POSITION_REVIEWED volume.
+
+Full suite: 1266 passed, 7 skipped (live MT5 only), 0 failed.

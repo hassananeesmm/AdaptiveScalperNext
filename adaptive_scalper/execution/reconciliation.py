@@ -556,6 +556,7 @@ def run_reconciliation(
     *,
     now_utc: int | None = None,
     history_lookback_seconds: int = 7 * 24 * 3600,
+    journal_clean: bool = True,
 ) -> ReconciliationReport:
     """The real reconciliation entry point (execution-safety review
     finding #4, upgraded in round 2 to perform ACTUAL repair). Meant to
@@ -651,6 +652,14 @@ def run_reconciliation(
     else:
         status = CLEAN
 
+    if status == CLEAN and not journal_clean:
+        # The runtime reconciles every ~1s; a CLEAN pass with nothing found
+        # is not a decision worth an immutable journal row each time.
+        return ReconciliationReport(
+            status, findings, recovered_ids, unrepaired_ids,
+            order_findings=order_findings, recovered_order_ids=recovered_order_ids,
+            unrepaired_order_ids=unrepaired_order_ids,
+        )
     append_event(
         conn, chain_key, "RECONCILIATION_ACTION", now, RECONCILIATION_CHAIN_SYMBOL,
         {

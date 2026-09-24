@@ -106,11 +106,13 @@ def run_paper_cycle(
     now_utc: int | None = None,
     external_open_positions: tuple[PositionExposure, ...] = (),
     correlation_matrix: dict[tuple[str, str], CorrelationResult] | None = None,
+    entry_block_reason: str | None = None,
 ) -> PaperCycleResult:
     """`external_open_positions`/`correlation_matrix`: the OTHER symbols'
     current PAPER exposure, so this symbol's deferred entries pass the
     same max-positions/total-risk/portfolio-heat/correlation gates a DEMO
-    entry would."""
+    entry would. `entry_block_reason`: a global new-entry block (kill
+    switch, news outage) -- positions are still managed."""
     key = session_key or f"PAPER:{canonical_symbol}:{resolution}"
     now = now_utc if now_utc is not None else int(time.time())
 
@@ -158,6 +160,7 @@ def run_paper_cycle(
         resume_regime_tracker=session.regime_tracker_state, resume_risk_state=session.risk_state,
         force_close_at_range_end=False, origin=EvidenceOrigin.PAPER_LIVE_DATA,
         external_open_positions=external_open_positions, correlation_matrix=correlation_matrix,
+        entry_block_reason=entry_block_reason,
     )
 
     conn.execute("BEGIN IMMEDIATE")

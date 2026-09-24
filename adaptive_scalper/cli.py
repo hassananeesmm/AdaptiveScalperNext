@@ -23,9 +23,9 @@ from adaptive_scalper.core import kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.dashboard.app import DEFAULT_HOST, DEFAULT_PORT, create_app
 from adaptive_scalper.dashboard.health import compute_health
-from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway, Mt5NotAvailableError
+from adaptive_scalper.gateway.factory import create_live_gateway
+from adaptive_scalper.gateway.mt5_gateway import Mt5NotAvailableError
 from adaptive_scalper.gateway.symbol_resolver import resolve_all
-from adaptive_scalper.gateway.synchronized_gateway import SynchronizedGateway
 from adaptive_scalper.history import account_history
 from adaptive_scalper.history import bootstrap as history_bootstrap
 from adaptive_scalper.history import jobs as history_jobs
@@ -65,7 +65,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     mt5_status = "not checked"
     try:
-        gw = Mt5Gateway()
+        gw = create_live_gateway()
         if gw.initialize():
             mt5_status = "reachable"
             gw.shutdown()
@@ -118,7 +118,7 @@ def cmd_health(args: argparse.Namespace) -> int:
 
 def cmd_symbols(args: argparse.Namespace) -> int:
     try:
-        gw = Mt5Gateway()
+        gw = create_live_gateway()
         if not gw.initialize():
             print("FAIL: could not initialize MT5 terminal")
             return 1
@@ -178,7 +178,7 @@ def cmd_history_bootstrap(args: argparse.Namespace) -> int:
     it never aborts the run for the other, resolved symbols."""
     cfg, conn = _open_db(args.config)
     try:
-        gw = Mt5Gateway()
+        gw = create_live_gateway()
         if not gw.initialize():
             print("FAIL: could not initialize MT5 terminal")
             return 1
@@ -264,7 +264,7 @@ def cmd_broker_history_import(args: argparse.Namespace) -> int:
     sections 51-52). Idempotent — safe to re-run as a periodic refresh."""
     _, conn = _open_db(args.config)
     try:
-        gw = Mt5Gateway()
+        gw = create_live_gateway()
         if not gw.initialize():
             print("FAIL: could not initialize MT5 terminal")
             return 1
@@ -296,7 +296,7 @@ def cmd_broker_history_status(args: argparse.Namespace) -> int:
     """Coverage summary for the connected account's imported history."""
     _, conn = _open_db(args.config)
     try:
-        gw = Mt5Gateway()
+        gw = create_live_gateway()
         if not gw.initialize():
             print("FAIL: could not initialize MT5 terminal")
             return 1
@@ -323,12 +323,9 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
     gateway = None
     try:
-        raw_gateway = Mt5Gateway()
-        if raw_gateway.initialize():
-            # MUST wrap in SynchronizedGateway, never hand the raw
-            # Mt5Gateway to FastAPI's per-request worker threads directly
-            # — see synchronized_gateway.py / dashboard/app.py's docstring.
-            gateway = SynchronizedGateway(raw_gateway)
+        live_gateway = create_live_gateway()  # always a SynchronizedGateway
+        if live_gateway.initialize():
+            gateway = live_gateway
             print("dashboard: MT5 terminal connected")
         else:
             print("dashboard: MT5 terminal not reachable, running without gateway (mt5_connected will read null)")

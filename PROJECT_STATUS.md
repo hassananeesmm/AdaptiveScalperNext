@@ -1541,6 +1541,18 @@ Two real defects found and fixed (7 of the tests fail without the fixes):
 - `execution/unknown.py`'s resolvers were never applied, and nothing quarantined orders a dead process left SUBMITTED/ACCEPTED, so an UNKNOWN either never blocked or blocked forever. New `execution/recovery.py`: `quarantine_interrupted_submissions()` (startup only) and `apply_unknown_resolutions()` — on positive broker proof only, UNKNOWN -> FILLED/PARTIAL (entry deals + local position from IN-deal evidence, strategy key recovered from the decision chain) or REJECTED/CANCELLED/EXPIRED, resolving the incident; conflicting/resting/no evidence stays blocked (-> PENDING_RECONCILIATION on conflict/resting).
 - Runtime-level chaos (news provider down, RAG/ML/OKF/dashboard failures) is covered with the runtime orchestrator (Phase 3).
 
+## Runtime orchestrator (Phase 3, 2026-09-24)
+
+`adaptive_scalper/runtime/` — IMPLEMENTED, CONNECTED, TESTED (cloud, simulated broker: `tests/test_runtime.py` 21 tests, `tests/test_runtime_architecture.py` 8 audits). NOT yet run against a real MT5 terminal (BLOCKED-ON-LOCAL-MT5; see LOCAL_MT5_HANDOFF.md once written).
+
+- `engine.py` — `RuntimeEngine`: one DB connection, one gateway, one thread. `startup()` in directive section 115 order, fail-closed: DB integrity; kill switch READ only (never bootstrapped/cleared — the engine runs with it UNINITIALIZED/ENGAGED and simply blocks new entries); MT5 initialize; **a REAL/CONTEST account refuses to start in PAPER and DEMO alike**; resolve + validate the three symbols (unresolvable ones excluded with a WARNING event, never substituted); retired strategies asserted absent; DEMO: `quarantine_interrupted_submissions`, reconciliation, `apply_unknown_resolutions`; news refresh; RAG index rebuild. Scheduler tasks: `position_cycle` (P0, ~1s, DEMO), `entry_cycle` (P1, ~4s), `news_refresh` (P2, ~20m), `rag_rebuild` (P3, 10m), `heartbeat` (P4, ~1s).
+- `scheduler.py` — single-threaded, priority-ordered, per-task exception isolation (a crashing scanner cannot starve position management; failures deduplicated into one TASK_FAILED event).
+- `demo.py` — position cycle (reconciliation journaled only when not CLEAN, UNKNOWN resolution, per-position `review_position_once` with decision-time context from `position_entry_context`, rebuilt from the decision chain for recovered positions); entry cycle decides once per newly CLOSED bar: global short-circuit (kill switch, DEMO/terminal/broker permission, dangerous UNKNOWN, reconciliation, news outage, daily loss, drawdown) -> features -> persisted regime tracker -> six strategies -> `SIGNAL_CREATED` -> advisory evidence -> `select_and_journal_proposal` over the LIVE cost estimate (unknown configured cost -> `BLOCK_COST`) -> `calculate_safe_volume` -> `execution.service.submit_new_entry` with `fresh_evidence()` rebuilding the complete `FinalPermissionInput` from fresh broker/DB truth on both calls (read-only reconciliation, exposures incl. pending, correlation, portfolio heat, daily P/L from broker deals, persisted peak equity, re-entry check).
+- `paper.py` — `run_paper_cycle` per symbol with the other symbols' simulated exposure + correlation matrix, news windows from the calendar, and a global entry block (kill switch not DISENGAGED, news outage/conflict). Zero `order_check`/`order_send` (audited). A config change halts that symbol's session with a CRITICAL event (`[runtime] paper_session_tag` starts new sessions).
+- `market_data.py` — closed bars judged against the symbol's own fresh tick time (same broker clock as the bars), never this machine's UTC clock; `news_monitor.py` — slow-cadence remote refresh, local final check, UNAVAILABLE/STALE/CONFLICT fail closed; `advisory.py` — RAG / ML observer (`learning/observer.py`, STAGE 1, zero influence) / OKF evidence, journaled as `RAG_USED`/`MODEL_USED`, never passed to any gate; any failure is DEGRADED (proven: identical decisions with every advisory source raising); `state.py` + migration `0022_runtime` — `runtime_state` (heartbeat, components, why-no-trade, symbol snapshots, reconciliation, regime trackers, peak equity), deduplicated `runtime_events`, `entry_decisions`, `position_entry_context`; `logging_setup.py` — JSONL + rotating human logs with secret redaction; `gateway/factory.py` — the ONE place `Mt5Gateway()` is constructed (always `SynchronizedGateway`), CLI migrated to it.
+- Config: `[runtime]` cadences (validated: position reviews at least as frequent as entry scans) and per-symbol `[costs.SYMBOL]` evidence (`None` = unknown, never zero; provenance label).
+- Known limits: broker timestamp convention (server time vs UTC) is unverified and matters for quote freshness/news windows — BLOCKED-ON-LOCAL-MT5; PAPER keeps one simulated equity per symbol session; `POSITION_REVIEWED` is journaled on every review (~1/s per open position).
+
 ## Current git commit
 
 See the latest entry in WORKLOG.md for the current commit hash — this
@@ -1553,14 +1565,14 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-21 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+22 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
 `0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
 `0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
 `0019_paper_pending_entry`, `0020_simulation_provenance`,
-`0021_research_trials`).
+`0021_research_trials`, `0022_runtime`).
 
 ## Local RAG (advisory-only)
 
@@ -1700,8 +1712,8 @@ responds to) is not wired to anything live. 71 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. Latest
-(2026-09-24 Checkpoint B, Linux cloud runner, Python 3.13, `MetaTrader5`
-not installable there): 1237 passed, 7 skipped (`test_mt5_gateway_live.py`
+(2026-09-24 Checkpoint C, Linux cloud runner, Python 3.13, `MetaTrader5`
+not installable there): 1266 passed, 7 skipped (`test_mt5_gateway_live.py`
 — needs the Windows laptop's live MT5 terminal), 0 failed. Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended

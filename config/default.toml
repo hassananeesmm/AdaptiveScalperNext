@@ -29,3 +29,33 @@ fail_closed = true
 
 [database]
 path = "data/adaptive_scalper.sqlite3"
+
+[runtime]
+# Directive section 16 cadences. Position reviews always run at least as
+# often as entry scans.
+entry_resolution = "M5"
+position_cycle_seconds = 1.0
+entry_cycle_seconds = 4.0
+heartbeat_seconds = 1.0
+news_refresh_seconds = 1200
+news_stale_after_seconds = 7200
+bar_history_count = 300
+paper_initial_equity = 10000.0
+paper_session_tag = "v1"
+magic = 240924
+log_dir = "logs"
+
+# Per-symbol execution-cost evidence. Leave a value out when it is not
+# KNOWN: DEMO then blocks new entries for that symbol (BLOCK_COST) and
+# PAPER labels its results UNVERIFIED_ASSUMPTION. Fill these from the
+# broker's contract specification (provenance = "BROKER_SPEC_ESTIMATE")
+# or from measured DEMO fills ("BROKER_DEMO_CONFIRMED") -- see
+# LOCAL_MT5_HANDOFF.md.
+[costs.XAUUSD]
+provenance = "UNVERIFIED_ASSUMPTION"
+
+[costs.GBPJPY]
+provenance = "UNVERIFIED_ASSUMPTION"
+
+[costs.BTCUSD]
+provenance = "UNVERIFIED_ASSUMPTION"

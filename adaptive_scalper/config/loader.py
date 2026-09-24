@@ -134,6 +134,87 @@ class DatabaseConfig(BaseModel):
     path: str = "data/adaptive_scalper.sqlite3"
 
 
+_COST_PROVENANCES = ("UNVERIFIED_ASSUMPTION", "BROKER_SPEC_ESTIMATE", "BROKER_DEMO_CONFIRMED")
+
+
+class SymbolCostConfig(BaseModel):
+    """Per-symbol execution-cost evidence (directive section 34: never one
+    generic cost for all markets). `None` means UNKNOWN, never zero: DEMO
+    blocks new entries with BLOCK_COST while any component is unknown;
+    PAPER simulates with 0.0 for it but labels every result
+    UNVERIFIED_ASSUMPTION. Spread always comes from the live quote/bar."""
+
+    commission_per_lot_round_trip: float | None = None
+    slippage_price: float | None = None
+    swap_per_lot_per_day: float = 0.0
+    provenance: str = "UNVERIFIED_ASSUMPTION"
+
+    @field_validator("commission_per_lot_round_trip", "slippage_price", "swap_per_lot_per_day")
+    @classmethod
+    def _non_negative(cls, value, info):
+        if value is not None and value < 0:
+            raise ValueError(f"{info.field_name} must be >= 0, got {value}")
+        return value
+
+    @field_validator("provenance")
+    @classmethod
+    def _known_provenance(cls, value: str) -> str:
+        if value not in _COST_PROVENANCES:
+            raise ValueError(f"provenance must be one of {_COST_PROVENANCES}, got {value!r}")
+        return value
+
+    @property
+    def fully_known(self) -> bool:
+        return self.commission_per_lot_round_trip is not None and self.slippage_price is not None
+
+
+class RuntimeConfig(BaseModel):
+    """Scheduler cadences and runtime knobs (directive section 16). None of
+    these can loosen a safety gate; they only change how often things run."""
+
+    entry_resolution: str = "M5"
+    position_cycle_seconds: float = 1.0
+    entry_cycle_seconds: float = 4.0
+    heartbeat_seconds: float = 1.0
+    news_refresh_seconds: int = 1200
+    news_stale_after_seconds: int = 7200
+    bar_history_count: int = 300
+    correlation_min_samples: int = 30
+    paper_initial_equity: float = 10_000.0
+    # Part of every PAPER session key. A session refuses to resume under a
+    # different configuration; change this tag to start fresh sessions
+    # after deliberately changing strategy/risk/cost/exit settings.
+    paper_session_tag: str = "v1"
+    magic: int = 240924
+    log_dir: str = "logs"
+
+    @field_validator("entry_resolution")
+    @classmethod
+    def _supported_resolution(cls, value: str) -> str:
+        from adaptive_scalper.history.resolutions import SUPPORTED_BAR_RESOLUTIONS
+        if value not in SUPPORTED_BAR_RESOLUTIONS:
+            raise ValueError(f"entry_resolution must be one of {SUPPORTED_BAR_RESOLUTIONS}, got {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _sane_cadences(self) -> "RuntimeConfig":
+        if not (0.2 <= self.position_cycle_seconds <= 10):
+            raise ValueError("position_cycle_seconds must be in [0.2, 10]")
+        if not (1 <= self.entry_cycle_seconds <= 60):
+            raise ValueError("entry_cycle_seconds must be in [1, 60]")
+        if self.position_cycle_seconds > self.entry_cycle_seconds:
+            raise ValueError("position reviews must run at least as often as entry scans (directive section 15)")
+        if not (60 <= self.news_refresh_seconds <= 3600):
+            raise ValueError("news_refresh_seconds must be in [60, 3600]")
+        if self.news_stale_after_seconds < self.news_refresh_seconds:
+            raise ValueError("news_stale_after_seconds must be >= news_refresh_seconds")
+        if self.bar_history_count < 60:
+            raise ValueError("bar_history_count must be >= 60")
+        if self.paper_initial_equity <= 0:
+            raise ValueError("paper_initial_equity must be positive")
+        return self
+
+
 class AppConfig(BaseModel):
     mode: str = "PAPER"
     market: MarketConfig = Field(default_factory=MarketConfig)
@@ -141,6 +222,19 @@ class AppConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    costs: dict[str, SymbolCostConfig] = Field(default_factory=dict)
+
+    @field_validator("costs")
+    @classmethod
+    def _costs_only_for_allowed_symbols(cls, value: dict) -> dict:
+        unknown = set(value) - ALLOWED_CANONICAL_SYMBOLS
+        if unknown:
+            raise ValueError(f"costs configured for symbols outside the allow-list: {sorted(unknown)}")
+        return value
+
+    def cost_for(self, canonical_symbol: str) -> SymbolCostConfig:
+        return self.costs.get(canonical_symbol, SymbolCostConfig())
 
     @field_validator("mode")
     @classmethod
