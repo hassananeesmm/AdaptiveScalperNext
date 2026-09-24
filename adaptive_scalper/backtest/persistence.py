@@ -15,8 +15,27 @@ import sqlite3
 import time
 
 from adaptive_scalper.backtest.dataset import build_dataset_snapshot, record_dataset, record_dataset_usage
-from adaptive_scalper.backtest.types import BacktestResult
+from adaptive_scalper.backtest.types import BacktestResult, SimulatedTrade
 from adaptive_scalper.gateway.types import Bar
+
+# Provenance/cost columns shared by `backtest_trades` and `paper_trades`
+# (migration 0020), in insertion order.
+TRADE_PROVENANCE_COLUMNS: tuple[str, ...] = (
+    "strategy_version", "signal_time_utc", "entry_fill_reference", "exit_fill_reference",
+    "exit_decision_time_utc", "entry_spread_cost", "entry_slippage_cost", "exit_spread_cost",
+    "exit_slippage_cost", "commission_cost", "swap_cost", "fee_cost", "gross_pnl", "peak_r",
+    "fill_model_version", "cost_provenance", "config_fingerprint", "evidence_json",
+)
+
+
+def trade_provenance_values(trade: SimulatedTrade) -> tuple:
+    return (
+        trade.strategy_version, trade.signal_time_utc, trade.entry_fill_reference, trade.exit_fill_reference,
+        trade.exit_decision_time_utc, trade.entry_spread_cost, trade.entry_slippage_cost, trade.exit_spread_cost,
+        trade.exit_slippage_cost, trade.commission_cost, trade.swap_cost, trade.fee_cost, trade.gross_pnl,
+        trade.peak_r, trade.fill_model_version, trade.cost_provenance, trade.config_fingerprint,
+        json.dumps(trade.entry_evidence, sort_keys=True) if trade.entry_evidence is not None else None,
+    )
 
 
 def record_backtest_run(
@@ -56,8 +75,9 @@ def record_backtest_run(
         INSERT INTO backtest_runs
             (run_id, created_at_utc, canonical_symbol, resolution, dataset_id, run_type,
              range_start_utc, range_end_utc, config_json, trade_count, gross_pnl, net_pnl,
-             win_rate, profit_factor, avg_r, max_drawdown, total_cost, metrics_json, origin)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             win_rate, profit_factor, avg_r, max_drawdown, total_cost, metrics_json, origin,
+             config_fingerprint, fill_model_version, cost_provenance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id, now, result.canonical_symbol, result.resolution, snapshot.dataset_id, run_type,
@@ -70,26 +90,24 @@ def record_backtest_run(
                 "win_rate": m.win_rate, "profit_factor": m.profit_factor, "avg_r": m.avg_r,
                 "max_drawdown": m.max_drawdown, "final_equity": m.final_equity,
             }),
-            result.origin.value,
+            result.origin.value, result.config_fingerprint, result.fill_model_version, result.cost_provenance,
         ),
     )
 
+    base_columns = (
+        "run_id", "canonical_symbol", "strategy_key", "direction", "entry_time_utc", "entry_price",
+        "exit_time_utc", "exit_price", "exit_reason", "volume", "initial_monetary_risk", "realized_r",
+        "realized_pnl", "total_cost", "entry_regime", "exit_regime",
+    )
+    columns = base_columns + TRADE_PROVENANCE_COLUMNS
+    sql = f"INSERT INTO backtest_trades ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})"
     for trade in result.trades:
-        conn.execute(
-            """
-            INSERT INTO backtest_trades
-                (run_id, canonical_symbol, strategy_key, direction, entry_time_utc, entry_price,
-                 exit_time_utc, exit_price, exit_reason, volume, initial_monetary_risk, realized_r,
-                 realized_pnl, total_cost, entry_regime, exit_regime)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_id, result.canonical_symbol, trade.strategy_key, trade.direction,
-                trade.entry_time_utc, trade.entry_price, trade.exit_time_utc, trade.exit_price,
-                trade.exit_reason, trade.volume, trade.initial_monetary_risk, trade.realized_r,
-                trade.realized_pnl, trade.total_cost, trade.entry_regime, trade.exit_regime,
-            ),
-        )
+        conn.execute(sql, (
+            run_id, result.canonical_symbol, trade.strategy_key, trade.direction,
+            trade.entry_time_utc, trade.entry_price, trade.exit_time_utc, trade.exit_price,
+            trade.exit_reason, trade.volume, trade.initial_monetary_risk, trade.realized_r,
+            trade.realized_pnl, trade.total_cost, trade.entry_regime, trade.exit_regime,
+        ) + trade_provenance_values(trade))
     conn.commit()
 
 
@@ -101,4 +119,7 @@ def _config_to_json(config) -> dict:
         "min_net_edge_price": config.min_net_edge_price, "min_raw_confidence": config.min_raw_confidence,
         "feature_lookback": config.feature_lookback, "regime_min_confirmations": config.regime_min_confirmations,
         "uncertainty_margin_pct": config.uncertainty_margin_pct,
+        "risk_limits": dict(config.risk_limits.__dict__),
+        "fill_assumptions": dict(config.fill_assumptions.__dict__),
+        "max_entry_fill_delay_seconds": config.max_entry_fill_delay_seconds,
     }

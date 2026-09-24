@@ -72,8 +72,15 @@ OBSERVER-STAGE machinery (`adaptive_scalper/learning/` — lifecycle,
 registry, promotion gate, drift response; no real model training yet)
 are both implemented and tested.
 
-NOT yet started: backtest/walk-forward/OOS, real ML training, the
-complete dashboard/CLI, the full end-to-end runtime engine, and release
+Backtest / sequential-fold evaluation / overlap-aware untouched OOS /
+trade-order path stress (`adaptive_scalper/backtest/`), the PAPER engine
+(`adaptive_scalper/paper/`) and LogisticRegression observer training
+(`learning/training.py`) EXIST and are tested (fake/cloud) — see their
+sections below; the 2026-09-24 correctness checkpoints (A: causal fills,
+entry-bar SL/TP, peak R, costs, pending state, deferred-entry
+revalidation, historical risk halts, PAPER session fingerprint,
+provenance) are recorded there and in WORKLOG.md. Still pending: the
+full end-to-end runtime engine, the complete dashboard/CLI, and release
 packaging. See "Schema version" below for the current schema number —
 not duplicated here to avoid exactly the staleness this note is fixing.
 See "Current next task" below for the authoritative list of what
@@ -1496,6 +1503,8 @@ marked IMPLEMENTED/CONNECTED/TESTED above.
 
 Correctness checkpoint (2026-09-24, regression suite `tests/test_backtest_correctness_regressions.py`, 41 tests): `backtest/engine.py` now (1) fills an adaptive FULL_CLOSE at the NEXT bar's open, never the decision bar's own (already-past) open, and fills the bounded range-end close at the last bar's CLOSE (`simulate_fill(..., at="close")`); (2) treats the entry bar as a full bar — its high/low are checked against the new SL/TP and it is reviewed at its close, and the regime tracker updates on it (it was previously skipped with `continue`); (3) triggers SL/TP on the executable side (bid for a long, ask for a short), fills a gapped-through stop at the open less slippage, and marks open positions at the bid/ask like MT5 `position.profit`; (4) tracks a monotonic `peak_r` from 0.0 exactly like the live `position_management_state` (previously `peak_r=current_r`, so giveback protection could never fire in simulation); (5) charges every cost exactly once — execution prices embed spread/slippage, commission and per-UTC-rollover swap are deducted at close, and `SimulatedTrade.total_cost` reports all of entry friction, exit friction, commission and swap (previously entry friction was double-deducted, and commission, swap and exit friction were never charged/reported); (6) returns `BacktestResult.pending_entry` and accepts `resume_pending_entry`, and carries a decided-but-unfilled exit as `OpenPositionState.pending_exit_reason`. `backtest/oos.py` now refuses any OOS range that OVERLAPS (any resolution, any checksum, same symbol) a range used for TRAINING/VALIDATION/WALK_FORWARD_FOLD or previously spent as OOS, via `dataset.find_overlapping_usage()` — previously only the exact checksum was checked, so a one-bar-shifted window passed.
 
+Checkpoint A (2026-09-24, `tests/test_simulation_phase0.py`, 35 tests): a pending entry is RE-VALIDATED immediately before its next-bar-open fill (staleness vs `max_entry_fill_delay_seconds` — default two bars, so a weekend gap drops it; news window; cost and expected net edge at the fill bar's spread; safe sizing; `risk.governor.evaluate_risk_gate` with the SAME hard ceilings as DEMO incl. daily loss and drawdown; `portfolio.exposure.evaluate_portfolio_risk_gate`; `portfolio.correlation.evaluate_correlation_gate` against `external_open_positions`) and drops are listed in `BacktestResult.entry_rejections`. Daily-loss/drawdown ceilings also short-circuit scanning (`risk_halted_scans`) and survive incremental calls via `RiskState`. `BacktestConfig.risk_limits` defaults to directive section 32's values and `risk_per_trade_pct` may not exceed it. Every `SimulatedTrade` now carries `signal_time_utc`, `entry_fill_reference`/`exit_fill_reference` (`NEXT_BAR_OPEN`/`STOP_TRIGGER`/`TARGET_TRIGGER`/`RANGE_END_CLOSE`), `exit_decision_time_utc`, entry/exit spread and slippage, commission, swap, fee, `gross_pnl`, `peak_r`, `origin`, `fill_model_version` (`fill_model/v2`), `cost_provenance` (`FillAssumptions.provenance`, default `UNVERIFIED_ASSUMPTION` — unverified costs are labeled, never presented as known), `config_fingerprint` (`backtest/fingerprint.py`) and `entry_evidence` (strategy/decision/fill-revalidation evidence; ML/RAG/OKF explicitly `NOT_CONSULTED`). `walk_forward.run_walk_forward()` is labeled `SEQUENTIAL_FIXED_CONFIG_EVALUATION` (a stability check, not ML walk-forward). Monte Carlo is renamed `path_stress.run_trade_order_path_stress()` (`TRADE_ORDER_PATH_STRESS`): terminal equity is reported once, because permutation cannot change a sum; only drawdown/ruin vary. OOS overlap checks now also cover different provenance, and `allow_oos_reuse=True` is recorded as `OOS_ANALYSIS_REUSE` and spends the range like an OOS run.
+
 NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracked under the pending CLI/dashboard tasks); nothing has run this against REAL historical bars yet (only synthetic bars in tests) — a real run needs `history/store.get_bars()` (added this checkpoint) to pull an actual bootstrapped range.
 
 ## PAPER mode (directive section 132)
@@ -1507,6 +1516,8 @@ NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracke
 - A real, non-trivial bug was caught and fixed while proving incremental correctness: `regimes.classifier.RegimeTracker`'s hysteresis state (confirmed/candidate/candidate_count) was NOT resumable across calls — an incremental PAPER cycle restarted it from `UNKNOWN` every time, genuinely diverging from what a continuously-running tracker would decide. Fixed by adding `RegimeTracker.state`/`initial_candidate`/`initial_candidate_count` and threading a new `RegimeTrackerState` through `run_backtest()`'s resume contract and `paper/state.py`'s persistence. Proven by `tests/test_paper_engine.py::test_run_paper_cycle_incremental_feeding_matches_a_single_shot_backtest`: cycling through the same bar range in growing chunks now produces IDENTICAL final state (equity, every trade, the still-open position) to one continuous `run_backtest()` call.
 
 - Pending state across cycles (2026-09-24): an entry selected on a cycle's last bar is persisted in `paper_session_state.pending_entry_json` (migration `0019_paper_pending_entry`) and fills at the next cycle's first new bar; a FULL_CLOSE decided on a cycle's last bar travels in `open_position_json` as `pending_exit_reason`; `peak_r` travels there too. A cycle with ONE new bar now runs (it was a no-op, so live PAPER lagged a bar), and a bar history with fewer than `feature_lookback+1` already-processed bars before the first new bar raises instead of silently skipping bars. Proven by `test_incremental_paper_cycles_match_a_single_continuous_run` (3 seeded random walks x chunk sizes 2/3/7/25, real strategies, slippage + commission): final equity, every trade, the open position and the pending entry are identical to one continuous run.
+
+- Checkpoint A (2026-09-24): PAPER starts NOW — a new session decides only the most recent supplied bar (deep history is context, never replayed as `PAPER_LIVE_DATA`; BUG_BACKLOG #10 fixed). Sessions are bound to their configuration fingerprint; resuming under a different configuration (or a legacy session with history and no fingerprint) raises `PaperSessionConfigMismatchError` — start a new session key. Risk state (peak equity, current UTC day's realized P/L) persists across cycles. `run_paper_cycle()` accepts `external_open_positions`/`correlation_matrix` so a multi-symbol runtime applies the cross-symbol gates. One-new-bar-at-a-time cycling is proven identical to one continuous run (`chunk=1` in the property test).
 
 NOT yet done: no `Gateway` is wired to this at all yet — a future runtime-engine caller (task: "wire full runtime engine") must fetch real bars from the live MT5 terminal via a `SynchronizedGateway` and pass them into `run_paper_cycle()` on a real schedule; no CLI command or dashboard panel surfaces PAPER state yet; PAPER burn-in itself (directive section 132: "Run PAPER burn-in before DEMO") hasn't run.
 
@@ -1522,13 +1533,13 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-19 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+20 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
 `0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
 `0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
-`0019_paper_pending_entry`).
+`0019_paper_pending_entry`, `0020_simulation_provenance`).
 
 ## Local RAG (advisory-only)
 
@@ -1668,12 +1679,9 @@ responds to) is not wired to anything live. 71 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. Latest
-(2026-09-24, Linux cloud runner, Python 3.13, `MetaTrader5` not
-installable there): 1138 passed, 7 skipped (`test_mt5_gateway_live.py`
-— needs the Windows laptop's live MT5 terminal), 1 failed
-(`test_guardrails.py::test_outside_project_root` — asserts Windows
-`C:\` path semantics, fails identically before and after this
-checkpoint on Linux; see BUG_BACKLOG.md item 12). Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
+(2026-09-24 Checkpoint A, Linux cloud runner, Python 3.13, `MetaTrader5`
+not installable there): 1177 passed, 7 skipped (`test_mt5_gateway_live.py`
+— needs the Windows laptop's live MT5 terminal), 0 failed. Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended
 `test_execution_service.py`, `test_execution_close.py`,

@@ -10,6 +10,7 @@ without that exemption, the fixture strings below (e.g. "LIVE_TRADING =
 True") would cause guardrails.py to block edits to this very file.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -90,6 +91,9 @@ def test_outside_project_root():
     root = r"C:\AdaptiveScalperNext"
     assert guardrails.is_outside_project_root(r"C:\Windows\System32\config.py", root)
     assert not guardrails.is_outside_project_root(r"C:\AdaptiveScalperNext\src\x.py", root)
+    assert not guardrails.is_outside_project_root(r"C:\AdaptiveScalperNext", root)
+    assert guardrails.is_outside_project_root(r"C:\AdaptiveScalperNextOther\x.py", root)
+    assert not guardrails.is_outside_project_root(r"relative\x.py", root)
 
 
 def test_touches_safety_boundary():
@@ -109,12 +113,17 @@ def test_content_scan_exempt_paths():
 # --------------------------------------------------------------------------
 
 def run_hook(payload: dict) -> dict:
+    # The e2e payloads use Windows paths under C:\AdaptiveScalperNext, so
+    # the hook must evaluate them against that root on ANY host (on Linux
+    # it would otherwise derive a /home/... root from its own location).
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": r"C:\AdaptiveScalperNext"}
     proc = subprocess.run(
         [sys.executable, str(GUARDRAILS)],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
         timeout=30,
+        env=env,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)

@@ -1,9 +1,16 @@
-"""Walk-forward validation (directive section 80: "WALK-FORWARD").
+"""Sequential fixed-configuration fold evaluation (directive section 80).
 
-Splits a bar history into sequential, strictly-forward folds. Each fold
-is an independent `run_backtest()` call over that fold's own contiguous
-bar slice -- the SAME production decision cores the single-shot backtest
-uses, walked across N non-overlapping windows in time order.
+What this is -- and is not: ONE fixed configuration is evaluated across N
+sequential, strictly-forward folds; nothing is trained or re-fit between
+folds. Results are labeled `SEQUENTIAL_FIXED_CONFIG_EVALUATION`. That is a
+temporal stability check, NOT ML walk-forward validation (train -> purge/
+embargo -> validate on the future -> advance -> retrain), which lives in
+`learning/model_walk_forward.py`. The CLI command keeps the familiar
+`walk-forward` name but prints this label.
+
+Each fold is an independent `run_backtest()` call over that fold's own
+contiguous bar slice -- the SAME production decision cores the single-shot
+backtest uses, walked across N non-overlapping windows in time order.
 
 Honest, named scope limit: each fold's feature engine warms up FRESH at
 that fold's own start (it never reaches back into a PRIOR fold's bars for

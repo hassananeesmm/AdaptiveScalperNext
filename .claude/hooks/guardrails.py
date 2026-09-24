@@ -34,7 +34,7 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 # ---------------------------------------------------------------------------
 # Pure policy functions — unit tested directly by tests/test_guardrails.py
@@ -130,16 +130,14 @@ def targets_sibling_project(path: str) -> bool:
 
 
 def is_outside_project_root(path: str, project_root: str) -> bool:
-    p = Path(path)
-    try:
-        if not p.is_absolute():
-            return False
-        p.resolve()
-    except (OSError, ValueError):
-        pass
+    # PureWindowsPath: a C:\ path is absolute even when this hook (or its
+    # tests) run on a non-Windows host, where Path() would say it isn't.
+    if not (Path(path).is_absolute() or PureWindowsPath(path).is_absolute()):
+        return False
     root_norm = norm(project_root)
     path_norm = norm(str(path))
-    return not path_norm.startswith(root_norm)
+    # Separator boundary: C:\AdaptiveScalperNextOther is NOT inside C:\AdaptiveScalperNext.
+    return not (path_norm == root_norm or path_norm.startswith(root_norm + "\\"))
 
 
 def contains_any(patterns, text: str) -> bool:

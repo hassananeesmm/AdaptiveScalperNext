@@ -1,25 +1,28 @@
-"""Monte Carlo trade-order resampling (directive section 80: "MONTE
-CARLO").
+"""Trade-order path stress (directive section 80: "MONTE CARLO"), named
+honestly as TRADE_ORDER_PATH_STRESS.
 
-This does NOT simulate new market data or new trade outcomes -- it takes
-the REALIZED trade P/L sequence a real `run_backtest()`/`run_walk_forward()`
-already produced and asks a narrower, honest question: "how much does the
-RESULT (final equity, max drawdown, ruin risk) depend on the particular
-ORDER those trades happened to occur in?" Each simulation is a random
-permutation of the SAME multiset of realized P/Ls (never resampled WITH
-replacement, which would fabricate trade counts/outcomes that never
-happened) replayed as a fresh equity curve.
+This does NOT simulate new market data or new trade outcomes. It takes
+the REALIZED trade P/L sequence of a completed run and replays random
+permutations of that SAME multiset (never resampled WITH replacement,
+which would fabricate trade counts/outcomes that never happened), asking
+one narrow question: how much do PATH-dependent quantities -- maximum
+drawdown and the chance of touching a ruin threshold -- depend on the
+order the trades happened to occur in?
+
+It says nothing about outcome uncertainty. Terminal equity is a sum, so
+it is identical in every permutation; it is reported as a single number
+(`terminal_equity`), never as a distribution that would look like a
+spread of possible results.
 
 Deterministic given the same `seed` -- a documented, reproducible `random.
-Random(seed)` instance, never hidden global RNG state, so re-running with
-the same seed always reproduces the exact same distribution.
+Random(seed)` instance, never hidden global RNG state.
 """
 
 from __future__ import annotations
 
 import random
 
-from adaptive_scalper.backtest.types import DistributionStats, MonteCarloResult, SimulatedTrade
+from adaptive_scalper.backtest.types import TRADE_ORDER_PATH_STRESS, DistributionStats, PathStressResult, SimulatedTrade
 
 
 def _percentile(sorted_values: list[float], pct: float) -> float:
@@ -40,14 +43,14 @@ def _distribution_stats(values: list[float]) -> DistributionStats:
     )
 
 
-def run_monte_carlo(
+def run_trade_order_path_stress(
     trades: tuple[SimulatedTrade, ...],
     *,
     initial_equity: float,
     n_simulations: int = 1000,
     seed: int,
     ruin_equity_fraction: float = 0.5,
-) -> MonteCarloResult:
+) -> PathStressResult:
     if initial_equity <= 0:
         raise ValueError(f"initial_equity must be positive, got {initial_equity!r}")
     if n_simulations < 1:
@@ -57,19 +60,16 @@ def run_monte_carlo(
 
     pnls = [t.realized_pnl for t in trades if t.is_closed and t.realized_pnl is not None]
     if not pnls:
-        raise ValueError("run_monte_carlo() requires at least one closed trade with a realized P/L")
+        raise ValueError("path stress requires at least one closed trade with a realized P/L")
 
     rng = random.Random(seed)
     ruin_threshold = initial_equity * ruin_equity_fraction
-
-    final_equities: list[float] = []
     max_drawdowns: list[float] = []
     ruin_count = 0
 
     for _ in range(n_simulations):
         order = pnls[:]
         rng.shuffle(order)
-
         equity = initial_equity
         peak_equity = equity
         max_drawdown = 0.0
@@ -80,14 +80,13 @@ def run_monte_carlo(
             max_drawdown = max(max_drawdown, peak_equity - equity)
             if equity <= ruin_threshold:
                 ruined = True
-
-        final_equities.append(equity)
         max_drawdowns.append(max_drawdown)
         if ruined:
             ruin_count += 1
 
-    return MonteCarloResult(
-        n_simulations=n_simulations, seed=seed, initial_equity=initial_equity,
-        final_equity=_distribution_stats(final_equities), max_drawdown=_distribution_stats(max_drawdowns),
+    return PathStressResult(
+        method=TRADE_ORDER_PATH_STRESS, n_simulations=n_simulations, seed=seed, initial_equity=initial_equity,
+        terminal_equity=initial_equity + sum(pnls), max_drawdown=_distribution_stats(max_drawdowns),
         probability_of_ruin=ruin_count / n_simulations, ruin_equity_fraction=ruin_equity_fraction,
+        trade_count=len(pnls),
     )

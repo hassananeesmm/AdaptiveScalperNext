@@ -51,6 +51,10 @@ def run_untouched_oos(
     allow_oos_reuse: bool = False,
     now_utc: int | None = None,
 ) -> BacktestResult:
+    """`allow_oos_reuse=True` is an explicit, recorded exception for
+    ANALYSIS ONLY: the run is logged as `OOS_ANALYSIS_REUSE` in the usage
+    ledger, never as a second untouched OOS, and it still refuses any
+    overlap with TRAINING/VALIDATION/WALK_FORWARD_FOLD data."""
     now = now_utc if now_utc is not None else int(time.time())
     strategies = tuple(s.key for s in build_active_registry().all_active())
 
@@ -70,12 +74,15 @@ def run_untouched_oos(
             first = hits[0]
             raise DatasetContaminatedError(
                 f"requested OOS range {snapshot.range_start_utc}..{snapshot.range_end_utc} overlaps dataset "
-                f"{first['dataset_id']!r} ({first['resolution']}, {first['range_start_utc']}.."
-                f"{first['range_end_utc']}) already used for {used_for} by run {first['used_by_run_id']!r} -- "
+                f"{first['dataset_id']!r} ({first['resolution']}, origin={first['origin']}, "
+                f"{first['range_start_utc']}..{first['range_end_utc']}) already used for {used_for} by run "
+                f"{first['used_by_run_id']!r} -- "
                 "it can no longer serve as untouched OOS evidence"
             )
     if not allow_oos_reuse:
-        hits = overlapping("OOS")
+        # An analysis-only reuse run has LOOKED at the range too, so it
+        # spends it exactly like an OOS run would.
+        hits = overlapping("OOS") + overlapping("OOS_ANALYSIS_REUSE")
         if hits:
             raise DatasetContaminatedError(
                 f"requested OOS range overlaps dataset {hits[0]['dataset_id']!r}, which was already run as OOS "
@@ -85,7 +92,8 @@ def run_untouched_oos(
 
     result = run_backtest(bars, canonical_symbol, resolution, symbol_spec, config=config, now_utc=now)
     record_backtest_run(
-        conn, result, bars, run_id=run_id, run_type="OOS", used_for="OOS",
+        conn, result, bars, run_id=run_id, run_type="OOS",
+        used_for="OOS_ANALYSIS_REUSE" if allow_oos_reuse else "OOS",
         strategies=strategies, feature_schema_version=1, now_utc=now,
     )
     return result

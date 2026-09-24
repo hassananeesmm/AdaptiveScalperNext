@@ -98,31 +98,12 @@ delete) once fixed, with the fixing commit/date noted.
    semantic instead); flag for a real design once/if a netting-mode
    account is ever connected.
 
-10. [SEVERITY: MEDIUM, SUBSYSTEM: paper] `paper/engine.run_paper_cycle()`
-   treats EVERY supplied bar as new on a session's first-ever cycle. A
-   caller that seeds a fresh session with deep history gets that history
-   replayed as trades labeled `PAPER_LIVE_DATA` (directive section 82
-   evidence-class mixing). The runtime orchestrator (next checkpoint)
-   must seed a new session with only a trailing `feature_lookback+1`-bar
-   context window, or `run_paper_cycle()` must gain an explicit
-   "start from now" cursor. Not reachable today: nothing calls it yet.
-
 11. [SEVERITY: LOW, SUBSYSTEM: backtest] `backtest/oos.run_untouched_oos()`
    checks the usage ledger, runs, THEN records its own usage, in
    separate transactions. Two concurrent OOS runs over overlapping
    ranges could both pass the check. Single-process research use only
    today; wrap check+record in one `BEGIN IMMEDIATE` if OOS runs ever
    become concurrent.
-
-12. [SEVERITY: LOW, SUBSYSTEM: tooling/tests] `tests/test_guardrails.py::
-   test_outside_project_root` asserts Windows path semantics
-   (`C:\Windows\...` is outside `C:\AdaptiveScalperNext`) and fails when
-   pytest runs on Linux (the cloud runner), because `os.path` there
-   doesn't parse drive letters. The guardrail hook only ever runs on the
-   Windows laptop, where the test passes. Not a trading-logic defect;
-   fix is to use `ntpath` explicitly in `.claude/hooks/guardrails.py` or
-   mark the test Windows-only -- left for the owner's decision since the
-   hook is the project's own PreToolUse safety gate.
 
 13. [SEVERITY: LOW, SUBSYSTEM: backtest] `holding_seconds` in the
    backtest/PAPER review is `bar.time - entry_time_utc` (bar OPEN times),
@@ -133,6 +114,43 @@ delete) once fixed, with the fixing commit/date noted.
    checkpoint to keep that change reviewable.
 
 ## Fixed
+
+- ~~[SEVERITY: MEDIUM, SUBSYSTEM: paper] (was open item 10)
+  `run_paper_cycle()` treated EVERY supplied bar as new on a session's
+  first cycle, so seeding a fresh session with deep history replayed it
+  as trades labeled `PAPER_LIVE_DATA` (evidence-class mixing, directive
+  section 82).~~ Fixed 2026-09-24 (Checkpoint A): PAPER starts NOW -- a
+  new session decides only the most recent supplied bar; earlier bars
+  are feature context. Regression:
+  `test_simulation_phase0.py::test_a_new_paper_session_decides_only_the_most_recent_bar`.
+  Existing PAPER tests that relied on a first-cycle replay now seed the
+  session at the first decidable bar (same assertions, same reference
+  comparisons).
+
+- ~~[SEVERITY: LOW, SUBSYSTEM: tooling] (was open item 12)
+  `.claude/hooks/guardrails.py::is_outside_project_root()` used
+  `Path(path).is_absolute()`, which is False for a `C:\` path on a
+  non-Windows host, so every Windows absolute path was reported as
+  INSIDE the project there; it also used a bare `startswith`, so
+  `C:\AdaptiveScalperNextOther\...` counted as inside
+  `C:\AdaptiveScalperNext`.~~ Fixed 2026-09-24: drive-letter paths are
+  absolute on any host (`PureWindowsPath`), and containment requires a
+  separator boundary -- strictly stricter everywhere. The e2e hook tests
+  now declare the Windows root they test against via
+  `CLAUDE_PROJECT_DIR` (they had only passed on Linux because of the
+  bug). Both copies (`hooks/`, `hookify-templates/`) kept identical.
+
+- ~~[SEVERITY: HIGH, SUBSYSTEM: backtest/paper] Checkpoint A
+  (2026-09-24): a pending entry filled at the next bar's open without
+  re-checking anything; simulation never enforced the daily-loss,
+  drawdown, max-positions or portfolio ceilings; PAPER sessions could be
+  resumed under a different configuration; costs had no per-component
+  breakdown or provenance label (unverified zero costs looked like known
+  zero costs); "Monte Carlo" reported a degenerate terminal-equity
+  distribution; the fixed-config fold evaluator was called
+  walk-forward.~~ Fixed -- see PROJECT_STATUS.md backtest/PAPER
+  sections and WORKLOG.md. Regression suite:
+  `tests/test_simulation_phase0.py` (35 tests).
 
 - ~~[SEVERITY: HIGH, SUBSYSTEM: backtest/paper] Six PAPER/backtest
   correctness defects in `backtest/engine.py`, `paper/`, and

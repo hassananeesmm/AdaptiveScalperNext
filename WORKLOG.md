@@ -1872,3 +1872,47 @@ of the Windows-path guardrail test; holding_seconds one bar short).
 Full suite: 1138 passed, 7 skipped (live MT5 only), 1 failed (pre-
 existing Windows-path guardrail test, unchanged). No secrets,
 credentials, runtime DB, logs or model artifacts staged.
+
+## Session: Checkpoint A -- Phase 0 simulation hardening (2026-09-24, cloud)
+
+New directive ("FINAL COMPLETION, SAFETY HARDENING, CLOUD
+IMPLEMENTATION...") received. Inspected git/PR state first: working tree
+clean, `main` still 8e67f77, PR #1 (checkpoint 1, 856aa04) open. The
+cloud session may only push `claude/pensive-newton-tckoid`, so every
+further checkpoint lands there as its own commit and updates PR #1.
+
+Phase 0 items already fixed in checkpoint 1 were re-proven by test
+(0.1 pending entry, 0.2 one-new-bar, 0.3 causal exits, 0.4 entry-bar
+SL/TP, 0.5 peak R); the rest implemented now:
+
+- 0.7 deferred-entry revalidation and 0.8 historical risk halts
+  (`backtest/engine.py::_revalidate_and_open`, `_risk_halt_reason`,
+  `RiskState`, `BacktestConfig.risk_limits`/`max_entry_fill_delay_seconds`,
+  `external_open_positions`/`correlation_matrix` for multi-symbol PAPER).
+- 0.3/0.6/0.13 causal fill references, per-component costs, provenance
+  (`SimulatedTrade` fields, `FILL_MODEL_VERSION`, `FillAssumptions.provenance`,
+  `entry_evidence`), persisted via migration 0020 for both
+  `backtest_trades` and `paper_trades`.
+- 0.5 `peak_r_time_utc`/`last_current_r` on the resumable position.
+- 0.9 OOS: provenance in contamination errors, boundary tests (exact,
+  partial, nested, one shared bar both sides, adjacent both sides,
+  different symbol/resolution/provenance), `OOS_ANALYSIS_REUSE` purpose
+  that also spends a range (closed a loophole where an analysis run on a
+  fresh range would not have counted as having looked at it).
+- 0.10 `SEQUENTIAL_FIXED_CONFIG_EVALUATION` label; 0.11 Monte Carlo ->
+  `path_stress.run_trade_order_path_stress()` (git mv, tests renamed
+  and updated: terminal equity reported once).
+- 0.12 PAPER config fingerprint (`backtest/fingerprint.py`), fail-closed
+  `PaperSessionConfigMismatchError`; legacy session without history is
+  bound, with history is refused.
+- BUG_BACKLOG #10 fixed: PAPER starts now (first cycle decides only the
+  latest bar). Five existing PAPER tests seeded accordingly; their
+  assertions are unchanged.
+- BUG_BACKLOG #12 fixed: guardrails `is_outside_project_root()`
+  Windows-path/prefix bug (stricter everywhere); e2e hook tests pin
+  `CLAUDE_PROJECT_DIR`.
+
+New tests: `tests/test_simulation_phase0.py` (35), shared helpers
+`tests/sim_helpers.py`, `chunk=1` added to the incremental-equivalence
+property test. `python -m compileall adaptive_scalper`: OK. Full suite
+(Linux, Python 3.13): 1177 passed, 7 skipped (live MT5 only), 0 failed.

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
+from adaptive_scalper.risk.governor import RiskLimits
 from adaptive_scalper.simulation.fill_model import FillAssumptions
 from adaptive_scalper.simulation.types import EvidenceOrigin
 
@@ -13,6 +14,28 @@ from adaptive_scalper.simulation.types import EvidenceOrigin
 # silently diverging from position_management.adaptive_exit's own
 # defaults (which this module reuses directly rather than redeclaring).
 DEFAULT_RISK_PER_TRADE_PCT = 0.25
+
+# Directive section 32's hard ceilings, identical to config.loader.RiskConfig's
+# defaults. A simulation enforces the SAME policy the live gates do: it
+# must stop opening trades exactly where DEMO would be blocked.
+DEFAULT_RISK_LIMITS = RiskLimits(
+    risk_per_trade_pct=0.25, max_total_open_risk_pct=0.75, max_daily_loss_pct=2.00,
+    max_drawdown_pct=5.00, max_open_positions=2, max_positions_per_symbol=1,
+)
+
+# Causal execution references: WHEN, relative to the decision, a simulated
+# fill happened. A decision taken at a bar's close can only ever fill on a
+# LATER bar (NEXT_BAR_OPEN); only standing broker-side orders (SL/TP)
+# trigger inside a bar.
+FILL_NEXT_BAR_OPEN = "NEXT_BAR_OPEN"
+FILL_STOP_TRIGGER = "STOP_TRIGGER"
+FILL_TARGET_TRIGGER = "TARGET_TRIGGER"
+FILL_RANGE_END_CLOSE = "RANGE_END_CLOSE"
+
+# Advisory evidence the backtest/PAPER engine never consults. Recorded
+# explicitly so provenance never implies an ML/RAG/OKF input that wasn't
+# there.
+NOT_CONSULTED = "NOT_CONSULTED"
 
 
 @dataclass(frozen=True)
@@ -32,14 +55,27 @@ class BacktestConfig:
     # point-in-time news-block windows; otherwise the honest limitation
     # is recorded in the result rather than silently ignored.
     news_windows: tuple[tuple[int, int], ...] = ()
+    risk_limits: RiskLimits = DEFAULT_RISK_LIMITS
+    # A signal decided at a bar's close is only valid for the bar that
+    # immediately follows. If the next bar opens later than this (weekend,
+    # session break, data gap), the pending entry is dropped as stale.
+    # None = two bars of the run's resolution.
+    max_entry_fill_delay_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if self.initial_equity <= 0:
             raise ValueError(f"initial_equity must be positive, got {self.initial_equity!r}")
         if self.risk_per_trade_pct <= 0:
             raise ValueError(f"risk_per_trade_pct must be positive, got {self.risk_per_trade_pct!r}")
+        if self.risk_per_trade_pct > self.risk_limits.risk_per_trade_pct:
+            raise ValueError(
+                f"risk_per_trade_pct {self.risk_per_trade_pct} exceeds the hard ceiling "
+                f"{self.risk_limits.risk_per_trade_pct} -- no research config may override it"
+            )
         if self.feature_lookback < 2:
             raise ValueError(f"feature_lookback must be >= 2, got {self.feature_lookback!r}")
+        if self.max_entry_fill_delay_seconds is not None and self.max_entry_fill_delay_seconds <= 0:
+            raise ValueError("max_entry_fill_delay_seconds must be positive when set")
 
 
 @dataclass(frozen=True)
@@ -56,8 +92,8 @@ class SimulatedTrade:
     exit_reason: str | None = None
     exit_regime: str | None = None
     realized_r: float | None = None
-    realized_pnl: float | None = None
-    total_cost: float = 0.0
+    realized_pnl: float | None = None      # NET: execution-price P/L minus commission, swap and fee
+    total_cost: float = 0.0                # every friction component below, summed
     # The CAUSAL feature vector the strategy actually used to decide this
     # entry (directive section 64: entry model training input) -- captured
     # from the SAME bar-close features `select_proposal()` was fed, never
@@ -68,6 +104,31 @@ class SimulatedTrade:
     # N/A, never a fabricated number.
     entry_features: dict[str, float | None] | None = None
     entry_raw_confidence: float | None = None
+    # Provenance and causal timing (directive section 82). Timestamps name
+    # the bar whose CLOSE produced the decision.
+    strategy_version: int | None = None
+    signal_time_utc: int | None = None
+    entry_fill_reference: str | None = None
+    exit_fill_reference: str | None = None
+    exit_decision_time_utc: int | None = None
+    # Money, account currency. Spread/slippage are measured against mid
+    # and are already inside entry_price/exit_price; commission/swap/fee
+    # are deducted separately. gross_pnl = realized_pnl + total_cost =
+    # mid-to-mid P/L.
+    entry_spread_cost: float = 0.0
+    entry_slippage_cost: float = 0.0
+    exit_spread_cost: float = 0.0
+    exit_slippage_cost: float = 0.0
+    commission_cost: float = 0.0
+    swap_cost: float = 0.0
+    fee_cost: float = 0.0
+    gross_pnl: float | None = None
+    peak_r: float | None = None
+    origin: EvidenceOrigin = EvidenceOrigin.BACKTEST
+    fill_model_version: str | None = None
+    cost_provenance: str | None = None
+    config_fingerprint: str | None = None
+    entry_evidence: dict | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -103,6 +164,18 @@ class RegimeTrackerState:
 
 
 @dataclass(frozen=True)
+class RiskState:
+    """What the daily-loss and drawdown ceilings need across calls: the
+    highest equity ever reached, and the realized P/L of the current UTC
+    day. Resumed by PAPER exactly like the regime tracker -- a restart
+    must not forget today's losses or the drawdown peak."""
+
+    peak_equity: float
+    day_utc: int                 # epoch_seconds // 86400 of the current UTC day
+    day_realized_pnl: float
+
+
+@dataclass(frozen=True)
 class OpenPositionState:
     """Resumable still-open-trade state (directive section 132: PAPER
     mode is an ONGOING process, not a bounded historical range, so a
@@ -135,13 +208,24 @@ class OpenPositionState:
     # A FULL_CLOSE decided at the last processed bar's close; it fills at
     # the NEXT bar's open, which may belong to the next PAPER cycle.
     pending_exit_reason: str | None = None
+    pending_exit_decision_time_utc: int | None = None
+    peak_r_time_utc: int | None = None
+    last_current_r: float | None = None
+    strategy_version: int | None = None
+    signal_time_utc: int | None = None
+    entry_spread_cost: float = 0.0
+    entry_slippage_cost: float = 0.0
+    entry_evidence: dict | None = None
 
 
 @dataclass(frozen=True)
 class PendingEntryState:
     """A selected entry signal decided at a bar's close that has not yet
     filled -- its earliest causal fill is the NEXT bar's open, which may
-    arrive in the next PAPER cycle."""
+    arrive in the next PAPER cycle. Carries everything needed to
+    RE-VALIDATE it immediately before that fill (news, cost, expected
+    edge, risk) rather than treating the old decision as a permanent
+    authorization."""
 
     strategy_key: str
     direction: str
@@ -151,6 +235,34 @@ class PendingEntryState:
     raw_confidence: float
     signal_time_utc: int
     entry_features: dict[str, float | None] | None = None
+    strategy_version: int | None = None
+    canonical_symbol: str | None = None
+    entry_method: str | None = None
+    expected_duration_seconds: int | None = None
+    estimated_cost_price: float | None = None
+    expected_net_edge_price: float | None = None
+    fingerprint: str | None = None
+
+
+# Reasons a pending entry was dropped at fill time instead of filling.
+REJECT_STALE_SIGNAL = "STALE_SIGNAL"
+REJECT_NEWS = "BLOCK_NEWS"
+REJECT_COST = "BLOCK_COST"
+REJECT_EXPECTED_EDGE = "BLOCK_EXPECTED_EDGE"
+REJECT_SIZING = "BLOCK_RISK_SIZING"
+REJECT_RISK = "BLOCK_RISK"
+REJECT_PORTFOLIO_RISK = "BLOCK_PORTFOLIO_RISK"
+REJECT_CORRELATION = "BLOCK_CORRELATION"
+
+
+@dataclass(frozen=True)
+class EntryRejection:
+    signal_time_utc: int
+    attempted_fill_time_utc: int
+    strategy_key: str
+    direction: str
+    reason_code: str
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -176,6 +288,14 @@ class BacktestResult:
     # Set only when `force_close_at_range_end=False` and a signal was
     # selected on the final bar -- pass back as `resume_pending_entry`.
     pending_entry: PendingEntryState | None = None
+    entry_rejections: tuple[EntryRejection, ...] = ()
+    # Always populated; pass back as `resume_risk_state`.
+    final_risk_state: RiskState | None = None
+    # Scans skipped because a daily-loss or drawdown ceiling was reached.
+    risk_halted_scans: int = 0
+    config_fingerprint: str | None = None
+    fill_model_version: str | None = None
+    cost_provenance: str | None = None
 
 
 @dataclass(frozen=True)
@@ -184,6 +304,13 @@ class WalkForwardFold:
     range_start_utc: int
     range_end_utc: int
     result: BacktestResult
+
+
+# `run_walk_forward()` evaluates ONE fixed configuration across sequential
+# time folds -- nothing is re-fit between folds. That is a stability check,
+# not ML walk-forward validation (train -> purge -> validate -> retrain),
+# which lives in `learning/model_walk_forward.py`.
+SEQUENTIAL_FIXED_CONFIG_EVALUATION = "SEQUENTIAL_FIXED_CONFIG_EVALUATION"
 
 
 @dataclass(frozen=True)
@@ -195,6 +322,7 @@ class WalkForwardResult:
     # hold up walking forward through time", not just one lucky window.
     aggregate_metrics: BacktestMetrics
     embargo_bars: int
+    evaluation_kind: str = SEQUENTIAL_FIXED_CONFIG_EVALUATION
 
 
 @dataclass(frozen=True)
@@ -207,12 +335,22 @@ class DistributionStats:
     maximum: float
 
 
+TRADE_ORDER_PATH_STRESS = "TRADE_ORDER_PATH_STRESS"
+
+
 @dataclass(frozen=True)
-class MonteCarloResult:
+class PathStressResult:
+    """Trade-order path stress: the SAME realized P/Ls replayed in random
+    orders. Terminal equity is identical in every permutation (a sum does
+    not depend on order), so it is reported as one number, never as a
+    distribution; only path-dependent quantities (drawdown, ruin) vary."""
+
+    method: str
     n_simulations: int
     seed: int
     initial_equity: float
-    final_equity: DistributionStats
+    terminal_equity: float
     max_drawdown: DistributionStats
     probability_of_ruin: float
     ruin_equity_fraction: float
+    trade_count: int

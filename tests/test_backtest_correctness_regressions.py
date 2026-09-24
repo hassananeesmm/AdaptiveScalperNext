@@ -140,6 +140,13 @@ def db(tmp_path):
     conn.close()
 
 
+def _seed(db, bars, config, **kwargs):
+    """PAPER starts now: a new session decides only its most recent bar,
+    so seed it at the first decidable bar to match a continuous run."""
+    return run_paper_cycle(db, bars[:config.feature_lookback + 2], SYMBOL, RES, _spec(), config=config,
+                           now_utc=START, **kwargs)
+
+
 def _only_trade(result):
     assert len(result.trades) == 1, result.trades
     return result.trades[0]
@@ -268,6 +275,7 @@ def test_peak_r_survives_a_paper_cycle_boundary(script, db):
     script()
     bars = _bars(overrides=_PEAK_BARS)
     config = _config(adaptive_exit_params=_GIVEBACK_EXIT)
+    _seed(db, bars, config)
     run_paper_cycle(db, bars[:33], SYMBOL, RES, _spec(), config=config, now_utc=START)
     assert get_session(db, f"PAPER:{SYMBOL}:{RES}").open_position.peak_r == pytest.approx(0.80)
 
@@ -336,6 +344,7 @@ def test_paper_pending_entry_survives_the_cycle_boundary(script, db):
     # a signal on a cycle's last bar never traded at all.
     script()
     bars = _bars()
+    _seed(db, bars, _config())
     first = run_paper_cycle(db, bars[:FIRE_INDEX + 1], SYMBOL, RES, _spec(), config=_config(), now_utc=START)
     assert first.ran and first.new_trades == () and first.open_position is None
     assert get_session(db, first.session_key).pending_entry is not None
@@ -351,6 +360,7 @@ def test_paper_pending_exit_survives_the_cycle_boundary(script, db):
     # first new bar (34) open -- not be forgotten, not fill retroactively.
     script(invalidate_index=33)
     bars = _bars(overrides={34: (2001.0, 2001.01, 2000.99, 2001.0)})
+    _seed(db, bars, _config())
     first = run_paper_cycle(db, bars[:34], SYMBOL, RES, _spec(), config=_config(), now_utc=START)
     assert first.open_position is not None
     assert first.open_position.pending_exit_reason is not None
@@ -541,7 +551,7 @@ def _trade_key(t):
 
 
 @pytest.mark.parametrize("seed", [11, 12, 13])
-@pytest.mark.parametrize("chunk", [2, 3, 7, 25])
+@pytest.mark.parametrize("chunk", [1, 2, 3, 7, 25])
 def test_incremental_paper_cycles_match_a_single_continuous_run(db, seed, chunk):
     bars = _random_walk_bars(500, seed=seed)
     config = BacktestConfig(fill_assumptions=FillAssumptions(slippage_price=0.02, commission_monetary_per_lot=7.0))
@@ -549,7 +559,7 @@ def test_incremental_paper_cycles_match_a_single_continuous_run(db, seed, chunk)
     assert len(reference.trades) >= 3  # the property is vacuous without real trading activity
 
     key = f"prop:{seed}:{chunk}"
-    cutoff = config.feature_lookback + 3
+    cutoff = config.feature_lookback + 2  # PAPER starts now: first decidable bar, same as the reference
     last = None
     while True:
         last = run_paper_cycle(db, bars[:cutoff], SYMBOL, RES, _spec(), config=config, session_key=key, now_utc=START)
@@ -602,6 +612,7 @@ def test_open_position_json_persisted_before_this_fix_still_loads(db, script):
     import json
 
     script()
+    _seed(db, _bars(), _config())
     run_paper_cycle(db, _bars()[:FIRE_INDEX + 3], SYMBOL, RES, _spec(), config=_config(), now_utc=START)
     key = f"PAPER:{SYMBOL}:{RES}"
     raw = json.loads(db.execute("SELECT open_position_json FROM paper_session_state WHERE session_key = ?", (key,)).fetchone()[0])

@@ -27,22 +27,44 @@ from adaptive_scalper.costs.model import price_equivalent_of_monetary_cost
 from adaptive_scalper.gateway.types import Bar
 
 
+# Bumped whenever a fill/cost convention changes, so persisted simulated
+# trades always say which convention produced them. v2: next-bar-open
+# exits, entry-bar SL/TP, bid/ask triggers, gap-through stops, costs
+# charged once with a per-component breakdown.
+FILL_MODEL_VERSION = "fill_model/v2"
+
+# Where the cost numbers in a FillAssumptions came from. A result is only
+# as trustworthy as its least-verified cost, and every result reports it.
+COST_UNVERIFIED_ASSUMPTION = "UNVERIFIED_ASSUMPTION"
+COST_EXPLICIT_TEST_FIXTURE = "EXPLICIT_TEST_FIXTURE"
+COST_BROKER_SPEC_ESTIMATE = "BROKER_SPEC_ESTIMATE"
+COST_BROKER_DEMO_CONFIRMED = "BROKER_DEMO_CONFIRMED"
+COST_PROVENANCES = frozenset({
+    COST_UNVERIFIED_ASSUMPTION, COST_EXPLICIT_TEST_FIXTURE, COST_BROKER_SPEC_ESTIMATE, COST_BROKER_DEMO_CONFIRMED,
+})
+
+
 @dataclass(frozen=True)
 class FillAssumptions:
     """Every field is a REQUIRED, explicit assumption (matching
     `costs.model.estimate_cost`'s "no free zero defaults" convention) —
     a caller must consciously choose these, never inherit a silent
     default that could misrepresent simulated results as more favorable
-    than reality."""
+    than reality. `provenance` defaults to UNVERIFIED_ASSUMPTION: numbers
+    nobody has checked against the broker are labeled as such in every
+    result, never presented as known costs."""
 
     slippage_price: float               # adverse price movement applied on every fill, PRICE units
     commission_monetary_per_lot: float  # flat monetary commission per lot, ROUND TRIP (entry+exit combined)
     swap_monetary_per_lot_per_day: float = 0.0  # only relevant for multi-day holds; 0.0 is a real, assertable fact for a pure scalping horizon
+    provenance: str = COST_UNVERIFIED_ASSUMPTION
 
     def __post_init__(self) -> None:
         for name in ("slippage_price", "commission_monetary_per_lot", "swap_monetary_per_lot_per_day"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative, got {getattr(self, name)!r}")
+        if self.provenance not in COST_PROVENANCES:
+            raise ValueError(f"provenance must be one of {sorted(COST_PROVENANCES)}, got {self.provenance!r}")
 
 
 @dataclass(frozen=True)

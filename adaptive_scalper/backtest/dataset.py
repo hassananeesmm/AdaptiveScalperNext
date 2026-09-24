@@ -150,12 +150,15 @@ def find_overlapping_usage(
 ) -> list[sqlite3.Row]:
     """Every recorded `used_for` usage of ANY dataset of `canonical_symbol`
     whose time range intersects `[range_start_utc, range_end_utc]`,
-    regardless of resolution or content checksum -- an M1 training range
-    and an M5 "OOS" range over the same calendar period are the same
-    market, and a one-bar-shifted window is not a fresh holdout."""
+    regardless of resolution, data provenance or content checksum -- an M1
+    training range and an M5 "OOS" range over the same calendar period are
+    the same market, a re-downloaded or other-source copy of that period is
+    still the data the design already saw, and a one-bar-shifted window is
+    not a fresh holdout. Ranges are closed intervals: sharing even one bar
+    timestamp is an overlap; a range starting on the next bar is not."""
     return conn.execute(
         """
-        SELECT d.dataset_id, d.resolution, d.range_start_utc, d.range_end_utc, u.used_by_run_id
+        SELECT d.dataset_id, d.resolution, d.origin, d.range_start_utc, d.range_end_utc, u.used_by_run_id
         FROM dataset_usage u JOIN datasets d ON d.dataset_id = u.dataset_id
         WHERE d.canonical_symbol = ? AND u.used_for = ?
           AND d.range_start_utc <= ? AND d.range_end_utc >= ?

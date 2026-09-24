@@ -13,7 +13,9 @@ Reuses the SAME production decision cores this engine's live counterpart
 uses — `strategies.registry`/`selector.select_proposal`,
 `costs.model`/`costs.edge`, `regimes.classifier`,
 `position_management.expectancy`/`adaptive_exit`,
-`risk.governor.calculate_safe_volume` — rather than a separate
+`risk.governor.calculate_safe_volume`/`evaluate_risk_gate`,
+`portfolio.exposure.evaluate_portfolio_risk_gate`,
+`portfolio.correlation.evaluate_correlation_gate` — rather than a separate
 reimplementation, since a backtest that doesn't exercise the real
 decision logic isn't validating the real system (directive: "Do not
 create decorative/showpiece subsystems disconnected from the real
@@ -21,11 +23,12 @@ decision path").
 
 Honest, named scope limits (documented, not silently assumed away):
 
-- Single symbol per run. Cross-symbol correlation/portfolio-heat gating
-  (directive section 35) is not exercised here — it depends on the
-  full multi-symbol runtime loop (still pending; see PROJECT_STATUS.md),
-  and a synchronized multi-symbol backtest is a real, separate design
-  this module does not attempt to fake.
+- Single symbol per run. A caller running several symbols side by side
+  (the PAPER runtime) passes the OTHER symbols' open exposure in as
+  `external_open_positions` (+ a `correlation_matrix`), and every
+  deferred entry is re-checked against the same risk/portfolio/
+  correlation gates DEMO uses. A bounded research backtest has no other
+  symbols and passes nothing.
 - Broker SL/TP intrabar execution uses OHLC bars only, never real tick
   data, so same-bar SL-and-TP-both-in-range is genuinely ambiguous (no
   way to know which was touched first from OHLC alone). This engine
@@ -33,29 +36,41 @@ Honest, named scope limits (documented, not silently assumed away):
   (stop loss) is assumed to have been hit first. Documented, never hidden.
 
 Timing and price conventions (bars are MID prices, `Bar.spread` gives the
-half spread either side):
+half spread either side). Every fill records its causal reference
+(`SimulatedTrade.entry_fill_reference`/`exit_fill_reference`):
 
-- Anything decided at bar `i`'s close -- a new entry OR an adaptive
-  FULL_CLOSE -- fills at bar `i+1`'s open. A decision on the last bar of
-  an incremental call is returned as `pending_entry` /
+- NEXT_BAR_OPEN: anything decided at bar `i`'s close -- a new entry OR an
+  adaptive FULL_CLOSE -- fills at bar `i+1`'s open. A decision on the last
+  bar of an incremental call is returned as `pending_entry` /
   `OpenPositionState.pending_exit_reason` and fills at the next call's
   first new bar.
-- The entry bar is a full bar: after filling at its open, its own
-  high/low are checked against the new stop/target (the whole range
-  printed after the fill), and the position is reviewed at its close.
-- Protective SL/TP trigger on the executable side (bid for a long, ask
-  for a short). A stop is a market order once triggered: it fills at the
-  stop, or at the bar's open if the bar gapped through it, less
-  slippage. A target is a limit order and fills at the target.
+- A pending entry is NOT a permanent authorization. Immediately before
+  it fills it is re-validated against what is knowable at that open:
+  signal staleness (gap since the decision), news window, cost and
+  expected net edge at the fill bar's spread, safe sizing, and the hard
+  risk ceilings (daily loss, drawdown, open positions, total risk,
+  portfolio heat, correlation). A failure drops it and is recorded in
+  `BacktestResult.entry_rejections`.
+- STOP_TRIGGER / TARGET_TRIGGER: protective SL/TP are standing broker
+  orders and trigger inside a bar, including the entry bar (its whole
+  range printed after the open fill). They trigger on the executable side
+  (bid for a long, ask for a short). A stop is a market order once
+  triggered: it fills at the stop, or at the bar's open if the bar
+  gapped through it, less slippage. A target is a limit order and fills
+  at the target.
+- RANGE_END_CLOSE: a bounded run force-closes at the last bar's close.
 - Costs are charged exactly once. `entry_price`/`exit_price` are
   execution prices that already embed spread and slippage; commission
-  and swap (per UTC rollover crossed) are deducted at close.
-  `SimulatedTrade.total_cost` reports every component (entry and exit
-  friction measured against mid, commission, swap), so
-  `realized_pnl + total_cost` is the mid-to-mid P/L.
+  and swap (per UTC rollover crossed) are deducted at close. Every
+  component is reported separately on the trade and `total_cost` is their
+  sum, so `realized_pnl + total_cost` is the mid-to-mid P/L.
 - Open positions are marked to the executable exit side (bid for a
   long), matching MT5's `position.profit`; `peak_r` is the running
   maximum of that current_r starting at 0.0, like the live state store.
+- Daily-loss and drawdown ceilings are enforced exactly as live: once
+  reached, no new entries are scanned or filled (existing positions are
+  still managed). The state survives incremental calls via
+  `resume_risk_state`.
 - Directive section 81 (historical news limitation): if the caller does
   not supply point-in-time `news_windows`, `BacktestResult
   .news_limitation_note` states plainly that no historical news blocking
@@ -65,26 +80,52 @@ half spread either side):
 
 from __future__ import annotations
 
+import hashlib
 import time
-from dataclasses import replace
 
 from adaptive_scalper.backtest.dataset import build_dataset_snapshot
+from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
 from adaptive_scalper.backtest.types import (
+    FILL_NEXT_BAR_OPEN,
+    FILL_RANGE_END_CLOSE,
+    FILL_STOP_TRIGGER,
+    FILL_TARGET_TRIGGER,
+    NOT_CONSULTED,
+    REJECT_CORRELATION,
+    REJECT_COST,
+    REJECT_EXPECTED_EDGE,
+    REJECT_NEWS,
+    REJECT_PORTFOLIO_RISK,
+    REJECT_RISK,
+    REJECT_SIZING,
+    REJECT_STALE_SIGNAL,
     BacktestConfig,
     BacktestMetrics,
     BacktestResult,
+    EntryRejection,
     OpenPositionState,
     PendingEntryState,
     RegimeTrackerState,
+    RiskState,
     SimulatedTrade,
 )
-from adaptive_scalper.costs.edge import BLOCK_COST as _COST_BLOCK
+from adaptive_scalper.costs.edge import ALLOW as _COST_ALLOW
+from adaptive_scalper.costs.edge import BLOCK_EXPECTED_EDGE as _COST_BLOCK_EXPECTED_EDGE
+from adaptive_scalper.costs.edge import evaluate_cost_gate
 from adaptive_scalper.costs.model import estimate_cost
-from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
+from adaptive_scalper.features.bar_features import FEATURE_SCHEMA_VERSION, compute_bar_features, numeric_feature_vector
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
+from adaptive_scalper.history.resolutions import resolution_seconds
+from adaptive_scalper.portfolio.correlation import ALLOW as _CORRELATION_ALLOW
+from adaptive_scalper.portfolio.correlation import CorrelationResult, evaluate_correlation_gate
+from adaptive_scalper.portfolio.exposure import ALLOW as _PORTFOLIO_ALLOW
+from adaptive_scalper.portfolio.exposure import (
+    PositionExposure,
+    evaluate_portfolio_risk_gate,
+    portfolio_risk_limits_from_risk_limits,
+)
 from adaptive_scalper.position_management.adaptive_exit import (
     FULL_CLOSE,
-    HOLD,
     MOVE_PROTECTIVE_STOP,
     compute_current_r,
     evaluate_adaptive_exit,
@@ -92,38 +133,43 @@ from adaptive_scalper.position_management.adaptive_exit import (
 )
 from adaptive_scalper.position_management.expectancy import ExpectancyEvidence, evaluate_position_expectancy
 from adaptive_scalper.regimes.classifier import RegimeTracker, classify_regime
-from adaptive_scalper.risk.governor import calculate_safe_volume
+from adaptive_scalper.risk.governor import ALLOW as _RISK_ALLOW
+from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits, calculate_safe_volume, evaluate_risk_gate
 from adaptive_scalper.selector.selector import select_proposal
 from adaptive_scalper.simulation.fill_model import (
+    FILL_MODEL_VERSION,
     FillAssumptions,
     _spread_price,
     money_from_price_distance,
     round_trip_commission_price,
     simulate_fill,
 )
+from adaptive_scalper.simulation.types import EvidenceOrigin
 from adaptive_scalper.strategies import build_active_registry
 from adaptive_scalper.strategies.base import StrategySignal
 
 STOP_LOSS_HIT = "STOP_LOSS_HIT"
 TAKE_PROFIT_HIT = "TAKE_PROFIT_HIT"
+BACKTEST_RANGE_ENDED = "BACKTEST_RANGE_ENDED"
 NEWS_LIMITATION_NOTE = (
     "no point-in-time historical news calendar was supplied to this run -- "
     "news blocking was NOT applied; results do not reflect any news-driven "
     "entry restriction (directive section 81)"
 )
+_SECONDS_PER_DAY = 86_400
 
 
 class _OpenTrade:
     # `total_cost` here is the entry-side friction only; see OpenPositionState.
-    __slots__ = (
-        "strategy_key", "direction", "entry_time_utc", "entry_price", "volume", "initial_monetary_risk",
-        "entry_regime", "stop_price", "target_price", "initial_stop_distance_price", "total_cost",
-        "entry_features", "entry_raw_confidence", "peak_r", "pending_exit_reason",
-    )
+    __slots__ = tuple(OpenPositionState.__dataclass_fields__)
 
     def __init__(self, **kwargs) -> None:
-        for k, v in kwargs.items():
-            setattr(self, k, v)
+        for name in self.__slots__:
+            setattr(self, name, OpenPositionState.__dataclass_fields__[name].default
+                    if name not in kwargs else kwargs[name])
+
+    def to_state(self) -> OpenPositionState:
+        return OpenPositionState(**{name: getattr(self, name) for name in self.__slots__})
 
 
 def _in_news_window(t: int, windows: tuple[tuple[int, int], ...]) -> bool:
@@ -132,10 +178,11 @@ def _in_news_window(t: int, windows: tuple[tuple[int, int], ...]) -> bool:
 
 def _intrabar_stop_or_target_hit(
     trade: _OpenTrade, bar: Bar, point_size: float, slippage_price: float,
-) -> tuple[str, float, float] | None:
-    """Returns `(reason, exit_price, exit_friction_price)`. Triggers on the
-    executable side of the book; if BOTH stop and target are in range the
-    stop is assumed hit FIRST (worse for the trader, never optimistic)."""
+) -> tuple[str, float, float, float, str] | None:
+    """Returns `(reason, exit_price, exit_spread_price, exit_slippage_price,
+    fill_reference)`. Triggers on the executable side of the book; if BOTH
+    stop and target are in range the stop is assumed hit FIRST (worse for
+    the trader, never optimistic)."""
     half_spread = _spread_price(bar, point_size) / 2.0
     if trade.direction == "BUY":
         stop_hit = bar.low - half_spread <= trade.stop_price
@@ -147,9 +194,9 @@ def _intrabar_stop_or_target_hit(
         stop_fill = max(trade.stop_price, bar.open + half_spread) + slippage_price
 
     if stop_hit:
-        return STOP_LOSS_HIT, stop_fill, half_spread + slippage_price
+        return STOP_LOSS_HIT, stop_fill, half_spread, slippage_price, FILL_STOP_TRIGGER
     if target_hit:
-        return TAKE_PROFIT_HIT, trade.target_price, half_spread
+        return TAKE_PROFIT_HIT, trade.target_price, half_spread, 0.0, FILL_TARGET_TRIGGER
     return None
 
 
@@ -158,16 +205,54 @@ def _mark_price(trade: _OpenTrade, bar: Bar, point_size: float) -> float:
     return bar.close - half_spread if trade.direction == "BUY" else bar.close + half_spread
 
 
+def _pending_fingerprint(canonical_symbol: str, signal: StrategySignal, signal_time_utc: int) -> str:
+    material = "|".join(str(v) for v in (
+        canonical_symbol, signal.strategy_key, signal.strategy_version, signal.direction, signal_time_utc,
+        signal.stop_distance, signal.target_distance, signal.raw_confidence,
+    ))
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
 def _pending_from_signal(
-    signal: StrategySignal, features: dict[str, float | None], signal_time_utc: int,
+    signal: StrategySignal, features: dict[str, float | None], signal_time_utc: int, *,
+    canonical_symbol: str, estimated_cost_price: float | None, expected_net_edge_price: float | None,
 ) -> PendingEntryState:
     return PendingEntryState(
         strategy_key=signal.strategy_key, direction=signal.direction, stop_distance=signal.stop_distance,
         target_distance=signal.target_distance, regime=signal.regime, raw_confidence=signal.raw_confidence,
-        signal_time_utc=signal_time_utc, entry_features=features,
+        signal_time_utc=signal_time_utc, entry_features=features, strategy_version=signal.strategy_version,
+        canonical_symbol=canonical_symbol, entry_method=signal.entry_method,
+        expected_duration_seconds=signal.expected_duration_seconds,
+        estimated_cost_price=estimated_cost_price, expected_net_edge_price=expected_net_edge_price,
+        fingerprint=_pending_fingerprint(canonical_symbol, signal, signal_time_utc),
     )
+
+
+def _signal_from_pending(pending: PendingEntryState, canonical_symbol: str) -> StrategySignal:
+    return StrategySignal(
+        strategy_key=pending.strategy_key, strategy_version=pending.strategy_version or 0,
+        canonical_symbol=pending.canonical_symbol or canonical_symbol, direction=pending.direction,
+        raw_confidence=pending.raw_confidence, stop_distance=pending.stop_distance,
+        target_distance=pending.target_distance, expected_duration_seconds=pending.expected_duration_seconds or 0,
+        entry_method=pending.entry_method or "market", regime=pending.regime,
+        rationale="deferred-entry revalidation", feature_schema_version=FEATURE_SCHEMA_VERSION,
+        data_timestamp=pending.signal_time_utc,
+    )
+
+
+def _risk_halt_reason(risk_state: RiskState, equity: float, limits: RiskLimits) -> str | None:
+    """The daily-loss / drawdown ceilings that stop ALL new entries (not a
+    per-proposal check) -- used to short-circuit scanning, directive
+    section 45. The authoritative per-proposal check is evaluate_risk_gate."""
+    if risk_state.day_realized_pnl < 0 and equity > 0:
+        loss_pct = abs(risk_state.day_realized_pnl) / equity * 100.0
+        if loss_pct >= limits.max_daily_loss_pct:
+            return f"daily loss {loss_pct:.2f}% >= max_daily_loss_pct {limits.max_daily_loss_pct}%"
+    if risk_state.peak_equity > 0:
+        drawdown_pct = max(0.0, (risk_state.peak_equity - equity) / risk_state.peak_equity * 100.0)
+        if drawdown_pct >= limits.max_drawdown_pct:
+            return f"drawdown {drawdown_pct:.2f}% >= max_drawdown_pct {limits.max_drawdown_pct}%"
+    return None
 
 
 def run_backtest(
@@ -181,10 +266,14 @@ def run_backtest(
     resume_open_position: OpenPositionState | None = None,
     resume_pending_entry: PendingEntryState | None = None,
     resume_regime_tracker: RegimeTrackerState | None = None,
+    resume_risk_state: RiskState | None = None,
     force_close_at_range_end: bool = True,
+    origin: EvidenceOrigin = EvidenceOrigin.BACKTEST,
+    external_open_positions: tuple[PositionExposure, ...] = (),
+    correlation_matrix: dict[tuple[str, str], CorrelationResult] | None = None,
 ) -> BacktestResult:
     """`resume_open_position`/`resume_pending_entry`/`resume_regime_tracker`/
-    `force_close_at_range_end=False` are for an
+    `resume_risk_state`/`force_close_at_range_end=False` are for an
     ONGOING incremental caller (PAPER mode, `adaptive_scalper/paper/`) that
     calls this repeatedly as new bars arrive, rather than once over a
     fixed historical range. CONTRACT the caller must uphold: `bars` on a
@@ -209,9 +298,17 @@ def run_backtest(
     now = now_utc if now_utc is not None else int(time.time())
     fills = config.fill_assumptions
     point = symbol_spec.point
+    max_fill_delay = (
+        config.max_entry_fill_delay_seconds if config.max_entry_fill_delay_seconds is not None
+        else 2 * resolution_seconds(resolution)
+    )
 
     registry = build_active_registry()
     active_strategies = registry.all_active()
+    fingerprint, _ = compute_config_fingerprint(
+        config, canonical_symbol=canonical_symbol, resolutions=(resolution,),
+        strategies=tuple((s.key, s.version) for s in active_strategies),
+    )
     if resume_regime_tracker is not None:
         regime_tracker = RegimeTracker(
             min_confirmations=config.regime_min_confirmations, initial_regime=resume_regime_tracker.confirmed,
@@ -222,8 +319,12 @@ def run_backtest(
         regime_tracker = RegimeTracker(min_confirmations=config.regime_min_confirmations)
 
     equity = config.initial_equity
-    peak_equity = equity
+    peak_equity = equity  # this call's own drawdown metric
     max_drawdown = 0.0
+    start_index = config.feature_lookback + 1
+    risk_state = resume_risk_state or RiskState(
+        peak_equity=config.initial_equity, day_utc=bars[start_index].time // _SECONDS_PER_DAY, day_realized_pnl=0.0,
+    )
 
     open_trade: _OpenTrade | None = (
         _OpenTrade(**resume_open_position.__dict__) if resume_open_position is not None else None
@@ -231,32 +332,63 @@ def run_backtest(
     pending_entry: PendingEntryState | None = resume_pending_entry
     trades: list[SimulatedTrade] = []
     equity_curve: list[tuple[int, float]] = []
+    rejections: list[EntryRejection] = []
+    halted_scans = 0
 
-    def close(trade: _OpenTrade, bar_time: int, exit_price: float, reason: str, exit_friction_price: float) -> None:
-        nonlocal equity, peak_equity, max_drawdown
-        trades.append(_close_trade(
+    def close(
+        trade: _OpenTrade, bar_time: int, exit_price: float, reason: str, *,
+        exit_spread_price: float, exit_slippage_price: float, fill_reference: str, decision_time: int,
+    ) -> None:
+        nonlocal equity, peak_equity, max_drawdown, risk_state
+        closed = _close_trade(
             trade, bar_time, exit_price, reason, regime_tracker.confirmed_regime, symbol_spec,
-            exit_friction_price=exit_friction_price, fills=fills,
-        ))
-        equity = _apply_trade_to_equity(equity, trades[-1])
+            exit_spread_price=exit_spread_price, exit_slippage_price=exit_slippage_price, fills=fills,
+            fill_reference=fill_reference, decision_time=decision_time, origin=origin, config_fingerprint=fingerprint,
+        )
+        trades.append(closed)
+        equity = equity + (closed.realized_pnl or 0.0)
         peak_equity = max(peak_equity, equity)
         max_drawdown = max(max_drawdown, peak_equity - equity)
         equity_curve.append((bar_time, equity))
+        risk_state = RiskState(
+            peak_equity=max(risk_state.peak_equity, equity), day_utc=risk_state.day_utc,
+            day_realized_pnl=risk_state.day_realized_pnl + (closed.realized_pnl or 0.0),
+        )
 
-    start_index = config.feature_lookback + 1
+    def reject(pending: PendingEntryState, bar: Bar, code: str, detail: str) -> None:
+        rejections.append(EntryRejection(
+            signal_time_utc=pending.signal_time_utc, attempted_fill_time_utc=bar.time,
+            strategy_key=pending.strategy_key, direction=pending.direction, reason_code=code, detail=detail,
+        ))
 
     for i in range(start_index, len(bars)):
         bar = bars[i]
+        day = bar.time // _SECONDS_PER_DAY
+        if day != risk_state.day_utc:
+            risk_state = RiskState(peak_equity=risk_state.peak_equity, day_utc=day, day_realized_pnl=0.0)
 
         # 1. Fill whatever was decided at the PRIOR bar's close, at THIS
         # bar's open -- the earliest causal fill.
         if open_trade is not None and open_trade.pending_exit_reason is not None:
             fill = simulate_fill(bar, _opposite(open_trade.direction), point, fills)
-            close(open_trade, bar.time, fill.price, open_trade.pending_exit_reason,
-                  fill.spread_cost_price / 2.0 + fill.slippage_cost_price)
+            close(
+                open_trade, bar.time, fill.price, open_trade.pending_exit_reason,
+                exit_spread_price=fill.spread_cost_price / 2.0, exit_slippage_price=fill.slippage_cost_price,
+                fill_reference=FILL_NEXT_BAR_OPEN,
+                decision_time=open_trade.pending_exit_decision_time_utc or bar.time,
+            )
             open_trade = None
         elif pending_entry is not None and open_trade is None:
-            open_trade = _open_trade(pending_entry, bar, equity, symbol_spec, config)
+            outcome = _revalidate_and_open(
+                pending_entry, bar, equity=equity, risk_state=risk_state, symbol_spec=symbol_spec,
+                config=config, canonical_symbol=canonical_symbol, max_fill_delay_seconds=max_fill_delay,
+                external_open_positions=external_open_positions, correlation_matrix=correlation_matrix,
+                config_fingerprint=fingerprint,
+            )
+            if isinstance(outcome, _OpenTrade):
+                open_trade = outcome
+            else:
+                reject(pending_entry, bar, *outcome)
         pending_entry = None
 
         # 2. Compute features/regime causally from bars[0:i+1] only --
@@ -275,15 +407,23 @@ def run_backtest(
         if open_trade is not None:
             intrabar = _intrabar_stop_or_target_hit(open_trade, bar, point, fills.slippage_price)
             if intrabar is not None:
-                reason, exit_price, exit_friction = intrabar
-                close(open_trade, bar.time, exit_price, reason, exit_friction)
+                reason, exit_price, exit_spread, exit_slippage, reference = intrabar
+                close(
+                    open_trade, bar.time, exit_price, reason, exit_spread_price=exit_spread,
+                    exit_slippage_price=exit_slippage, fill_reference=reference, decision_time=bar.time,
+                )
                 open_trade = None
             else:
                 _review_open_trade(open_trade, bar, features, confirmed_regime, active_strategies, symbol_spec, config)
 
-        # 4. Scan for a new entry only when flat, and only outside any
-        # supplied news-block window. A selection fills at the next open.
+        # 4. Scan for a new entry only when flat, outside any supplied
+        # news-block window, and while no daily-loss/drawdown ceiling is
+        # reached (directive section 45: a globally blocked state does not
+        # keep evaluating strategies). A selection fills at the next open.
         if open_trade is None and not _in_news_window(bar.time, config.news_windows):
+            if _risk_halt_reason(risk_state, equity, config.risk_limits) is not None:
+                halted_scans += 1
+                continue
             candidates = []
             regime_obj = raw_regime.__class__(confirmed_regime, raw_regime.confidence, raw_regime.version, raw_regime.reason)
             for strategy in active_strategies:
@@ -297,7 +437,15 @@ def run_backtest(
                     min_net_edge_price=config.min_net_edge_price, min_raw_confidence=config.min_raw_confidence,
                 )
                 if selection.selected is not None:
-                    pending_entry = _pending_from_signal(selection.selected, numeric_feature_vector(features), bar.time)
+                    net_edge = next(
+                        (e.expected_net_edge for e in selection.candidates if e.signal is selection.selected), None,
+                    )
+                    pending_entry = _pending_from_signal(
+                        selection.selected, numeric_feature_vector(features), bar.time,
+                        canonical_symbol=canonical_symbol,
+                        estimated_cost_price=cost.total_cost if cost is not None else None,
+                        expected_net_edge_price=net_edge,
+                    )
 
     # Force-close any still-open trade at the final bar's close so
     # metrics are never computed over an artificially-truncated position
@@ -310,55 +458,131 @@ def run_backtest(
         if force_close_at_range_end:
             last_bar = bars[-1]
             fill = simulate_fill(last_bar, _opposite(open_trade.direction), point, fills, at="close")
-            close(open_trade, last_bar.time, fill.price, "BACKTEST_RANGE_ENDED",
-                  fill.spread_cost_price / 2.0 + fill.slippage_cost_price)
+            close(
+                open_trade, last_bar.time, fill.price, BACKTEST_RANGE_ENDED,
+                exit_spread_price=fill.spread_cost_price / 2.0, exit_slippage_price=fill.slippage_cost_price,
+                fill_reference=FILL_RANGE_END_CLOSE, decision_time=last_bar.time,
+            )
         else:
-            open_position_state = OpenPositionState(**{
-                name: getattr(open_trade, name) for name in _OpenTrade.__slots__
-            })
+            open_position_state = open_trade.to_state()
 
     metrics = _compute_metrics(trades, config.initial_equity, equity, max_drawdown)
     dataset = build_dataset_snapshot(
         bars, canonical_symbol=canonical_symbol, resolution=resolution,
-        strategies=tuple(s.key for s in active_strategies), feature_schema_version=1, now_utc=now,
+        strategies=tuple(s.key for s in active_strategies), feature_schema_version=FEATURE_SCHEMA_VERSION, now_utc=now,
     )
 
     final_confirmed, final_candidate, final_candidate_count = regime_tracker.state
     return BacktestResult(
         canonical_symbol=canonical_symbol, resolution=resolution, dataset_id=dataset.dataset_id,
         range_start_utc=bars[0].time, range_end_utc=bars[-1].time, trades=tuple(trades), metrics=metrics,
-        equity_curve=tuple(equity_curve),
+        equity_curve=tuple(equity_curve), origin=origin,
         news_limitation_note=None if config.news_windows else NEWS_LIMITATION_NOTE,
         config=config, open_position=open_position_state,
         final_regime_tracker_state=RegimeTrackerState(final_confirmed, final_candidate, final_candidate_count),
         pending_entry=None if force_close_at_range_end else pending_entry,
+        entry_rejections=tuple(rejections), final_risk_state=risk_state, risk_halted_scans=halted_scans,
+        config_fingerprint=fingerprint, fill_model_version=FILL_MODEL_VERSION, cost_provenance=fills.provenance,
     )
 
 
-def _open_trade(
-    pending: PendingEntryState, bar: Bar, equity: float, symbol_spec: SymbolSpec, config: BacktestConfig,
-) -> _OpenTrade | None:
-    fill = simulate_fill(bar, pending.direction, symbol_spec.point, config.fill_assumptions)
+def _revalidate_and_open(
+    pending: PendingEntryState, bar: Bar, *, equity: float, risk_state: RiskState, symbol_spec: SymbolSpec,
+    config: BacktestConfig, canonical_symbol: str, max_fill_delay_seconds: int,
+    external_open_positions: tuple[PositionExposure, ...],
+    correlation_matrix: dict[tuple[str, str], CorrelationResult] | None, config_fingerprint: str,
+) -> _OpenTrade | tuple[str, str]:
+    """Re-checks a pending entry against everything knowable at the fill
+    bar's open (directive 0.7/0.8) and opens it, or returns
+    `(reason_code, detail)`. Uses the same pure gates as DEMO final
+    permission for every dimension that needs no broker call."""
+    delay = bar.time - pending.signal_time_utc
+    if delay > max_fill_delay_seconds:
+        return REJECT_STALE_SIGNAL, f"next bar opened {delay}s after the decision (max {max_fill_delay_seconds}s)"
+    if _in_news_window(bar.time, config.news_windows):
+        return REJECT_NEWS, "fill bar is inside a supplied news-block window"
+
+    signal = _signal_from_pending(pending, canonical_symbol)
+    cost = _estimate_cost(bar, symbol_spec, config)
+    cost_decision, edge_eval = evaluate_cost_gate(signal, cost, config.min_net_edge_price)
+    if cost_decision != _COST_ALLOW:
+        code = REJECT_EXPECTED_EDGE if cost_decision == _COST_BLOCK_EXPECTED_EDGE else REJECT_COST
+        return code, edge_eval.reason if edge_eval is not None else "cost unknown at fill"
+
     safe_volume = calculate_safe_volume(
         equity=equity, risk_per_trade_pct=config.risk_per_trade_pct,
         stop_distance_price=pending.stop_distance, symbol_spec=symbol_spec,
     )
     if not safe_volume.approved:
-        return None
+        return REJECT_SIZING, safe_volume.reason
+
+    same_symbol = [p for p in external_open_positions if p.canonical_symbol == canonical_symbol]
+    risk_decision, risk_reason = evaluate_risk_gate(RiskGateInput(
+        proposed_symbol=canonical_symbol, proposed_monetary_risk=safe_volume.monetary_risk, equity=equity,
+        current_total_open_risk=sum(p.monetary_risk for p in external_open_positions),
+        current_total_pending_risk=0.0, current_positions_count=len(external_open_positions),
+        current_positions_for_symbol=len(same_symbol), daily_realized_pnl=risk_state.day_realized_pnl,
+        peak_equity=risk_state.peak_equity,
+    ), config.risk_limits)
+    if risk_decision != _RISK_ALLOW:
+        return REJECT_RISK, risk_reason
+
+    portfolio_decision, portfolio_reason = evaluate_portfolio_risk_gate(
+        proposed_symbol=canonical_symbol, proposed_direction=pending.direction,
+        proposed_monetary_risk=safe_volume.monetary_risk, equity=equity,
+        open_positions=list(external_open_positions), pending_positions=[],
+        correlation_matrix=correlation_matrix or {},
+        limits=portfolio_risk_limits_from_risk_limits(config.risk_limits.max_total_open_risk_pct),
+    )
+    if portfolio_decision != _PORTFOLIO_ALLOW:
+        return REJECT_PORTFOLIO_RISK, portfolio_reason
+
+    if external_open_positions:
+        corr_decision, corr_reason = evaluate_correlation_gate(
+            canonical_symbol, [p.canonical_symbol for p in external_open_positions], correlation_matrix or {},
+        )
+        if corr_decision != _CORRELATION_ALLOW:
+            return REJECT_CORRELATION, corr_reason
+
+    fill = simulate_fill(bar, pending.direction, symbol_spec.point, config.fill_assumptions)
     sign = 1.0 if pending.direction == "BUY" else -1.0
-    entry_friction_price = fill.spread_cost_price / 2.0 + fill.slippage_cost_price
+
+    def money(price_distance: float) -> float:
+        return money_from_price_distance(
+            price_distance, safe_volume.volume,
+            tick_size=symbol_spec.trade_tick_size, tick_value=symbol_spec.trade_tick_value,
+        )
+
+    entry_spread_cost = money(fill.spread_cost_price / 2.0)
+    entry_slippage_cost = money(fill.slippage_cost_price)
+    evidence = {
+        "strategy": {
+            "key": pending.strategy_key, "version": pending.strategy_version, "raw_confidence": pending.raw_confidence,
+            "entry_method": pending.entry_method, "regime": pending.regime, "fingerprint": pending.fingerprint,
+        },
+        "decision": {
+            "signal_time_utc": pending.signal_time_utc, "estimated_cost_price": pending.estimated_cost_price,
+            "expected_net_edge_price": pending.expected_net_edge_price,
+        },
+        "fill_revalidation": {
+            "fill_time_utc": bar.time, "cost_price": cost.total_cost if cost is not None else None,
+            "expected_net_edge_price": edge_eval.expected_net_edge if edge_eval is not None else None,
+            "risk_gate": risk_reason, "portfolio_gate": portfolio_reason,
+            "external_open_positions": len(external_open_positions),
+        },
+        "ml_observer": NOT_CONSULTED, "rag": NOT_CONSULTED, "okf": NOT_CONSULTED,
+        "fill_model_version": FILL_MODEL_VERSION, "config_fingerprint": config_fingerprint,
+    }
     return _OpenTrade(
         strategy_key=pending.strategy_key, direction=pending.direction, entry_time_utc=bar.time,
         entry_price=fill.price, volume=safe_volume.volume, initial_monetary_risk=safe_volume.monetary_risk,
         entry_regime=pending.regime, stop_price=fill.price - sign * pending.stop_distance,
         target_price=fill.price + sign * pending.target_distance,
         initial_stop_distance_price=pending.stop_distance,
-        total_cost=money_from_price_distance(
-            entry_friction_price, safe_volume.volume,
-            tick_size=symbol_spec.trade_tick_size, tick_value=symbol_spec.trade_tick_value,
-        ),
+        total_cost=entry_spread_cost + entry_slippage_cost,
         entry_features=pending.entry_features, entry_raw_confidence=pending.raw_confidence,
-        peak_r=0.0, pending_exit_reason=None,
+        peak_r=0.0, strategy_version=pending.strategy_version, signal_time_utc=pending.signal_time_utc,
+        entry_spread_cost=entry_spread_cost, entry_slippage_cost=entry_slippage_cost, entry_evidence=evidence,
     )
 
 
@@ -376,7 +600,10 @@ def _review_open_trade(
     current_r = compute_current_r(open_trade.initial_monetary_risk, unrealized_pnl)
     if current_r is None:
         return  # quarantined R -- HOLD, matching live position_management.manager's behavior
-    open_trade.peak_r = max(open_trade.peak_r, current_r)
+    open_trade.last_current_r = current_r
+    if current_r > open_trade.peak_r:
+        open_trade.peak_r = current_r
+        open_trade.peak_r_time_utc = bar.time
 
     holding_seconds = bar.time - open_trade.entry_time_utc
     setup_signal = _reevaluate_setup(active_strategies, open_trade, features, confirmed_regime)
@@ -398,6 +625,7 @@ def _review_open_trade(
     )
     if decision.action == FULL_CLOSE:
         open_trade.pending_exit_reason = decision.reason
+        open_trade.pending_exit_decision_time_utc = bar.time
     elif decision.action == MOVE_PROTECTIVE_STOP:
         proposed = (
             open_trade.entry_price + decision.new_stop_r * open_trade.initial_stop_distance_price
@@ -440,12 +668,10 @@ def _reevaluate_setup(active_strategies, open_trade: _OpenTrade, features, confi
     return None
 
 
-_SECONDS_PER_DAY = 86_400
-
-
 def _close_trade(
     trade: _OpenTrade, exit_time_utc: int, exit_price: float, exit_reason: str, exit_regime: str,
-    symbol_spec: SymbolSpec, *, exit_friction_price: float, fills: FillAssumptions,
+    symbol_spec: SymbolSpec, *, exit_spread_price: float, exit_slippage_price: float, fills: FillAssumptions,
+    fill_reference: str, decision_time: int, origin: EvidenceOrigin, config_fingerprint: str,
 ) -> SimulatedTrade:
     """`entry_price`/`exit_price` are execution prices (spread and
     slippage already inside them), so they are NOT deducted again;
@@ -460,8 +686,14 @@ def _close_trade(
     commission = fills.commission_monetary_per_lot * trade.volume
     rollovers = max(0, exit_time_utc // _SECONDS_PER_DAY - trade.entry_time_utc // _SECONDS_PER_DAY)
     swap = fills.swap_monetary_per_lot_per_day * trade.volume * rollovers
-    net_pnl = execution_pnl - commission - swap
-    total_cost = trade.total_cost + money(exit_friction_price) + commission + swap
+    fee = 0.0
+    net_pnl = execution_pnl - commission - swap - fee
+    exit_spread_cost = money(exit_spread_price)
+    exit_slippage_cost = money(exit_slippage_price)
+    total_cost = (
+        trade.entry_spread_cost + trade.entry_slippage_cost + exit_spread_cost + exit_slippage_cost
+        + commission + swap + fee
+    )
     realized_r = net_pnl / trade.initial_monetary_risk if trade.initial_monetary_risk > 0 else None
     return SimulatedTrade(
         strategy_key=trade.strategy_key, direction=trade.direction, entry_time_utc=trade.entry_time_utc,
@@ -469,11 +701,15 @@ def _close_trade(
         entry_regime=trade.entry_regime, exit_time_utc=exit_time_utc, exit_price=exit_price, exit_reason=exit_reason,
         exit_regime=exit_regime, realized_r=realized_r, realized_pnl=net_pnl, total_cost=total_cost,
         entry_features=trade.entry_features, entry_raw_confidence=trade.entry_raw_confidence,
+        strategy_version=trade.strategy_version, signal_time_utc=trade.signal_time_utc,
+        entry_fill_reference=FILL_NEXT_BAR_OPEN, exit_fill_reference=fill_reference,
+        exit_decision_time_utc=decision_time,
+        entry_spread_cost=trade.entry_spread_cost, entry_slippage_cost=trade.entry_slippage_cost,
+        exit_spread_cost=exit_spread_cost, exit_slippage_cost=exit_slippage_cost,
+        commission_cost=commission, swap_cost=swap, fee_cost=fee, gross_pnl=net_pnl + total_cost,
+        peak_r=trade.peak_r, origin=origin, fill_model_version=FILL_MODEL_VERSION,
+        cost_provenance=fills.provenance, config_fingerprint=config_fingerprint, entry_evidence=trade.entry_evidence,
     )
-
-
-def _apply_trade_to_equity(equity: float, trade: SimulatedTrade) -> float:
-    return equity + (trade.realized_pnl or 0.0)
 
 
 def _compute_metrics(trades: list[SimulatedTrade], initial_equity: float, final_equity: float, max_drawdown: float) -> BacktestMetrics:

@@ -1,9 +1,10 @@
-"""PAPER session persistence (migration `0018_paper`).
+"""PAPER session persistence (migrations `0018_paper`, `0019`, `0020`).
 
 A "session" is one (canonical_symbol, resolution) PAPER run, identified
-by a caller-chosen `session_key` (default `f"PAPER:{symbol}:{resolution}"`).
-Everything here is plain SQLite CRUD -- the actual decision logic lives
-in `backtest.engine.run_backtest()`, reused unchanged by `paper/engine.py`.
+by a caller-chosen `session_key` (default `f"PAPER:{symbol}:{resolution}"`)
+AND bound to the configuration fingerprint it was created under. Everything
+here is plain SQLite CRUD -- the actual decision logic lives in
+`backtest.engine.run_backtest()`, reused unchanged by `paper/engine.py`.
 """
 
 from __future__ import annotations
@@ -13,7 +14,14 @@ import sqlite3
 import time
 from dataclasses import asdict, dataclass
 
-from adaptive_scalper.backtest.types import OpenPositionState, PendingEntryState, RegimeTrackerState, SimulatedTrade
+from adaptive_scalper.backtest.persistence import TRADE_PROVENANCE_COLUMNS, trade_provenance_values
+from adaptive_scalper.backtest.types import (
+    OpenPositionState,
+    PendingEntryState,
+    RegimeTrackerState,
+    RiskState,
+    SimulatedTrade,
+)
 
 
 @dataclass(frozen=True)
@@ -26,15 +34,15 @@ class PaperSessionState:
     open_position: OpenPositionState | None
     regime_tracker_state: RegimeTrackerState | None
     pending_entry: PendingEntryState | None = None
+    risk_state: RiskState | None = None
+    config_fingerprint: str | None = None
+    config_json: str | None = None
 
 
 def _row_to_session(row: sqlite3.Row) -> PaperSessionState:
-    open_position = (
-        OpenPositionState(**json.loads(row["open_position_json"])) if row["open_position_json"] else None
-    )
-    pending_entry = (
-        PendingEntryState(**json.loads(row["pending_entry_json"])) if row["pending_entry_json"] else None
-    )
+    def load(column: str, cls):
+        return cls(**json.loads(row[column])) if row[column] else None
+
     regime_tracker_state = (
         RegimeTrackerState(row["regime_confirmed"], row["regime_candidate"], row["regime_candidate_count"])
         if row["regime_confirmed"] is not None else None
@@ -42,7 +50,9 @@ def _row_to_session(row: sqlite3.Row) -> PaperSessionState:
     return PaperSessionState(
         session_key=row["session_key"], canonical_symbol=row["canonical_symbol"], resolution=row["resolution"],
         equity=row["equity"], last_processed_bar_time_utc=row["last_processed_bar_time_utc"],
-        open_position=open_position, regime_tracker_state=regime_tracker_state, pending_entry=pending_entry,
+        open_position=load("open_position_json", OpenPositionState), regime_tracker_state=regime_tracker_state,
+        pending_entry=load("pending_entry_json", PendingEntryState), risk_state=load("risk_state_json", RiskState),
+        config_fingerprint=row["config_fingerprint"], config_json=row["config_json"],
     )
 
 
@@ -51,9 +61,14 @@ def get_session(conn: sqlite3.Connection, session_key: str) -> PaperSessionState
     return _row_to_session(row) if row is not None else None
 
 
+def list_sessions(conn: sqlite3.Connection) -> list[PaperSessionState]:
+    return [_row_to_session(r) for r in conn.execute("SELECT * FROM paper_session_state ORDER BY session_key")]
+
+
 def get_or_create_session(
     conn: sqlite3.Connection, session_key: str, canonical_symbol: str, resolution: str, *,
-    initial_equity: float, now_utc: int | None = None,
+    initial_equity: float, config_fingerprint: str | None = None, config_json: str | None = None,
+    now_utc: int | None = None,
 ) -> PaperSessionState:
     existing = get_session(conn, session_key)
     if existing is not None:
@@ -63,16 +78,27 @@ def get_or_create_session(
         "INSERT INTO paper_session_state "
         "(session_key, canonical_symbol, resolution, equity, last_processed_bar_time_utc, "
         "open_position_json, regime_confirmed, regime_candidate, regime_candidate_count, "
-        "created_at_utc, updated_at_utc) "
-        "VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, 0, ?, ?)",
-        (session_key, canonical_symbol, resolution, initial_equity, now, now),
+        "config_fingerprint, config_json, created_at_utc, updated_at_utc) "
+        "VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, 0, ?, ?, ?, ?)",
+        (session_key, canonical_symbol, resolution, initial_equity, config_fingerprint, config_json, now, now),
     )
     conn.commit()
-    return PaperSessionState(
-        session_key=session_key, canonical_symbol=canonical_symbol, resolution=resolution,
-        equity=initial_equity, last_processed_bar_time_utc=None, open_position=None,
-        regime_tracker_state=None,
+    return get_session(conn, session_key)
+
+
+def bind_session_config(
+    conn: sqlite3.Connection, session_key: str, *, config_fingerprint: str, config_json: str,
+) -> None:
+    """Record the configuration of a session that has not processed any
+    bar yet (e.g. created before migration 0020). Never used to overwrite
+    the fingerprint of a session with history -- `paper.engine` refuses
+    those instead."""
+    conn.execute(
+        "UPDATE paper_session_state SET config_fingerprint = ?, config_json = ? "
+        "WHERE session_key = ? AND last_processed_bar_time_utc IS NULL",
+        (config_fingerprint, config_json, session_key),
     )
+    conn.commit()
 
 
 def save_session_state(
@@ -80,23 +106,38 @@ def save_session_state(
     equity: float, last_processed_bar_time_utc: int, open_position: OpenPositionState | None,
     regime_tracker_state: RegimeTrackerState | None = None,
     pending_entry: PendingEntryState | None = None,
+    risk_state: RiskState | None = None,
     now_utc: int | None = None,
 ) -> None:
     now = now_utc if now_utc is not None else int(time.time())
-    open_position_json = json.dumps(asdict(open_position)) if open_position is not None else None
-    pending_entry_json = json.dumps(asdict(pending_entry)) if pending_entry is not None else None
+
+    def dump(value) -> str | None:
+        return json.dumps(asdict(value)) if value is not None else None
+
     regime_confirmed = regime_tracker_state.confirmed if regime_tracker_state is not None else None
     regime_candidate = regime_tracker_state.candidate if regime_tracker_state is not None else None
     regime_candidate_count = regime_tracker_state.candidate_count if regime_tracker_state is not None else 0
     conn.execute(
         "UPDATE paper_session_state SET equity = ?, last_processed_bar_time_utc = ?, "
         "open_position_json = ?, regime_confirmed = ?, regime_candidate = ?, regime_candidate_count = ?, "
-        "pending_entry_json = ?, updated_at_utc = ? WHERE session_key = ?",
+        "pending_entry_json = ?, risk_state_json = ?, updated_at_utc = ? WHERE session_key = ?",
         (
-            equity, last_processed_bar_time_utc, open_position_json, regime_confirmed, regime_candidate,
-            regime_candidate_count, pending_entry_json, now, session_key,
+            equity, last_processed_bar_time_utc, dump(open_position), regime_confirmed, regime_candidate,
+            regime_candidate_count, dump(pending_entry), dump(risk_state), now, session_key,
         ),
     )
+
+
+_BASE_COLUMNS = (
+    "session_key", "canonical_symbol", "strategy_key", "direction", "entry_time_utc", "entry_price",
+    "volume", "initial_monetary_risk", "entry_regime", "exit_time_utc", "exit_price", "exit_reason",
+    "exit_regime", "realized_r", "realized_pnl", "total_cost", "entry_features_json",
+    "entry_raw_confidence", "recorded_at_utc",
+)
+_INSERT_SQL = (
+    f"INSERT OR IGNORE INTO paper_trades ({', '.join(_BASE_COLUMNS + TRADE_PROVENANCE_COLUMNS)}) "
+    f"VALUES ({', '.join('?' * (len(_BASE_COLUMNS) + len(TRADE_PROVENANCE_COLUMNS)))})"
+)
 
 
 def record_paper_trades(
@@ -112,24 +153,14 @@ def record_paper_trades(
     for trade in trades:
         if not trade.is_closed:
             continue
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO paper_trades
-                (session_key, canonical_symbol, strategy_key, direction, entry_time_utc, entry_price,
-                 volume, initial_monetary_risk, entry_regime, exit_time_utc, exit_price, exit_reason,
-                 exit_regime, realized_r, realized_pnl, total_cost, entry_features_json,
-                 entry_raw_confidence, recorded_at_utc)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                session_key, canonical_symbol, trade.strategy_key, trade.direction, trade.entry_time_utc,
-                trade.entry_price, trade.volume, trade.initial_monetary_risk, trade.entry_regime,
-                trade.exit_time_utc, trade.exit_price, trade.exit_reason, trade.exit_regime,
-                trade.realized_r, trade.realized_pnl, trade.total_cost,
-                json.dumps(trade.entry_features) if trade.entry_features is not None else None,
-                trade.entry_raw_confidence, now,
-            ),
-        )
+        cursor = conn.execute(_INSERT_SQL, (
+            session_key, canonical_symbol, trade.strategy_key, trade.direction, trade.entry_time_utc,
+            trade.entry_price, trade.volume, trade.initial_monetary_risk, trade.entry_regime,
+            trade.exit_time_utc, trade.exit_price, trade.exit_reason, trade.exit_regime,
+            trade.realized_r, trade.realized_pnl, trade.total_cost,
+            json.dumps(trade.entry_features) if trade.entry_features is not None else None,
+            trade.entry_raw_confidence, now,
+        ) + trade_provenance_values(trade))
         if cursor.rowcount > 0:
             inserted += 1
     return inserted

@@ -47,6 +47,15 @@ def _config(**overrides) -> BacktestConfig:
     return BacktestConfig(**defaults)
 
 
+def _seed(db, bars, config=None, **kwargs):
+    """PAPER starts now: a new session decides only its most recent bar.
+    Seeding at the first decidable bar lets later cycles be compared with
+    one continuous run over the same range."""
+    config = config or _config()
+    return run_paper_cycle(db, bars[:config.feature_lookback + 2], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+                           config=config, now_utc=2_000_000_000, **kwargs)
+
+
 @pytest.fixture()
 def db(tmp_path):
     conn = connect(tmp_path / "test.sqlite3")
@@ -78,6 +87,7 @@ def test_run_paper_cycle_with_too_few_bars_is_a_safe_noop(db):
 
 def test_run_paper_cycle_labels_evidence_as_paper_live_data_via_persisted_trades(db):
     bars = _trending_bars(200)
+    _seed(db, bars)
     run_paper_cycle(db, bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000)
     rows = get_paper_trades(db, f"PAPER:{CANONICAL_SYMBOL}:{RESOLUTION}")
     assert len(rows) >= 1
@@ -108,7 +118,7 @@ def test_run_paper_cycle_incremental_feeding_matches_a_single_shot_backtest(db):
         force_close_at_range_end=False,
     )
 
-    last_result = None
+    last_result = _seed(db, bars)
     for cutoff in (50, 100, 150, 200, 220):
         last_result = run_paper_cycle(
             db, bars[:cutoff], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000,
@@ -135,6 +145,7 @@ def test_run_paper_cycle_tracks_running_equity_not_the_static_config_default(db)
     # trade must reflect that P/L -- never silently reset to
     # config.initial_equity on the NEXT cycle's call.
     bars = _trending_bars(220)
+    _seed(db, bars)
     first = run_paper_cycle(db, bars[:150], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000)
     assert len(first.new_trades) >= 1
     assert first.equity != _config().initial_equity
