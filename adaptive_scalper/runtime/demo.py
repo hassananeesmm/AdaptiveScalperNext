@@ -67,7 +67,7 @@ from adaptive_scalper.position_management.manager import PositionReviewInput, re
 from adaptive_scalper.position_management.re_entry import ReentryParams, evaluate_reentry
 from adaptive_scalper.regimes.classifier import RegimeClassification, RegimeTracker, classify_regime
 from adaptive_scalper.risk.governor import RiskGateInput, calculate_safe_volume, risk_limits_from_config
-from adaptive_scalper.runtime.advisory import AdvisoryPanel, safe_rag_record
+from adaptive_scalper.runtime.advisory import AdvisoryPanel
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
 from adaptive_scalper.runtime.state import (
@@ -129,7 +129,6 @@ class DemoRuntime:
     registry: object
     news: NewsMonitor
     advisory: AdvisoryPanel
-    rag: object | None = None
     clock: Callable[[], float] = time.time
     exit_params: AdaptiveExitParams = field(default_factory=AdaptiveExitParams)
     reentry_params: ReentryParams = field(default_factory=ReentryParams)
@@ -346,15 +345,8 @@ class DemoRuntime:
             holding_seconds=max(0, now - local.opened_at_utc), strategy_key=context["strategy_key"],
             current_price_at_review=price,
         )
-        result = review_position_once(self.conn, self.gateway, inp, params=self.exit_params, now_utc=now,
-                                      clock=self.clock)
-        if result.close_outcome is not None:
-            safe_rag_record(self.rag, self.conn, "EXIT_DECISION",
-                            f"{canonical} {local.direction} exit {result.close_outcome.status} "
-                            f"current_r={result.current_r} peak_r={result.peak_r}",
-                            {"reasons": list(result.reasons), "close_status": result.close_outcome.status,
-                             "broker_position_id": local.broker_position_id, "origin": "BROKER_DEMO_CONFIRMED"},
-                            canonical_symbol=canonical, strategy_key=context["strategy_key"])
+        review_position_once(self.conn, self.gateway, inp, params=self.exit_params, now_utc=now,
+                             clock=self.clock)
 
     # ------------------------------------------------------------------
     # entry cycle
@@ -476,12 +468,6 @@ class DemoRuntime:
                     target_distance_price=signal.target_distance, signal_bar_time_utc=analysis.bar_time,
                     chain_key=chain, now_utc=now,
                 )
-        safe_rag_record(self.rag, self.conn, "TRADE_SETUP",
-                        f"{canonical} {signal.strategy_key} {signal.direction} regime {analysis.confirmed_regime} "
-                        f"-> {outcome.status}",
-                        {"status": outcome.status, "detail": outcome.detail, "raw_confidence": signal.raw_confidence,
-                         "origin": "BROKER_DEMO_CONFIRMED" if outcome.status in (FILLED, PARTIAL) else "DECISION"},
-                        canonical_symbol=canonical, strategy_key=signal.strategy_key, chain_key=chain)
         return self._record(canonical, analysis.bar_time, "EXECUTION", outcome.status, outcome.detail,
                             strategy_key=signal.strategy_key, direction=signal.direction, chain_key=chain)
 

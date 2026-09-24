@@ -34,7 +34,6 @@ from adaptive_scalper.paper.state import get_session
 from adaptive_scalper.portfolio.correlation import compute_correlation_matrix
 from adaptive_scalper.portfolio.exposure import PositionExposure
 from adaptive_scalper.risk.governor import risk_limits_from_config
-from adaptive_scalper.runtime.advisory import safe_rag_record
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
 from adaptive_scalper.runtime.state import put_state, record_entry_decision, record_event
@@ -73,7 +72,6 @@ class PaperRuntime:
     config: AppConfig
     symbols: dict[str, str]
     news: NewsMonitor
-    rag: object | None = None
     clock: Callable[[], float] = time.time
     halted_symbols: set[str] = field(default_factory=set)
 
@@ -167,14 +165,6 @@ class PaperRuntime:
                 canonical_symbol=canonical, bar_time_utc=trade.signal_time_utc, strategy_key=trade.strategy_key,
                 direction=trade.direction, detail={"realized_r": trade.realized_r, "realized_pnl": trade.realized_pnl},
                 now_utc=now,
-            )
-            safe_rag_record(
-                self.rag, self.conn, "TRADE_RESULT",
-                f"{canonical} {trade.strategy_key} {trade.direction} {trade.entry_regime} -> {trade.exit_reason} "
-                f"R={trade.realized_r:.2f}" if trade.realized_r is not None else f"{canonical} {trade.strategy_key}",
-                {"origin": "PAPER_LIVE_DATA", "realized_r": trade.realized_r, "realized_pnl": trade.realized_pnl,
-                 "exit_reason": trade.exit_reason, "cost_provenance": trade.cost_provenance},
-                canonical_symbol=canonical, strategy_key=trade.strategy_key,
             )
         state = {
             "decision": "OPEN_POSITION" if result.open_position is not None else "FLAT",

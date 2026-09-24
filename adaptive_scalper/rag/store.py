@@ -36,6 +36,8 @@ class RagMemory:
     content_text: str
     metadata: dict
     created_at_utc: int
+    source_key: str | None = None
+    origin: str | None = None
 
 
 def _row_to_memory(row: sqlite3.Row) -> RagMemory:
@@ -43,6 +45,7 @@ def _row_to_memory(row: sqlite3.Row) -> RagMemory:
         id=row["id"], memory_type=row["memory_type"], canonical_symbol=row["canonical_symbol"],
         strategy_key=row["strategy_key"], chain_key=row["chain_key"], content_text=row["content_text"],
         metadata=json.loads(row["metadata_json"]), created_at_utc=row["created_at_utc"],
+        source_key=row["source_key"], origin=row["origin"],
     )
 
 
@@ -56,23 +59,32 @@ def store_memory(
     strategy_key: str | None = None,
     chain_key: str | None = None,
     now_utc: int | None = None,
+    source_key: str | None = None,
+    origin: str | None = None,
 ) -> RagMemory:
+    """`source_key` (the authoritative row this memory was derived from)
+    makes the write idempotent: a second store with the same key returns
+    the existing memory instead of inserting a duplicate."""
     if memory_type not in MEMORY_TYPES:
         raise UnknownMemoryTypeError(f"{memory_type!r} is not a recognized RAG memory type")
     now = now_utc if now_utc is not None else int(time.time())
     cursor = conn.execute(
         """
-        INSERT INTO rag_memories
-            (memory_type, canonical_symbol, strategy_key, chain_key, content_text, metadata_json, created_at_utc)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO rag_memories
+            (memory_type, canonical_symbol, strategy_key, chain_key, content_text, metadata_json, created_at_utc,
+             source_key, origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             memory_type, canonical_symbol, strategy_key, chain_key, content_text,
-            json.dumps(metadata, default=str), now,
+            json.dumps(metadata, default=str), now, source_key, origin,
         ),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM rag_memories WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    if cursor.rowcount == 0 and source_key is not None:
+        row = conn.execute("SELECT * FROM rag_memories WHERE source_key = ?", (source_key,)).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM rag_memories WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return _row_to_memory(row)
 
 

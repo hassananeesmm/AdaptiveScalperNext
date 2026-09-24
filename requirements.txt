@@ -17,3 +17,4 @@ joblib==1.6.0
 threadpoolctl==3.7.0
 cloudpickle==3.1.2
 narwhals==2.26.0
+PyYAML==6.0.3  # OKF knowledge bundle frontmatter (adaptive_scalper/knowledge/) -- yaml.safe_load only

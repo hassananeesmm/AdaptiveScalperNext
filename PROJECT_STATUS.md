@@ -1545,13 +1545,21 @@ Two real defects found and fixed (7 of the tests fail without the fixes):
 
 `adaptive_scalper/runtime/` — IMPLEMENTED, CONNECTED, TESTED (cloud, simulated broker: `tests/test_runtime.py` 21 tests, `tests/test_runtime_architecture.py` 8 audits). NOT yet run against a real MT5 terminal (BLOCKED-ON-LOCAL-MT5; see LOCAL_MT5_HANDOFF.md once written).
 
-- `engine.py` — `RuntimeEngine`: one DB connection, one gateway, one thread. `startup()` in directive section 115 order, fail-closed: DB integrity; kill switch READ only (never bootstrapped/cleared — the engine runs with it UNINITIALIZED/ENGAGED and simply blocks new entries); MT5 initialize; **a REAL/CONTEST account refuses to start in PAPER and DEMO alike**; resolve + validate the three symbols (unresolvable ones excluded with a WARNING event, never substituted); retired strategies asserted absent; DEMO: `quarantine_interrupted_submissions`, reconciliation, `apply_unknown_resolutions`; news refresh; RAG index rebuild. Scheduler tasks: `position_cycle` (P0, ~1s, DEMO), `entry_cycle` (P1, ~4s), `news_refresh` (P2, ~20m), `rag_rebuild` (P3, 10m), `heartbeat` (P4, ~1s).
+- `engine.py` — `RuntimeEngine`: one DB connection, one gateway, one thread. `startup()` in directive section 115 order, fail-closed: DB integrity; kill switch READ only (never bootstrapped/cleared — the engine runs with it UNINITIALIZED/ENGAGED and simply blocks new entries); MT5 initialize; **a REAL/CONTEST account refuses to start in PAPER and DEMO alike**; resolve + validate the three symbols (unresolvable ones excluded with a WARNING event, never substituted); retired strategies asserted absent; DEMO: `quarantine_interrupted_submissions`, reconciliation, `apply_unknown_resolutions`; news refresh; RAG ingestion + index rebuild; OKF bundle load. Scheduler tasks: `position_cycle` (P0, ~1s, DEMO), `entry_cycle` (P1, ~4s), `news_refresh` (P2, ~20m), `rag_ingest` (P3, 60s), `rag_rebuild` (P3, 10m), `heartbeat` (P4, ~1s).
 - `scheduler.py` — single-threaded, priority-ordered, per-task exception isolation (a crashing scanner cannot starve position management; failures deduplicated into one TASK_FAILED event).
 - `demo.py` — position cycle (reconciliation journaled only when not CLEAN, UNKNOWN resolution, per-position `review_position_once` with decision-time context from `position_entry_context`, rebuilt from the decision chain for recovered positions); entry cycle decides once per newly CLOSED bar: global short-circuit (kill switch, DEMO/terminal/broker permission, dangerous UNKNOWN, reconciliation, news outage, daily loss, drawdown) -> features -> persisted regime tracker -> six strategies -> `SIGNAL_CREATED` -> advisory evidence -> `select_and_journal_proposal` over the LIVE cost estimate (unknown configured cost -> `BLOCK_COST`) -> `calculate_safe_volume` -> `execution.service.submit_new_entry` with `fresh_evidence()` rebuilding the complete `FinalPermissionInput` from fresh broker/DB truth on both calls (read-only reconciliation, exposures incl. pending, correlation, portfolio heat, daily P/L from broker deals, persisted peak equity, re-entry check).
 - `paper.py` — `run_paper_cycle` per symbol with the other symbols' simulated exposure + correlation matrix, news windows from the calendar, and a global entry block (kill switch not DISENGAGED, news outage/conflict). Zero `order_check`/`order_send` (audited). A config change halts that symbol's session with a CRITICAL event (`[runtime] paper_session_tag` starts new sessions).
 - `market_data.py` — closed bars judged against the symbol's own fresh tick time (same broker clock as the bars), never this machine's UTC clock; `news_monitor.py` — slow-cadence remote refresh, local final check, UNAVAILABLE/STALE/CONFLICT fail closed; `advisory.py` — RAG / ML observer (`learning/observer.py`, STAGE 1, zero influence) / OKF evidence, journaled as `RAG_USED`/`MODEL_USED`, never passed to any gate; any failure is DEGRADED (proven: identical decisions with every advisory source raising); `state.py` + migration `0022_runtime` — `runtime_state` (heartbeat, components, why-no-trade, symbol snapshots, reconciliation, regime trackers, peak equity), deduplicated `runtime_events`, `entry_decisions`, `position_entry_context`; `logging_setup.py` — JSONL + rotating human logs with secret redaction; `gateway/factory.py` — the ONE place `Mt5Gateway()` is constructed (always `SynchronizedGateway`), CLI migrated to it.
 - Config: `[runtime]` cadences (validated: position reviews at least as frequent as entry scans) and per-symbol `[costs.SYMBOL]` evidence (`None` = unknown, never zero; provenance label).
 - Known limits: broker timestamp convention (server time vs UTC) is unverified and matters for quote freshness/news windows — BLOCKED-ON-LOCAL-MT5; PAPER keeps one simulated equity per symbol session; `POSITION_REVIEWED` is journaled on every review (~1/s per open position).
+
+## RAG ingestion + OKF knowledge layer (Phases 4-5, 2026-09-24)
+
+- `rag/ingestion.py` + migration `0023_rag_ingestion` — IMPLEMENTED, CONNECTED (engine task `rag_ingest`, P3, 60s; also at startup), TESTED (cloud: `tests/test_rag_ingestion.py`, 12 tests). Journal / paper_trades / execution_incidents / research_trials / ERROR+CRITICAL runtime_events -> all eight typed memories, each with `source_key` (idempotent: partial unique index) and `origin` (DEMO vs PAPER never pooled); per-source watermarks. The DEMO/PAPER cycles no longer write RAG on the hot path. Failure = `rag_ingest` DEGRADED, trading unaffected (tested).
+- `adaptive_scalper/knowledge/` (OKF v0.2 — confirmed latest; canonical repo now `GoogleCloudPlatform/open-knowledge-format`) — IMPLEMENTED, CONNECTED (`RuntimeEngine` loads `KnowledgeAdvisor` over `knowledge/` into the evidence-only `AdvisoryPanel`; DEMO journals it as `RAG_USED` with `source: OKF`, `influence: NONE`), TESTED (cloud: `tests/test_knowledge.py`, 38 tests). Safe loader (safe_load, size cap, symlink refusal), OKF section-11 conformance, project policy (provenance, trust tiers, lifecycle/stale/supersession, evidence types stable only when human-reviewed, retired-strategy and symbol scope, control-key ban, credential + raw-record scan, quarantine), direct lookup/search, advisor, retrieval benchmark. Isolation audit: the package imports nothing that can trade/size/permit/touch the kill switch; only the engine and the operator CLI import it.
+- `knowledge/` — the Git-tracked curated bundle: 21 concepts (3 architecture/engineering decisions, 6 active + 2 retired strategy definitions, 1 research finding [draft, unverified], 1 model card [draft], 2 lessons learned [draft], 4 safety procedures, 2 runbooks) + `index.md` (`okf_version: "0.2"`) + `log.md`. Zero validation errors (test-enforced); strategy definitions test-pinned to the code's strategy versions.
+- Benchmark (`docs/KNOWLEDGE_MEMORY.md`): direct OKF vs TF-IDF vs SQLite FTS5/BM25 — no retrieval change justified; TF-IDF RAG index kept.
+- Not yet: `okf`/`rag` CLI commands (Phase 8 checkpoint).
 
 ## Current git commit
 
@@ -1565,14 +1573,14 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-22 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+23 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
 `0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
 `0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
 `0019_paper_pending_entry`, `0020_simulation_provenance`,
-`0021_research_trials`, `0022_runtime`).
+`0021_research_trials`, `0022_runtime`, `0023_rag_ingestion`).
 
 ## Local RAG (advisory-only)
 
@@ -1609,12 +1617,12 @@ degrades to `DEGRADED` (empty results), never an unhandled exception
 that could take down a real caller — RAG was never entitled to be
 treated as load-bearing.
 
-NOT yet integrated into the real pipeline: nothing yet CALLS
-`RagService.record()` from the journal/selector/position-manager to
-actually populate memories from real decisions, and no CLI `rag *`
-commands exist yet (both are part of the still-pending runtime-wiring
-and CLI-completion tasks). 33 tests
-(`test_rag_store.py`/`test_rag_index.py`/`test_rag_service.py`).
+Populated by `rag/ingestion.py` (journal -> typed memories, scheduled
+`rag_ingest` task; see "RAG ingestion + OKF knowledge layer" above) —
+never written from the trading hot path. Queried by the runtime's
+`AdvisoryPanel` (evidence only). `rag *` CLI commands: Phase 8
+checkpoint. Tests: `test_rag_store.py`/`test_rag_index.py`/
+`test_rag_service.py`/`test_rag_ingestion.py`.
 
 ## Model state / ML self-learning (observer stage)
 
@@ -1712,8 +1720,8 @@ responds to) is not wired to anything live. 71 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. Latest
-(2026-09-24 Checkpoint C, Linux cloud runner, Python 3.13, `MetaTrader5`
-not installable there): 1266 passed, 7 skipped (`test_mt5_gateway_live.py`
+(2026-09-24 Checkpoint D, Linux cloud runner, Python 3.13, `MetaTrader5`
+not installable there): 1316 passed, 7 skipped (`test_mt5_gateway_live.py`
 — needs the Windows laptop's live MT5 terminal), 0 failed. Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended

@@ -17,8 +17,6 @@ engage the persistent kill switch and never stop position management.
 from __future__ import annotations
 
 import sqlite3
-import time
-from typing import Callable
 
 from adaptive_scalper.news.blocking import (
     ALLOW,

@@ -12,13 +12,15 @@ refuses to start, in PAPER as well as DEMO) -> resolve + validate the
 three canonical symbols (unresolvable ones are excluded, never
 substituted) -> retired strategies asserted absent -> DEMO only: quarantine
 submissions a dead process left in flight, reconcile, apply UNKNOWN
-resolutions -> news refresh -> RAG index rebuild (advisory; failure =
-DEGRADED) -> heartbeat.
+resolutions -> news refresh -> journal->RAG ingestion + index rebuild ->
+OKF knowledge bundle load (advisory; failures = DEGRADED) -> heartbeat.
 
 Scheduled tasks (priority, cadence from `[runtime]`):
     0 position_cycle  ~1s   DEMO: reconcile/UNKNOWN/position reviews
     1 entry_cycle     ~4s   DEMO: new-entry pipeline; PAPER: paper cycle
     2 news_refresh    ~20m  remote calendar refresh (never per entry cycle)
+    3 rag_ingest      ~60s  journal/paper/incident rows -> typed RAG memories
+                            (the trading cycles never write RAG themselves)
     3 rag_rebuild     ~10m  rebuild the derived TF-IDF index
     4 heartbeat       ~1s   engine state for the observer-only dashboard
 
@@ -43,9 +45,11 @@ from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
 from adaptive_scalper.gateway.symbol_validation import validate_resolved_symbol
 from adaptive_scalper.gateway.types import TradeMode
+from adaptive_scalper.knowledge.advisor import KnowledgeAdvisor
 from adaptive_scalper.learning.observer import EntryObserver
 from adaptive_scalper.news.providers.cache import CacheProvider
 from adaptive_scalper.persistence.database import integrity_check
+from adaptive_scalper.rag.ingestion import ingest as ingest_rag_memories
 from adaptive_scalper.rag.service import RagService
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
 from adaptive_scalper.runtime.demo import DemoRuntime
@@ -60,6 +64,7 @@ logger = logging.getLogger(__name__)
 ENGINE_RUNNING = "RUNNING"
 ENGINE_DEGRADED = "DEGRADED"
 ENGINE_STOPPED = "STOPPED"
+RAG_INGEST_SECONDS = 60.0
 
 
 class RuntimeStartupError(RuntimeError):
@@ -71,7 +76,7 @@ class RuntimeComponents:
     news_providers: list | None = None     # None -> the real FinanceCalendar/ForexFactory chain
     rag: RagService | None = None
     observer: EntryObserver | None = None
-    okf: object | None = None
+    okf: object | None = None             # None -> KnowledgeAdvisor over the Git-tracked `knowledge/` bundle
 
 
 class RuntimeEngine:
@@ -88,6 +93,7 @@ class RuntimeEngine:
         self.components = components or RuntimeComponents()
         self.rag = self.components.rag if self.components.rag is not None else RagService()
         self.observer = self.components.observer if self.components.observer is not None else EntryObserver()
+        self.okf = self.components.okf
         self.news = NewsMonitor(
             conn,
             self.components.news_providers if self.components.news_providers is not None else default_live_providers(),
@@ -170,24 +176,28 @@ class RuntimeEngine:
             recovery["unknown_resolutions"] = [o.detail for o in apply_unknown_resolutions(self.conn, self.gateway, now_utc=now)]
 
         self._refresh_news()
+        self._ingest_rag(rebuild=False)
         self._rebuild_rag()
 
-        advisory = AdvisoryPanel(rag=self.rag, observer=self.observer, okf=self.components.okf)
+        if self.okf is None:
+            self.okf = self._load_knowledge()
+        advisory = AdvisoryPanel(rag=self.rag, observer=self.observer, okf=self.okf)
         if self.mode == "DEMO":
             self.demo = DemoRuntime(self.conn, self.gateway, self.config, self.symbols, registry, self.news, advisory,
-                                    rag=self.rag, clock=self.clock)
+                                    clock=self.clock)
             self.scheduler.add("position_cycle", self.config.runtime.position_cycle_seconds, 0, self.demo.position_cycle)
             self.scheduler.add("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.demo.entry_cycle)
         else:
-            self.paper = PaperRuntime(self.conn, self.gateway, self.config, self.symbols, self.news, rag=self.rag,
+            self.paper = PaperRuntime(self.conn, self.gateway, self.config, self.symbols, self.news,
                                       clock=self.clock)
             self.scheduler.add("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.paper.cycle)
         self.scheduler.add("news_refresh", self.config.runtime.news_refresh_seconds, 2, self._refresh_news)
+        self.scheduler.add("rag_ingest", RAG_INGEST_SECONDS, 3, self._ingest_rag)
         self.scheduler.add("rag_rebuild", 600, 3, self._rebuild_rag)
         self.scheduler.add("heartbeat", self.config.runtime.heartbeat_seconds, 4, self.heartbeat)
         # news/rag already ran during startup: don't repeat them on the first tick
         for task in self.scheduler.tasks:
-            if task.name in ("news_refresh", "rag_rebuild"):
+            if task.name in ("news_refresh", "rag_ingest", "rag_rebuild"):
                 task.next_due += task.interval_seconds
 
         self.started_at = now
@@ -214,6 +224,33 @@ class RuntimeEngine:
         else:
             from adaptive_scalper.runtime.state import clear_event
             clear_event(self.conn, "news:unavailable", now_utc=now)
+
+    def _load_knowledge(self) -> KnowledgeAdvisor | None:
+        """The curated OKF bundle (advisory; a missing or invalid bundle
+        degrades knowledge context, never the engine)."""
+        try:
+            advisor = KnowledgeAdvisor.from_path(clock=self.clock)
+        except Exception as exc:
+            logger.warning("OKF knowledge bundle unavailable: %s", exc)
+            self._health("okf", "DEGRADED", f"bundle unavailable: {type(exc).__name__}")
+            return None
+        errors = sum(1 for i in advisor.bundle.issues if i.severity == "ERROR")
+        self._health("okf", "OK" if not errors else "DEGRADED",
+                     f"{len(advisor.bundle.concepts)} concepts, {errors} quarantined issue(s)")
+        return advisor
+
+    def _ingest_rag(self, rebuild: bool = True) -> None:
+        """Journal -> RAG ingestion, off the trading hot path. A failure
+        degrades advisory context only; it never stops the engine."""
+        try:
+            report = ingest_rag_memories(self.conn, now_utc=self.now())
+        except Exception as exc:
+            logger.warning("RAG ingestion raised: %s", exc)
+            self._health("rag_ingest", "DEGRADED", f"ingestion failed: {type(exc).__name__}")
+            return
+        self._health("rag_ingest", "OK")
+        if rebuild and report.inserted:
+            self._rebuild_rag()
 
     def _rebuild_rag(self) -> None:
         try:

@@ -1969,3 +1969,29 @@ New backlog: #14 broker timestamp timezone (BLOCKED-ON-LOCAL-MT5), #15
 saturated-confidence re-entry, #16 per-second POSITION_REVIEWED volume.
 
 Full suite: 1266 passed, 7 skipped (live MT5 only), 0 failed.
+
+## Session: Checkpoint D -- RAG ingestion + OKF knowledge layer (2026-09-24, cloud)
+
+Phases 4-5.
+
+RAG: migration 0023 (`rag_memories.source_key`/`origin`, partial unique
+index, `rag_ingestion_state` watermarks); `rag/ingestion.py` maps journal
+events, PAPER trades, execution incidents, completed research trials and
+ERROR/CRITICAL runtime events onto the eight memory types (TRADE_SETUP is
+enriched from `position_entry_context`); `store_memory` is idempotent by
+source key. The engine runs it as `rag_ingest` (P3, 60s) and at startup;
+the hot-path `safe_rag_record` calls in `runtime/demo.py` (TRADE_SETUP,
+EXIT_DECISION) and `runtime/paper.py` (TRADE_RESULT) were removed -- the
+journal already carries those facts, now ingested with provenance.
+
+OKF: re-checked the spec before implementing -- v0.2 is still the latest;
+the canonical repo moved to GoogleCloudPlatform/open-knowledge-format
+(the knowledge-catalog copy is a frozen snapshot). New
+`adaptive_scalper/knowledge/` (model, loader, validate, search, advisor,
+benchmark) and the curated `knowledge/` bundle (21 concepts). PyYAML
+6.0.3 pinned in requirements.txt (safe_load only). The architecture audit
+caught a literal "live" string in the first draft of the control-key list
+(renamed to `enable_live`). Benchmark and conclusion (keep TF-IDF) in
+`docs/KNOWLEDGE_MEMORY.md`.
+
+Full suite: 1316 passed, 7 skipped (live MT5 only), 0 failed.
