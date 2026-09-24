@@ -12,7 +12,6 @@ from adaptive_scalper.regimes.classifier import (
     COMPRESSION,
     ERRATIC,
     RANGE,
-    TRENDING_DOWN,
     TRENDING_UP,
     UNKNOWN,
     VOLATILITY_EXPANSION,

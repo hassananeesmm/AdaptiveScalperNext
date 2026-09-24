@@ -82,7 +82,7 @@ from adaptive_scalper.core.final_permission import ALLOW as _PERMISSION_ALLOW
 from adaptive_scalper.core.final_permission import FinalPermissionInput, evaluate_and_journal_final_permission
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.core.permission import ActionKind, evaluate_kill_switch_permission
-from adaptive_scalper.execution.entry_fills import RECOMPUTED, record_entry_fills
+from adaptive_scalper.execution.entry_fills import record_entry_fills
 from adaptive_scalper.execution.position_resolution import resolve_entry_fill_evidence
 from adaptive_scalper.execution.request_token import embed_request_token
 from adaptive_scalper.execution.state_machine import OrderState

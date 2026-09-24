@@ -15,8 +15,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HOOKS_DIR = PROJECT_ROOT / ".claude" / "hooks"
 GUARDRAILS = HOOKS_DIR / "guardrails.py"

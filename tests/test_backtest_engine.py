@@ -147,8 +147,6 @@ def test_run_backtest_news_limitation_note_absent_when_windows_supplied():
 
 
 def test_run_backtest_rejects_too_few_bars():
-    import pytest
-
     bars = _flat_bars(5)
     with pytest.raises(ValueError, match="need at least"):
         run_backtest(bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config())

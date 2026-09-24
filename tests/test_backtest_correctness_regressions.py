@@ -560,9 +560,8 @@ def test_incremental_paper_cycles_match_a_single_continuous_run(db, seed, chunk)
 
     key = f"prop:{seed}:{chunk}"
     cutoff = config.feature_lookback + 2  # PAPER starts now: first decidable bar, same as the reference
-    last = None
     while True:
-        last = run_paper_cycle(db, bars[:cutoff], SYMBOL, RES, _spec(), config=config, session_key=key, now_utc=START)
+        run_paper_cycle(db, bars[:cutoff], SYMBOL, RES, _spec(), config=config, session_key=key, now_utc=START)
         if cutoff >= len(bars):
             break
         cutoff = min(len(bars), cutoff + chunk)

@@ -60,7 +60,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, ALLOWED_MODES, RETIRED_STRATEGY_KEYS
 from adaptive_scalper.core.kill_switch import KillSwitchState

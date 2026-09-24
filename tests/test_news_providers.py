@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from adaptive_scalper.news.providers.cache import CacheProvider, load_cached_events, persist_events, record_provider_attempt
+from adaptive_scalper.news.providers.cache import CacheProvider, persist_events, record_provider_attempt
 from adaptive_scalper.news.providers.financecalendar import FinanceCalendarProvider
 from adaptive_scalper.news.providers.forexfactory import ForexFactoryProvider
 from adaptive_scalper.news.providers.manual import ManualJSONProvider

@@ -10,7 +10,6 @@ Prices are hand-computed from `sim_helpers` (mid 2000.00, half spread
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import replace
 
 import pytest
 
@@ -40,7 +39,6 @@ from adaptive_scalper.risk.governor import RiskLimits
 from adaptive_scalper.simulation.fill_model import COST_UNVERIFIED_ASSUMPTION, FILL_MODEL_VERSION, FillAssumptions
 from adaptive_scalper.simulation.types import EvidenceOrigin
 from sim_helpers import (
-    HALF_SPREAD,
     RES,
     START,
     STEP,

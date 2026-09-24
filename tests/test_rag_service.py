@@ -10,7 +10,6 @@ import pytest
 
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.rag.service import DEGRADED, OK, RagService
-from adaptive_scalper.rag.store import UnknownMemoryTypeError
 
 
 @pytest.fixture()

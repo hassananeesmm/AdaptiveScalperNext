@@ -19,7 +19,7 @@ from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.runtime.engine import RuntimeComponents, RuntimeStartupError
 from adaptive_scalper.runtime.scheduler import Scheduler
 from adaptive_scalper.runtime.state import get_state
-from chaos_harness import demo_account, mutate_then_default, raise_
+from chaos_harness import demo_account
 from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, StaticNewsProvider, build_engine, default_market, step
 
 START_AT = T0 + 60 * STEP + 10  # 60 closed bars already exist

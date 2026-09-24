@@ -46,7 +46,8 @@ CANONICAL_CURRENCY_PAIR: dict[str, tuple[str, str]] = {
     "GBPJPY": ("GBP", "JPY"),
     "BTCUSD": ("BTC", "USD"),
 }
-assert frozenset(CANONICAL_CURRENCY_PAIR) == ALLOWED_CANONICAL_SYMBOLS
+if frozenset(CANONICAL_CURRENCY_PAIR) != ALLOWED_CANONICAL_SYMBOLS:  # explicit: survives `python -O`
+    raise RuntimeError("CANONICAL_CURRENCY_PAIR must have exactly one entry per ALLOWED_CANONICAL_SYMBOLS")
 
 
 @dataclass(frozen=True)

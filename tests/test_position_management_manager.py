@@ -18,7 +18,6 @@ from adaptive_scalper.gateway.types import (
 )
 from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.persistence import connect, migrate
-from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
 from adaptive_scalper.position_management.manager import (
     FULL_CLOSE,
     HOLD,

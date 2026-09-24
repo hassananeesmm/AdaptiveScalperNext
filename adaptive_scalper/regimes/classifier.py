@@ -189,7 +189,3 @@ class RegimeTracker:
             self._candidate_count = 0
 
         return self._confirmed
-
-    @property
-    def confirmed_regime(self) -> str:
-        return self._confirmed

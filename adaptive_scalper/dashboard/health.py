@@ -17,7 +17,7 @@ import sqlite3
 from dataclasses import dataclass
 from enum import Enum
 
-from adaptive_scalper.core.kill_switch import KillSwitchStatus, get_state
+from adaptive_scalper.core.kill_switch import get_state
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.persistence.database import integrity_check
 

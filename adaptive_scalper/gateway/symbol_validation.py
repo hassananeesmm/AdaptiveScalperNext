@@ -77,9 +77,8 @@ EXPECTED_IDENTITY: dict[str, _IdentitySpec] = {
 # being updated to match, that is exactly the kind of silent drift this
 # whole module exists to prevent — fail loudly at import time, not by
 # quietly skipping the identity check for whatever symbol was missed.
-assert frozenset(EXPECTED_IDENTITY) == ALLOWED_CANONICAL_SYMBOLS, (
-    "EXPECTED_IDENTITY must have exactly one entry per ALLOWED_CANONICAL_SYMBOLS"
-)
+if frozenset(EXPECTED_IDENTITY) != ALLOWED_CANONICAL_SYMBOLS:  # explicit: survives `python -O`
+    raise RuntimeError("EXPECTED_IDENTITY must have exactly one entry per ALLOWED_CANONICAL_SYMBOLS")
 
 
 def _identity_matches(spec: SymbolSpec, identity: _IdentitySpec) -> bool:
@@ -160,7 +159,7 @@ def validate_resolved_symbol(
     if spec.trade_mode == SymbolTradeMode.DISABLED:
         return SymbolValidationResult(
             canonical, broker_symbol, False, TRADING_DISABLED,
-            f"symbol trade_mode is DISABLED",
+            "symbol trade_mode is DISABLED",
         )
 
     if not _contract_spec_is_sane(spec):

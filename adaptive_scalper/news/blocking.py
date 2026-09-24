@@ -37,9 +37,8 @@ SYMBOL_RELEVANT_CURRENCIES: dict[str, frozenset[str]] = {
     "BTCUSD": frozenset({"USD"}),
     "GBPJPY": frozenset({"GBP", "JPY"}),
 }
-assert frozenset(SYMBOL_RELEVANT_CURRENCIES) == ALLOWED_CANONICAL_SYMBOLS, (
-    "SYMBOL_RELEVANT_CURRENCIES must have exactly one entry per ALLOWED_CANONICAL_SYMBOLS"
-)
+if frozenset(SYMBOL_RELEVANT_CURRENCIES) != ALLOWED_CANONICAL_SYMBOLS:  # explicit: survives `python -O`
+    raise RuntimeError("SYMBOL_RELEVANT_CURRENCIES must have exactly one entry per ALLOWED_CANONICAL_SYMBOLS")
 
 _FOMC_KEYWORDS = ("fomc", "federal funds rate", "fed interest rate decision")
 _NFP_KEYWORDS = ("non-farm", "nonfarm", "non farm", "nfp")
