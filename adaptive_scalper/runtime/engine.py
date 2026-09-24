@@ -22,6 +22,8 @@ Scheduled tasks (priority, cadence from `[runtime]`):
     3 rag_ingest      ~60s  journal/paper/incident rows -> typed RAG memories
                             (the trading cycles never write RAG themselves)
     3 rag_rebuild     ~10m  rebuild the derived TF-IDF index
+    3 cost_evidence_sweep ~60s  DEMO: complete execution cost observations
+                            for closed positions (evidence only)
     4 heartbeat       ~1s   engine state for the observer-only dashboard
 
 The dashboard never runs inside this process: it reads the database, so
@@ -39,6 +41,7 @@ from typing import Callable
 from adaptive_scalper.config.constants import RETIRED_STRATEGY_KEYS
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
+from adaptive_scalper.costs.observations import sweep_exit_costs
 from adaptive_scalper.execution.reconciliation import run_reconciliation
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions, quarantine_interrupted_submissions
 from adaptive_scalper.gateway.protocol import Gateway
@@ -187,6 +190,7 @@ class RuntimeEngine:
                                     clock=self.clock)
             self.scheduler.add("position_cycle", self.config.runtime.position_cycle_seconds, 0, self.demo.position_cycle)
             self.scheduler.add("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.demo.entry_cycle)
+            self.scheduler.add("cost_evidence_sweep", 60.0, 3, self._sweep_cost_evidence)
         else:
             self.paper = PaperRuntime(self.conn, self.gateway, self.config, self.symbols, self.news,
                                       clock=self.clock)
@@ -251,6 +255,16 @@ class RuntimeEngine:
         self._health("rag_ingest", "OK")
         if rebuild and report.inserted:
             self._rebuild_rag()
+
+    def _sweep_cost_evidence(self) -> None:
+        """Completes DEMO execution cost observations once positions close
+        (off the hot path; evidence only)."""
+        try:
+            sweep_exit_costs(self.conn, now_utc=self.now())
+            self._health("cost_evidence", "OK")
+        except Exception as exc:
+            logger.warning("cost evidence sweep failed: %s", exc)
+            self._health("cost_evidence", "DEGRADED", f"sweep failed: {type(exc).__name__}")
 
     def _rebuild_rag(self) -> None:
         try:

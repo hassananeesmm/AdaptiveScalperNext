@@ -39,6 +39,12 @@ class TrainingRow:
     label: int  # 1 if realized_pnl (after costs) > 0, else 0
     realized_r: float | None
     realized_pnl: float
+    exit_time_utc: int | None = None       # label interval end (purging); None -> entry time
+    cost_provenance: str | None = None     # fill_model cost label of the trade the label came from
+
+    @property
+    def label_end_utc(self) -> int:
+        return self.exit_time_utc if self.exit_time_utc is not None else self.entry_time_utc
 
 
 def build_training_rows(
@@ -64,5 +70,37 @@ def build_training_rows(
             entry_regime=trade.entry_regime, features=tuple(values),
             label=1 if trade.realized_pnl > 0 else 0,
             realized_r=trade.realized_r, realized_pnl=trade.realized_pnl,
+            exit_time_utc=trade.exit_time_utc, cost_provenance=trade.cost_provenance,
+        ))
+    return rows, excluded
+
+
+def build_training_rows_from_records(
+    records: Iterable, *, feature_columns: tuple[str, ...] = FEATURE_COLUMNS,
+) -> tuple[list[TrainingRow], int]:
+    """Same rules as `build_training_rows()`, for persisted trade rows
+    (`backtest_trades` / `paper_trades`, sqlite3.Row with an
+    `entry_features_json` column). Rows persisted before migration 0024
+    have no features and are excluded, never imputed."""
+    import json
+
+    rows: list[TrainingRow] = []
+    excluded = 0
+    for record in records:
+        raw = record["entry_features_json"]
+        if record["exit_time_utc"] is None or record["realized_pnl"] is None or not raw:
+            excluded += 1
+            continue
+        features = json.loads(raw)
+        values = [features.get(name) for name in feature_columns]
+        if any(v is None for v in values):
+            excluded += 1
+            continue
+        rows.append(TrainingRow(
+            entry_time_utc=record["entry_time_utc"], strategy_key=record["strategy_key"],
+            entry_regime=record["entry_regime"], features=tuple(float(v) for v in values),
+            label=1 if record["realized_pnl"] > 0 else 0, realized_r=record["realized_r"],
+            realized_pnl=record["realized_pnl"], exit_time_utc=record["exit_time_utc"],
+            cost_provenance=record["cost_provenance"],
         ))
     return rows, excluded

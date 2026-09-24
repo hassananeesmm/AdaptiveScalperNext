@@ -188,6 +188,7 @@ def register_entry_model(
     artifact_dir: str,
     total_row_count: int,
     now_utc: int | None = None,
+    extra_metrics: dict | None = None,
 ) -> ModelRecord:
     """Registers a NEW version for `model_key` — `INSUFFICIENT_DATA` if
     `result.trained` is False, otherwise `BASELINE` (never `CURRENT`; see
@@ -201,6 +202,7 @@ def register_entry_model(
         "validation_auc": result.validation_auc,
         "validation_brier_score": result.validation_brier_score,
         "feature_columns": list(result.feature_columns),
+        **(extra_metrics or {}),
     }
 
     if not result.trained:

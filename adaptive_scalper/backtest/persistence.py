@@ -99,7 +99,7 @@ def record_backtest_run(
         "exit_time_utc", "exit_price", "exit_reason", "volume", "initial_monetary_risk", "realized_r",
         "realized_pnl", "total_cost", "entry_regime", "exit_regime",
     )
-    columns = base_columns + TRADE_PROVENANCE_COLUMNS
+    columns = base_columns + TRADE_PROVENANCE_COLUMNS + ("entry_features_json",)
     sql = f"INSERT INTO backtest_trades ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})"
     for trade in result.trades:
         conn.execute(sql, (
@@ -107,7 +107,9 @@ def record_backtest_run(
             trade.entry_time_utc, trade.entry_price, trade.exit_time_utc, trade.exit_price,
             trade.exit_reason, trade.volume, trade.initial_monetary_risk, trade.realized_r,
             trade.realized_pnl, trade.total_cost, trade.entry_regime, trade.exit_regime,
-        ) + trade_provenance_values(trade))
+        ) + trade_provenance_values(trade) + (
+            json.dumps(trade.entry_features, sort_keys=True) if trade.entry_features is not None else None,
+        ))
     conn.commit()
 
 

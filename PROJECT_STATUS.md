@@ -1561,6 +1561,13 @@ Two real defects found and fixed (7 of the tests fail without the fixes):
 - Benchmark (`docs/KNOWLEDGE_MEMORY.md`): direct OKF vs TF-IDF vs SQLite FTS5/BM25 — no retrieval change justified; TF-IDF RAG index kept.
 - Not yet: `okf`/`rag` CLI commands (Phase 8 checkpoint).
 
+## ML training job + model walk-forward, DEMO cost evidence (Phases 6-7, 2026-09-24)
+
+- `learning/model_walk_forward.py` — IMPLEMENTED, TESTED (cloud, `tests/test_learning_jobs.py`). Expanding-window folds that train ONLY on the past, purge label overlap (+ optional gap), out-of-fold AUC / Brier / log loss / Brier skill vs the training base rate (must beat it by >= 1%), reliability bins + ECE, subgroup metrics by strategy / regime / session with a stability check. `promotion_ready` is always False.
+- `learning/jobs.py` `run_training_job()` — IMPLEMENTED, TESTED (cloud). One origin per job (BACKTEST or PAPER, never pooled); untouched-OOS runs never read; rows overlapping any reserved OOS range dropped and counted; retired-strategy rows dropped; walk-forward -> final temporal retrain -> registered BASELINE / INSUFFICIENT_DATA (never CURRENT, checked) -> append-only MODEL_WALK_FORWARD trial -> promotion gate evaluated on the true facts and REPORTED only (no state change) -> rollback evidence (previous version's skill). The Stage-1 observer then scores the BASELINE model with zero influence. CLI wiring: Phase 8 checkpoint.
+- Migration `0024_learning_and_cost_evidence`: `backtest_trades.entry_features_json` (persisted decision-time features; pre-0024 rows are excluded from training, never imputed) and `execution_cost_observations`.
+- `costs/observations.py` — IMPLEMENTED, CONNECTED (DEMO entry cycle after `submit_new_entry` returns; engine task `cost_evidence_sweep`, P3, 60s), TESTED (cloud simulated broker, `tests/test_cost_observations.py`). Per DEMO order that reached the broker: quote time, bid/ask/spread, requested vs volume-weighted fill price, adverse slippage, entry commission/fee, retcode/comment, fill type, deal count, the estimate, session, ATR / realized volatility / spread percentile, news proximity; exit commission/fee and swap completed once the position closes. A failure is a WARNING event and never touches the order. `summarize_observations()` is operator evidence (>= 30 filled and closed) — it never writes config or relabels costs. TESTED-LIVE-DEMO: no (BLOCKED-ON-LOCAL-MT5; quote time is broker server time, backlog #14).
+
 ## Current git commit
 
 See the latest entry in WORKLOG.md for the current commit hash — this
@@ -1573,14 +1580,15 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-23 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+24 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
 `0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
 `0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
 `0019_paper_pending_entry`, `0020_simulation_provenance`,
-`0021_research_trials`, `0022_runtime`, `0023_rag_ingestion`).
+`0021_research_trials`, `0022_runtime`, `0023_rag_ingestion`,
+`0024_learning_and_cost_evidence`).
 
 ## Local RAG (advisory-only)
 
@@ -1720,8 +1728,8 @@ responds to) is not wired to anything live. 71 tests
 
 Run `pytest` for the exact current count — it changes every session and
 duplicating a specific number here goes stale immediately. Latest
-(2026-09-24 Checkpoint D, Linux cloud runner, Python 3.13, `MetaTrader5`
-not installable there): 1316 passed, 7 skipped (`test_mt5_gateway_live.py`
+(2026-09-24 Checkpoint E, Linux cloud runner, Python 3.13, `MetaTrader5`
+not installable there): 1345 passed, 7 skipped (`test_mt5_gateway_live.py`
 — needs the Windows laptop's live MT5 terminal), 0 failed. Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
 added `test_gateway_retcodes.py`, `test_request_token.py`,
 `test_position_expectancy.py`, and substantially rewrote/extended

@@ -47,6 +47,7 @@ from adaptive_scalper.execution.reconciliation import (
     BrokerPositionSnapshot,
 )
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions
+from adaptive_scalper.costs.observations import record_entry_observation
 from adaptive_scalper.execution.service import FILLED, PARTIAL, FreshEvidence, submit_new_entry
 from adaptive_scalper.execution.store import get_active_orders
 from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
@@ -456,6 +457,9 @@ class DemoRuntime:
             fetch_fresh_evidence=lambda: self.fresh_evidence(canonical, signal, sizing.monetary_risk),
             magic=self.config.runtime.magic, comment="ASN", now_utc=now, clock=self.clock,
         )
+        if not outcome.status.startswith("BLOCK"):
+            self._observe_execution_cost(outcome, chain, canonical, broker, signal.direction, tick, price,
+                                         sizing.volume, cost, analysis.feature_vector, now)
         if outcome.status in (FILLED, PARTIAL):
             row = self.conn.execute("SELECT broker_position_id FROM positions WHERE entry_order_id = ?",
                                     (outcome.order.id,)).fetchone()
@@ -470,6 +474,23 @@ class DemoRuntime:
                 )
         return self._record(canonical, analysis.bar_time, "EXECUTION", outcome.status, outcome.detail,
                             strategy_key=signal.strategy_key, direction=signal.direction, chain_key=chain)
+
+    def _observe_execution_cost(self, outcome, chain, canonical, broker, direction, tick, price, volume, cost,
+                                features, now) -> None:
+        """Phase 7 evidence, recorded after the broker call returned. A
+        failure here is logged and swallowed: it can never change what
+        happened to the order."""
+        try:
+            record_entry_observation(
+                self.conn, order_id=outcome.order.id, chain_key=chain, canonical_symbol=canonical,
+                broker_symbol=broker, direction=direction, outcome_status=outcome.status, decided_at_utc=now,
+                tick=tick, requested_price=price, requested_volume=volume, estimate=cost, features=features,
+                news_windows=self.news.windows_for(canonical), now_utc=now,
+            )
+        except Exception as exc:
+            logger.warning("execution cost observation failed: %s", exc)
+            record_event(self.conn, "WARNING", "costs", "COST_OBSERVATION_FAILED", f"{type(exc).__name__}: {exc}",
+                         canonical_symbol=canonical, dedup_key=f"cost_observation:{canonical}", now_utc=now)
 
     # ------------------------------------------------------------------
     # the pre-send evidence builder (called twice by submit_new_entry)

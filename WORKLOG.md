@@ -1995,3 +1995,23 @@ caught a literal "live" string in the first draft of the control-key list
 `docs/KNOWLEDGE_MEMORY.md`.
 
 Full suite: 1316 passed, 7 skipped (live MT5 only), 0 failed.
+
+## Session: Checkpoint E -- training job, model walk-forward, DEMO cost evidence (2026-09-24, cloud)
+
+Phases 6-7. Found while building the job: `backtest_trades` never stored
+the entry feature snapshot, so no persisted backtest could ever become
+training data -- migration 0024 adds `entry_features_json` (older rows are
+excluded, not imputed). The existing `cost_observations` table (0008) was
+never wired and lacks fill-level fields; the new
+`execution_cost_observations` table is written after each DEMO send and
+completed by an off-hot-path sweep. `learning/model_walk_forward.py` +
+`learning/jobs.py`: training never promotes (registration state checked
+explicitly, promotion gate only reported). Test-writing slips corrected
+(purge arithmetic, closed-interval OOS overlap) and a float-noise issue
+fixed for real: "beats the base rate" now requires a >= 1% Brier skill.
+
+Pre-existing pyflakes findings (20, all in untouched files, incl. a
+harmless duplicated `RegimeTracker.confirmed_regime` property) are left
+for the QA phase.
+
+Full suite: 1345 passed, 7 skipped (live MT5 only), 0 failed.
