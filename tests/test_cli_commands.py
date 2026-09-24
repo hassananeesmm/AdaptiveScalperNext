@@ -65,7 +65,7 @@ EXPECTED = {
     "doctor", "status", "health", "symbols", "strategies", "why-no-trade", "journal", "costs", "kill-switch",
     "history", "broker-history", "paper", "demo", "scan", "analyse", "reconcile", "news", "backtest",
     "walk-forward", "oos", "path-stress", "purged-validation", "models", "learning", "model-walk-forward", "rag",
-    "okf", "dashboard",
+    "okf", "dashboard", "order-check-probe",
 }
 
 
@@ -282,7 +282,7 @@ def test_okf_validate_fails_on_a_bad_bundle(env, tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("args", [["symbols"], ["reconcile"], ["history", "bootstrap"], ["broker-history", "status"],
-                                  ["scan"], ["paper"], ["demo"]])
+                                  ["scan"], ["paper"], ["demo"], ["order-check-probe", "--symbol", "XAUUSD"]])
 def test_broker_commands_fail_cleanly_without_metatrader5(env, capsys, args, monkeypatch):
     import adaptive_scalper.gateway.mt5_gateway as mt5_module
 

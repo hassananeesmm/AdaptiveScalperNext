@@ -2037,3 +2037,30 @@ uvicorn process (page, /api/panels, websockets client), and headless
 Chromium (15 panels rendered, live feed, no JS errors).
 
 Full suite: 1382 passed, 7 skipped (live MT5 only), 0 failed.
+
+## Session: Checkpoint H -- docs, handoff, order_check probe, final cloud QA (2026-09-24, cloud)
+
+Phases 11-14 (+ the tooling Phase 16 needs). New `order-check-probe`
+command + `execution/order_check_probe.py` + migration 0026: one
+never-sent DEMO `order_check` after fresh DEMO/permission/identity/quote/
+direction/risk-safe-volume/filling verification, evidence recorded for
+BUG_BACKLOG #5 (audit allow-list extended for `order_check` only; the
+module has no send path, tested). Docs: README, docs/ARCHITECTURE,
+SAFETY, RESEARCH_VALIDATION, WINDOWS_DEPLOYMENT, RELEASE, QA_REPORT, and
+LOCAL_MT5_HANDOFF.md (steps A-Y + evidence-based acceptance criteria +
+the list of cloud-unverifiable items). PROJECT_STATUS rewritten at the top
+with the directive's status tags and a component matrix; stale sections
+(operating modes, retired strategies, next task, tests, unverified,
+backtest/PAPER "not yet wired") replaced with current truth; CLAUDE.md
+"Current state" refreshed. OKF runbooks v2 (a wrong bootstrap flag in v1
+corrected). QA found that no test proved runtime restart recovery -- added
+`tests/test_runtime_restart.py` (DEMO position keeps being managed with no
+re-submission; crash mid-submission -> UNKNOWN blocks all new exposure;
+PAPER sessions resume exactly) instead of overstating the report.
+
+QA: compileall OK; ruff F/E9 clean; bandit 0 high (9 triaged false
+positives); pip-audit no known vulnerabilities (MetaTrader5 excluded,
+Windows-only); secret scan fixtures only.
+
+Full suite: 1440 passed, 7 skipped (live MT5 only), 0 failed.
+

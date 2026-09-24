@@ -1,19 +1,25 @@
 # PROJECT STATUS
 
-Update this file continuously as work happens (not retroactively), per
-`CLAUDE.md` rule 10 and `MASTER_BUILD_DIRECTIVE.md` §137. This file
-describes the CURRENT real repository state — when a rewrite happens,
-prior phrasing that no longer matches reality is replaced, not left
-alongside the update as a contradiction.
+Maintained continuously (CLAUDE.md rule 10, MASTER_BUILD_DIRECTIVE.md
+section 137). This file states CURRENT truth; where older sections below
+describe history, the matrix and "Current phase" here win.
 
-Status tags used below, applied per component:
+**REAL-MONEY EXECUTION IS DISABLED.** PAPER + MT5 DEMO only.
+
+Status tags (completion directive Phase 11):
 
 - **IMPLEMENTED** — code exists and is believed correct.
-- **CONNECTED** — wired into a real call path (not just importable/dead code).
-- **TESTED (fake/mock)** — covered by deterministic tests (FakeGateway, tmp SQLite).
-- **TESTED (live)** — exercised against this machine's real MT5 terminal.
-- **UNVERIFIED** — no automated test exercises it yet.
-- **KNOWN DEFECT** — see BUG_BACKLOG.md for detail.
+- **CONNECTED** — wired into a real call path (runtime, CLI or dashboard).
+- **TESTED-FAKE** — deterministic tests with FakeGateway/ChaosGateway and tmp SQLite.
+- **TESTED-CLOUD** — the full suite passed on the Linux cloud runner (no MT5 there).
+- **TESTED-WINDOWS** — verified on the Windows laptop (`scripts/windows_verify.ps1`).
+- **TESTED-LIVE-DEMO** — exercised against the real MT5 DEMO terminal.
+- **UNVERIFIED** — no automated test exercises it.
+- **BLOCKED-ON-LOCAL-MT5** — needs the laptop's terminal; see LOCAL_MT5_HANDOFF.md.
+
+Cloud tests never verified MT5 behaviour. TESTED-LIVE-DEMO / TESTED-WINDOWS
+below refer only to what earlier LOCAL sessions recorded (WORKLOG.md), never
+to this cloud work.
 
 ## Project
 
@@ -21,71 +27,47 @@ Adaptive Scalper Next
 
 ## Repository
 
-C:\AdaptiveScalperNext (GitHub: `hassananeesmm/AdaptiveScalperNext`, branch `main`)
+`C:\AdaptiveScalperNext` on the Windows laptop; GitHub
+`hassananeesmm/AdaptiveScalperNext`. Completion work is on branch
+`claude/pensive-newton-tckoid`, PR #1 against `main` (not merged
+automatically).
 
 ## Current phase
 
-Directive §117 PHASE 1 (FOUNDATION) and PHASE 2 (HISTORY) are complete
-and live-verified. PHASE 3 (CORE TRADING) is complete and live-verified
-end to end: feature engine, regime classifier, six active strategies +
-retirement firewall, the immutable decision journal, the keyless news
-system, the cost/expected-net-edge gate, correlation/portfolio exposure
-tracking, the risk governor, and the COMPOSED final permission gate
-(directive §36) all exist and were verified together in one real
-pipeline run against the live DEMO account and real market data.
+All cloud-completable work of the completion directive (Phases 0-14) is
+done and tested in the cloud: causal PAPER/backtest correctness, research
+validation, broker chaos + recovery, the runtime orchestrator, RAG ingestion
++ OKF knowledge, ML training job + model walk-forward, DEMO cost evidence,
+the complete CLI, the observer-only dashboard, Windows launchers and release
+scripts, documentation and QA. What remains is Windows-local and broker-local
+(LOCAL_MT5_HANDOFF.md steps A-Y): live terminal tests, the real `order_check`
+retcode, the broker timestamp convention, real history backtests, PAPER
+burn-in, the first natural DEMO order, and packaging. **Release readiness:
+cloud release candidate; BLOCKED-ON-LOCAL-MT5.**
 
-PHASE 4 (EXECUTION) exists: `order_send`/`order_check`/`positions_get`/
-`orders_get` are implemented on `Mt5Gateway`/`FakeGateway`; the order
-state machine, idempotent persistence, UNKNOWN resolution (all-evidence),
-reconciliation (real gateway truth, multi-deal-aware, atomic per
-recovery), position-ticket resolution, a safe close path, a safe
-protective-stop-modification path, and `execution/service.py` (the one
-execution orchestration service, architecturally enforced) all exist and
-are tested — including two independent, freshly-refetched safety
-checkpoints immediately around every real `order_send`/`order_check`
-call (external review 2026-09-21, findings #1-3, #9, #12-16; see that
-review's fixes further down this file and in WORKLOG.md). A real FILLED
-or PARTIAL entry now immediately persists a local `positions` row scaled
-to the actual filled volume — nothing in this codebase silently drops
-partial exposure. **No real DEMO `order_send` has ever been performed
-against a live broker terminal** — this remains a deliberate scope
-boundary pending the full PAPER run and QA campaign, not a missing
-capability.
+## Component status matrix (2026-09-24)
 
-PHASE 5 (position management) is implemented and tested end to end at
-the per-position-review level: continuous position expectancy
-(`position_management/expectancy.py`), the adaptive-exit and re-entry
-DECISION CORES, durable cross-restart state (`position_management
-/state_store.py`, with an immutable-value conflict guard and a degraded-
-health quarantine path for unprovable initial risk), and
-`position_management/manager.py`'s `review_position_once()` — the real
-per-position review cycle wiring all of the above together with the safe
-close/stop-modification services and the decision journal
-(`POSITION_REVIEWED`/`STOP_ADVANCED`/`POSITION_CLOSED` events). NOT yet
-built: the caller LOOP that invokes `review_position_once()` for every
-open position on a real ~0.5-1s cadence — that is part of the still-
-pending full-runtime-wiring task, not a gap in the review function
-itself.
-
-Local RAG (`adaptive_scalper/rag/`, advisory-only) and ML/self-learning
-OBSERVER-STAGE machinery (`adaptive_scalper/learning/` — lifecycle,
-registry, promotion gate, drift response; no real model training yet)
-are both implemented and tested.
-
-Backtest / sequential-fold evaluation / overlap-aware untouched OOS /
-trade-order path stress (`adaptive_scalper/backtest/`), the PAPER engine
-(`adaptive_scalper/paper/`) and LogisticRegression observer training
-(`learning/training.py`) EXIST and are tested (fake/cloud) — see their
-sections below; the 2026-09-24 correctness checkpoints (A: causal fills,
-entry-bar SL/TP, peak R, costs, pending state, deferred-entry
-revalidation, historical risk halts, PAPER session fingerprint,
-provenance) are recorded there and in WORKLOG.md. Still pending: the
-full end-to-end runtime engine, the complete dashboard/CLI, and release
-packaging. See "Schema version" below for the current schema number —
-not duplicated here to avoid exactly the staleness this note is fixing.
-See "Current next task" below for the authoritative list of what
-remains, and never infer completion of anything not explicitly marked
-IMPLEMENTED/CONNECTED/TESTED in this file.
+| Component | IMPL | CONNECTED | TESTED-FAKE/CLOUD | TESTED-WINDOWS / LIVE-DEMO |
+|---|---|---|---|---|
+| Config, persistence (schema 26), kill switch, operator authority | yes | yes | yes | earlier local sessions (read-only) |
+| Gateway, symbol resolution/validation, DEMO gate, spec store | yes | yes | yes | read-only calls live-verified earlier; spec store BLOCKED-ON-LOCAL-MT5 |
+| History bootstrap, broker account history | yes | CLI | yes | live-verified earlier |
+| Features, regimes, strategies (6 + retired firewall) | yes | runtime/backtest/PAPER | yes | live data pipeline verified earlier |
+| Journal, news, costs, portfolio, risk, final permission, selector | yes | runtime | yes | pipeline verified earlier; no live order |
+| Execution service, close, stop modification, reconciliation, UNKNOWN, recovery | yes | DEMO runtime, CLI reconcile | yes (+38 chaos tests) | BLOCKED-ON-LOCAL-MT5 (no live order_send yet) |
+| `order_check` probe | yes | CLI `order-check-probe` | yes | BLOCKED-ON-LOCAL-MT5 (handoff L-M) |
+| Position management (expectancy, adaptive exit, re-entry, review loop) | yes | DEMO position_cycle | yes | BLOCKED-ON-LOCAL-MT5 |
+| Backtest, sequential folds, untouched OOS, path stress | yes | CLI | yes | real-history runs BLOCKED-ON-LOCAL-MT5 (need bootstrapped bars) |
+| PAPER engine + sessions | yes | PAPER runtime | yes | burn-in BLOCKED-ON-LOCAL-MT5 |
+| Research (purged CV, CPCV, PSR/DSR, PBO, ledger) | yes | CLI | yes | n/a |
+| Runtime engine (scheduler, DEMO/PAPER cycles, news monitor, advisory) | yes | `paper`/`demo` | yes (simulated broker) | BLOCKED-ON-LOCAL-MT5 |
+| RAG (store, index, ingestion) | yes | runtime task + CLI | yes | n/a |
+| OKF knowledge (loader, validator, advisor, bundle, benchmark) | yes | runtime advisory + CLI + dashboard | yes | n/a |
+| Learning (training job, model walk-forward, observer Stage 1) | yes | CLI + runtime observer | yes | n/a |
+| DEMO execution cost observations | yes | DEMO runtime + sweep + CLI | yes (simulated broker) | BLOCKED-ON-LOCAL-MT5 |
+| CLI (package, ~40 commands) | yes | yes | yes; broker commands fail cleanly without MT5 | BLOCKED-ON-LOCAL-MT5 for broker commands |
+| Dashboard (read-only, 15 panels, WebSocket) | yes | `dashboard` | yes (+ uvicorn + headless Chromium) | TESTED-WINDOWS pending |
+| Launchers, windows_verify/build_release/release_smoke_test | yes | n/a | static only (`test_launchers.py`) | not executed (Windows-only) |
 
 ## Completed components
 
@@ -1049,26 +1031,23 @@ This is a conscious scope boundary, not an oversight: the code path
 exists and is thoroughly tested against `FakeGateway`, but nothing in
 this codebase has called real `order_send` yet.
 
-## Live MT5 environment (this machine only, not guaranteed present)
+## Live MT5 environment
 
-This development machine has a real MT5 terminal (IC Markets Global,
-server `ICMarketsSC-Demo`, account `trade_mode=0`/DEMO) installed and
-logged in. `test_mt5_gateway_live.py` self-skips cleanly (does not fail)
-when no terminal is reachable — re-run it to check current connectivity
-rather than trusting this note, which is a point-in-time snapshot. Do
-NOT assume a live terminal is present on any other machine or CI.
+The Windows laptop has an MT5 terminal logged into a DEMO account (recorded
+by earlier LOCAL sessions; see WORKLOG.md). The cloud runner has no MT5 and
+never connects to the laptop. `test_mt5_gateway_live.py` self-skips without
+a terminal.
 
 ## Operating modes
 
-PAPER + MT5 DEMO only. `ALLOWED_MODES` contains no third value; config
-validation rejects any mode outside `{PAPER, DEMO}`. `order_send`/
-`order_check` now exist (`gateway/protocol.py`, `mt5_gateway.py`,
-`execution/service.py`) but have only ever been exercised against
-`FakeGateway` in tests and, live, DEMO account order verification is
-still pending (see "Not yet built/verified"). There is no code path that
-enables real-money trading: `verify_demo_before_order()` is called fresh
-before every `order_send`/`order_check` and fails closed unless the
-connected account is confirmed DEMO.
+PAPER + MT5 DEMO only; `ALLOWED_MODES == {PAPER, DEMO}` (audited: no LIVE/
+REAL strings anywhere in the source). A REAL/CONTEST account is refused at
+startup in both modes and re-checked (`verify_demo_before_order`) before
+every broker mutation. `order_send` is reachable only through
+`execution/service.py` (entries), `close.py`, `stop_modification.py`;
+`order_check` additionally through the never-sending
+`execution/order_check_probe.py`. No live `order_send` has been performed by
+this project yet (BLOCKED-ON-LOCAL-MT5, handoff steps U-X).
 
 ## Allowed executable canonical symbols
 
@@ -1094,16 +1073,13 @@ just the kill-switch slice on its own.
 - failed_breakout_fade
 - support_resistance_reaction
 
-Enforced at TWO independent layers now: config-validation
-(`StrategiesConfig` rejects a `retired` list missing either key) and the
-strategy registry (`strategies/registry.py`'s `register()` unconditionally
-rejects either key, regardless of caller). Directive §121's "registry/
-signal" tests are covered (parametrized over both keys, proving a
-rejection doesn't corrupt the registry). NOT yet covered because the
-subsystems don't exist yet: rank (no selector), train/promote (no
-ML/model registry), RAG reactivation (no RAG), execute (no order path) —
-each will get its own retirement-firewall regression test as that
-subsystem is built, not assumed safe by extension.
+Enforced independently by config validation, the strategy registry,
+engine startup, the selector/final permission (`BLOCK_STRATEGY_RETIRED`),
+the promotion gate, the training job (rows dropped and counted) and the
+OKF validator (a retired strategy can only appear in a deprecated concept
+marked `retired: true`; the advisor returns nothing for it). Tests:
+`test_strategy_registry.py`, `test_final_permission.py`,
+`test_learning_promotion.py`, `test_learning_jobs.py`, `test_knowledge.py`.
 
 ## Known environment/plugin issues (non-blocking)
 
@@ -1381,112 +1357,17 @@ and `orders_get()` both correctly return empty lists (0 open positions,
 
 ## Current next task
 
-Phase 3 (CORE TRADING) is complete and live-verified end to end. An
-external execution-safety review of the Phase 4 building blocks found 9
-issues (order-ticket-vs-position-ticket confusion, no dedicated safe
-close path, stale UNKNOWN/reconciliation modules, an incomplete final
-permission gate, too-permissive idempotency, a hardcoded IOC filling
-assumption, and no single execution orchestration service) — ALL NINE
-are now fixed (see "Execution-safety review fixes" section below) and
-`execution/service.py` (`submit_new_entry()`) is the ONE module
-permitted to call `Gateway.order_send()` for a new entry, enforced by
-`tests/test_architecture_execution_boundary.py`.
+Cloud work is complete; the next tasks are the user's, on the laptop:
 
-`position_management/adaptive_exit.py` and `position_management/
-re_entry.py` are now also implemented and tested (directive sections
-17-23, 26-28) — the pure decision logic for HOLD/MOVE_PROTECTIVE_STOP/
-FULL_CLOSE and the re-entry cooldown/hysteresis. `re_entry.py`'s output
-is wired into `core/final_permission.py`'s `BLOCK_REENTRY_CHURN` via the
-`reentry_check` field.
-
-Local RAG (`adaptive_scalper/rag/`, advisory-only) and ML/self-learning
-observer-stage machinery are also implemented — see their respective
-sections below. A second external review then found 8 more execution-
-safety issues; all 8 are now fixed (see the two "Execution-safety review
-round 2" sections above), including a real continuous position-
-expectancy engine (`position_management/expectancy.py`) and a real
-portfolio-heat gate (`portfolio.exposure.evaluate_portfolio_risk_gate()`,
-wired into `core/final_permission.py` as `BLOCK_PORTFOLIO_RISK`).
-
-A further external review (2026-09-21) of `cbe16b3` found 17 more
-findings spanning `execution/stop_modification.py` (DEMO/TP/symbol-state
-not independently reverified before send), `position_management/manager.py`
-(false exit-request timestamps, no journaled `POSITION_REVIEWED`/
-`STOP_ADVANCED`, invalid-risk positions treated as a healthy HOLD,
-missing real exit-fill metrics), `position_management/state_store.py`
-(silently-accepted immutable-state conflicts), `execution/service.py`
-(critical broker/kill-switch state trusted solely from caller-supplied
-evidence; no authoritative final margin/broker recheck immediately before
-send; a resolvable/unresolvable PARTIAL fill not immediately becoming
-accounted local exposure), `portfolio/exposure.py` (pending exposure
-missing from per-symbol/currency/USD/cluster heat), `execution/
-request_token.py` (a weak prefix-slice correlation token), and
-`execution/reconciliation.py` (only the latest OUT deal recorded, no
-INOUT/OUT_BY handling, the local recovery write not atomic with its
-journal event). **All 17 are now fixed** — see WORKLOG.md for the
-detailed per-finding changes and this file's per-component sections
-(`execution/stop_modification.py`, `position_management/manager.py` and
-`state_store.py`, `execution/service.py`, `portfolio/exposure.py`,
-`execution/request_token.py`, `execution/reconciliation.py`) for current
-behavior. `execution/store.py` gained `create_local_position()` — used by
-`execution/service.py`'s FILLED and PARTIAL paths — closing a genuine
-pre-existing gap this review surfaced: nothing in this codebase had ever
-created a `positions` table row for a real (non-reconciliation-recovered)
-entry before.
-
-A further external review of the working tree AHEAD of the 17-findings
-checkpoint's push (`2bd1bf0`) found 16 more findings (NF1-NF16), fixed in
-the same session before resuming backtest/ML/PAPER work: quote-freshness
-`now` frozen across a two-round check instead of using an injectable
-`clock` called independently each round (NF1); the execution-owned
-symbol check trusting the caller's direction/identity evidence instead
-of re-verifying it against fresh symbol metadata (NF2); `execution/
-close.py` lagging `stop_modification.py`'s two-round hardening standard
-(NF3) and collapsing CANCELLED/RESTING/PARTIAL into a single `SENT`
-(NF4); partial-fill residual risk not persisted as durable typed fields
-(NF5-6); `create_local_position()` unable to handle a second partial
-fill into the same `broker_position_id`, `entry_price` persistable as a
-fabricated `0.0`, individual entry deals never persisted, and the local
-`deals` schema dropping broker `fee` (NF7-10); UNKNOWN-without-broker-id
-resolution matching on token+symbol alone (NF11); `run_reconciliation()`
-never reconciling `orders_get()` against local pending/resting orders
-(NF12); exit-fill metrics aggregating only the latest closing deal and
-never computing `realized_slippage` (NF13-14); unbounded duplicate
-incident rows on every reconciliation cycle (NF15); and this file's own
-stale Gateway Protocol/schema-version/"order_send does not exist"
-paragraphs (NF16). **All 16 are now fixed** — see WORKLOG.md and
-BUG_BACKLOG.md's "Fixed" section (search "16 new findings before
-resuming backtest/ML/PAPER work") for full per-finding detail. New:
-`execution/entry_fills.py`, migrations `0015_entry_fills`/
-`0016_order_magic`/`0017_incident_dedup` (schema now 17).
-
-NOT yet done: actually WIRING the full pipeline into one real end-to-end
-runtime loop (market data → features → regime → strategies → selector →
-risk sizing → `execution.service.submit_new_entry` → position manager →
-adaptive exit → re-entry → result → RAG ingestion) — this is also what
-would populate `portfolio/exposure.py`'s `pending_positions` from real
-RESTING orders and drive `position_management/manager.py`'s
-`review_position_once()` on a real per-position cadence; real ML model
-training (the lifecycle/registry/promotion/drift machinery exists, and
-the backtest/walk-forward temporal-split infrastructure it needs now
-exists too — see "Backtest / walk-forward / OOS / Monte Carlo
-infrastructure" below — but nothing yet trains a real model on it); the
-complete dashboard; and the complete CLI/launchers — all before any real
-controlled-DEMO test can run. `execution/service.py`'s
-`order_check_success_retcodes` convention (`{0, 10009}`) also still needs
-live verification against the real terminal (BUG_BACKLOG.md item 5). A
-live tick-bootstrap run (currently only fake-tested + individual live
-gateway-call verification) remains a smaller open item from Phase 2.
-`execution/reconciliation.py`'s INOUT handling has a named, honest scope
-limit: it records the reducing portion of an INOUT deal as closing
-evidence but does not attempt to open a new local position for whatever
-additional exposure the same deal may have opened in the other direction
-(no canonical-symbol/strategy context exists at reconciliation time to
-attribute it) — tracked in BUG_BACKLOG.md, not silently mishandled.
-
-See BUG_BACKLOG.md and this file's per-component notes for exactly what
-is and isn't done; do not infer completion of anything not explicitly
-marked IMPLEMENTED/CONNECTED/TESTED above.
+1. Review and merge PR #1 (never merged automatically).
+2. LOCAL_MT5_HANDOFF.md steps A-M: install, verify, live tests, one
+   never-sent `order_check`; record its retcode in BUG_BACKLOG #5 and the
+   broker timestamp offset in BUG_BACKLOG #14.
+3. Steps O-S: real history, backtests, reserved OOS, PAPER burn-in with a
+   mid-session restart, evidence review, `[costs.SYMBOL]` from evidence.
+4. Steps T-X: human kill-switch decision, controlled DEMO, first natural
+   order verified manually.
+5. Step Y: release build + smoke test (docs/RELEASE.md).
 
 ## Backtest / walk-forward / OOS / Monte Carlo infrastructure (directive section 80)
 
@@ -1505,7 +1386,7 @@ Correctness checkpoint (2026-09-24, regression suite `tests/test_backtest_correc
 
 Checkpoint A (2026-09-24, `tests/test_simulation_phase0.py`, 35 tests): a pending entry is RE-VALIDATED immediately before its next-bar-open fill (staleness vs `max_entry_fill_delay_seconds` — default two bars, so a weekend gap drops it; news window; cost and expected net edge at the fill bar's spread; safe sizing; `risk.governor.evaluate_risk_gate` with the SAME hard ceilings as DEMO incl. daily loss and drawdown; `portfolio.exposure.evaluate_portfolio_risk_gate`; `portfolio.correlation.evaluate_correlation_gate` against `external_open_positions`) and drops are listed in `BacktestResult.entry_rejections`. Daily-loss/drawdown ceilings also short-circuit scanning (`risk_halted_scans`) and survive incremental calls via `RiskState`. `BacktestConfig.risk_limits` defaults to directive section 32's values and `risk_per_trade_pct` may not exceed it. Every `SimulatedTrade` now carries `signal_time_utc`, `entry_fill_reference`/`exit_fill_reference` (`NEXT_BAR_OPEN`/`STOP_TRIGGER`/`TARGET_TRIGGER`/`RANGE_END_CLOSE`), `exit_decision_time_utc`, entry/exit spread and slippage, commission, swap, fee, `gross_pnl`, `peak_r`, `origin`, `fill_model_version` (`fill_model/v2`), `cost_provenance` (`FillAssumptions.provenance`, default `UNVERIFIED_ASSUMPTION` — unverified costs are labeled, never presented as known), `config_fingerprint` (`backtest/fingerprint.py`) and `entry_evidence` (strategy/decision/fill-revalidation evidence; ML/RAG/OKF explicitly `NOT_CONSULTED`). `walk_forward.run_walk_forward()` is labeled `SEQUENTIAL_FIXED_CONFIG_EVALUATION` (a stability check, not ML walk-forward). Monte Carlo is renamed `path_stress.run_trade_order_path_stress()` (`TRADE_ORDER_PATH_STRESS`): terminal equity is reported once, because permutation cannot change a sum; only drawdown/ruin vary. OOS overlap checks now also cover different provenance, and `allow_oos_reuse=True` is recorded as `OOS_ANALYSIS_REUSE` and spends the range like an OOS run.
 
-NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracked under the pending CLI/dashboard tasks); nothing has run this against REAL historical bars yet (only synthetic bars in tests) — a real run needs `history/store.get_bars()` (added this checkpoint) to pull an actual bootstrapped range.
+Surfaced by the CLI (`backtest`, `walk-forward`, `oos`, `path-stress`, `purged-validation`) and the dashboard research panel. Not yet run on REAL bootstrapped history (BLOCKED-ON-LOCAL-MT5, handoff step O).
 
 ## PAPER mode (directive section 132)
 
@@ -1519,7 +1400,7 @@ NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracke
 
 - Checkpoint A (2026-09-24): PAPER starts NOW — a new session decides only the most recent supplied bar (deep history is context, never replayed as `PAPER_LIVE_DATA`; BUG_BACKLOG #10 fixed). Sessions are bound to their configuration fingerprint; resuming under a different configuration (or a legacy session with history and no fingerprint) raises `PaperSessionConfigMismatchError` — start a new session key. Risk state (peak equity, current UTC day's realized P/L) persists across cycles. `run_paper_cycle()` accepts `external_open_positions`/`correlation_matrix` so a multi-symbol runtime applies the cross-symbol gates. One-new-bar-at-a-time cycling is proven identical to one continuous run (`chunk=1` in the property test).
 
-NOT yet done: no `Gateway` is wired to this at all yet — a future runtime-engine caller (task: "wire full runtime engine") must fetch real bars from the live MT5 terminal via a `SynchronizedGateway` and pass them into `run_paper_cycle()` on a real schedule; no CLI command or dashboard panel surfaces PAPER state yet; PAPER burn-in itself (directive section 132: "Run PAPER burn-in before DEMO") hasn't run.
+Wired: `runtime/paper.py` feeds live closed bars from the one `SynchronizedGateway` every entry cycle (`paper` command / `START PAPER.bat`); the dashboard positions panel shows sessions. PAPER burn-in on real data: BLOCKED-ON-LOCAL-MT5 (handoff steps P-R).
 
 ## Research validation layer (Phase 1, 2026-09-24)
 
@@ -1569,6 +1450,8 @@ Two real defects found and fixed (7 of the tests fail without the fixes):
 
 ## Operator CLI + observer-only dashboard (Phases 8-9, 2026-09-24)
 
+- `order-check-probe` (Phase 16 / handoff step L) + `execution/order_check_probe.py` + migration `0026_order_check_probes`: one never-sent DEMO `order_check` after fresh DEMO/permission/identity/quote/direction/risk/constraint verification; evidence recorded. IMPLEMENTED, CONNECTED (CLI), TESTED-FAKE (`tests/test_order_check_probe.py`); live retcode BLOCKED-ON-LOCAL-MT5.
+
 - `adaptive_scalper/cli/` (package; replaces the single `cli.py`) — IMPLEMENTED, CONNECTED, TESTED (cloud: `tests/test_cli.py`, `tests/test_cli_commands.py`). `python -m adaptive_scalper.cli`: doctor, status, health, symbols (captures broker specs), strategies, why-no-trade, journal recent, costs observed, kill-switch status/engage/bootstrap/clear, history bootstrap/status, broker-history import/status (login masked), paper, demo, scan, analyse (`--source mt5|db`, side-effect free), reconcile, news status/refresh/upcoming, backtest, walk-forward, oos, path-stress, purged-validation, models, learning status/train/scores, model-walk-forward, rag status/stats/similar/rebuild-index/verify-index/ingest, okf status/validate/search/benchmark, dashboard. Every broker-facing command refuses a non-DEMO account; `paper`/`demo` print the safety banner, never touch the kill switch, and refuse to start while another runtime's heartbeat is fresh. `OperatorAuthority` is constructed only in `cli/operator.py` (audit updated). Broker-facing commands verified to FAIL cleanly without MetaTrader5; live behaviour is BLOCKED-ON-LOCAL-MT5.
 - Migration `0025_symbol_specs` + `gateway/spec_store.py`: the broker SymbolSpec captured by `symbols`, `history bootstrap` and runtime startup, so offline research runs without a terminal (missing spec = clear error, never invented).
 - `runtime/analysis.py`: side-effect-free analysis (raw regime + every strategy's would-be signal; no journal, no state, no sizing).
@@ -1586,7 +1469,7 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-25 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+26 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
@@ -1594,7 +1477,8 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 `0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
 `0019_paper_pending_entry`, `0020_simulation_provenance`,
 `0021_research_trials`, `0022_runtime`, `0023_rag_ingestion`,
-`0024_learning_and_cost_evidence`, `0025_symbol_specs`).
+`0024_learning_and_cost_evidence`, `0025_symbol_specs`,
+`0026_order_check_probes`).
 
 ## Local RAG (advisory-only)
 
@@ -1732,68 +1616,17 @@ responds to) is not wired to anything live. 71 tests
 
 ## Tests
 
-Run `pytest` for the exact current count — it changes every session and
-duplicating a specific number here goes stale immediately. Latest
-(2026-09-24 Checkpoint F, Linux cloud runner, Python 3.13, `MetaTrader5`
-not installable there): 1382 passed, 7 skipped (`test_mt5_gateway_live.py`
-— needs the Windows laptop's live MT5 terminal), 0 failed. Older entry: 916 passed, 0 failed, 0 skipped (round-2 execution-safety fixes
-added `test_gateway_retcodes.py`, `test_request_token.py`,
-`test_position_expectancy.py`, and substantially rewrote/extended
-`test_execution_service.py`, `test_execution_close.py`,
-`test_execution_state_machine.py`, `test_execution_reconciliation.py`,
-`test_execution_unknown.py`, `test_portfolio_exposure.py`,
-`test_final_permission.py`; the position-management runtime pieces then
-added `test_position_management_state_store.py`,
-`test_execution_stop_modification.py`, and
-`test_position_management_manager.py`; up from 799) (up from 616 at the start of this
-checkpoint — the execution-safety review fixes and position-management
-work added `test_position_resolution.py`, `test_execution_close.py`,
-`test_broker_constraints.py`, `test_execution_service.py`,
-`test_architecture_execution_boundary.py`, `test_adaptive_exit.py`,
-`test_re_entry.py`, plus substantial additions to
-`test_gateway_execution.py`, `test_execution_unknown.py`,
-`test_execution_reconciliation.py`, `test_execution_store.py`,
-`test_mt5_request_builder.py`, and `test_final_permission.py`; the local
-RAG subsystem then added `test_rag_store.py`, `test_rag_index.py`, and
-`test_rag_service.py`; the ML/learning observer-stage subsystem then
-added `test_learning_lifecycle.py`, `test_learning_registry.py`,
-`test_learning_promotion.py`, `test_learning_drift.py`, and
-`test_learning_structural_safety.py`), across
-`tests/test_environment.py`,
-`test_config.py`, `test_persistence.py`, `test_migration_parser.py`,
-`test_kill_switch.py`, `test_guardrails.py`, `test_demo_gate.py`,
-`test_symbol_resolver.py`, `test_symbol_validation.py`,
-`test_synchronized_gateway.py`, `test_dashboard_health.py`, `test_cli.py`,
-`test_history_bootstrap.py`, `test_account_history.py`,
-`test_bar_features.py`, `test_regime_classifier.py`, `test_strategies.py`,
-`test_strategy_registry.py`, `test_journal.py`, `test_news_blocking.py`,
-`test_news_providers.py`, `test_news_calendar_service.py`,
-`test_cost_model.py`, `test_cost_edge.py`, `test_cost_tracking.py`,
-`test_portfolio_correlation.py`, `test_portfolio_exposure.py`,
-`test_risk_governor.py`, `test_final_permission.py`,
-`test_execution_state_machine.py`, `test_execution_store.py`,
-`test_execution_unknown.py`, `test_execution_reconciliation.py`,
-`test_selector.py`, `test_mt5_request_builder.py`,
-`test_gateway_execution.py`, `test_position_resolution.py`,
-`test_execution_close.py`, `test_broker_constraints.py`,
-`test_execution_service.py`, `test_architecture_execution_boundary.py`,
-`test_adaptive_exit.py`, `test_re_entry.py`, and
-`test_mt5_gateway_live.py` (live-terminal-only, self-skipping — 7 tests,
-currently connected on this machine: real DEMO account on
-`ICMarketsSC-Demo`, 0 open positions, 0 pending orders — confirmed
-during this checkpoint's live verification below).
+Latest full run: see WORKLOG.md's final entry and docs/QA_REPORT.md
+(Linux cloud runner, Python 3.13; `MetaTrader5` not installable there).
+The 7 skipped tests are `tests/test_mt5_gateway_live.py`, which need the
+laptop's live terminal (TESTED-LIVE-DEMO only when run there). Launchers
+and PowerShell scripts are verified statically (`test_launchers.py`), not
+executed.
 
 ## Unverified components
 
-- `Mt5Gateway.copy_rates_from_pos` (position-based bar fetch, superseded
-  by `copy_rates_range` for the history bootstrap) — implemented, no
-  test, live or fake, exercises it.
-- `validate_execution_quote`/`validate_direction_for_new_exposure` — pure
-  functions, fake-tested only (no gateway I/O to live-test against; their
-  correctness doesn't depend on live broker behavior the way asset
-  identity did).
-- `Mt5Gateway.order_send`/`order_check` — implemented, fake-tested
-  thoroughly, deliberately NOT exercised against the real terminal yet
-  (see the gateway execution section above for why — this is an
-  intentional scope boundary pending PAPER/QA, not an oversight).
-- Everything listed under "Current next task" as not yet built.
+- Everything marked BLOCKED-ON-LOCAL-MT5 in the matrix above.
+- `Mt5Gateway.copy_rates_from_pos` — implemented, no test exercises it
+  (superseded by `copy_rates_range`).
+- A frozen (PyInstaller) Windows build — deferred (BUG_BACKLOG #18).
+

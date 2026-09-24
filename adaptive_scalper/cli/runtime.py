@@ -175,6 +175,23 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     return 0 if report.status == "CLEAN" else 1
 
 
+def cmd_order_check_probe(args: argparse.Namespace) -> int:
+    """LOCAL_MT5_HANDOFF step L: one real DEMO order_check, never sent."""
+    from adaptive_scalper.execution.order_check_probe import CHECKED, result_dict, run_order_check_probe
+
+    cfg, conn = open_db(args.config)
+    gw = open_gateway()
+    try:
+        result = run_order_check_probe(conn, gw, canonical_symbol=args.symbol, direction=args.direction,
+                                       risk_per_trade_pct=cfg.risk.risk_per_trade_pct, magic=cfg.runtime.magic)
+    finally:
+        gw.shutdown()
+        conn.close()
+    print_json({**result_dict(result), "order_sent": False,
+                "next": "record this retcode against BUG_BACKLOG #5 before any controlled DEMO order_send"})
+    return 0 if result.status == CHECKED else 1
+
+
 def cmd_news_status(args: argparse.Namespace) -> int:
     _, conn = open_db(args.config)
     providers = [dict(r) for r in conn.execute("SELECT * FROM news_provider_state ORDER BY provider")]
@@ -236,6 +253,11 @@ def register(sub) -> None:
 
     sub.add_parser("reconcile", help="reconcile local state with the DEMO broker (never sends orders)").set_defaults(
         func=cmd_reconcile)
+
+    probe = sub.add_parser("order-check-probe", help="ONE real DEMO order_check() that is never sent (handoff step L)")
+    add_symbol_arg(probe)
+    probe.add_argument("--direction", choices=("BUY", "SELL"), default="BUY")
+    probe.set_defaults(func=cmd_order_check_probe)
 
     news = sub.add_parser("news", help="economic calendar")
     news_sub = news.add_subparsers(dest="news_command", required=True)

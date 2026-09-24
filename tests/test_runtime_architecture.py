@@ -64,8 +64,10 @@ def test_the_live_mt5_gateway_is_constructed_in_exactly_one_place():
 def test_only_the_safe_execution_services_send_or_check_orders():
     gateways = {"gateway/fake_gateway.py", "gateway/mt5_gateway.py", "gateway/synchronized_gateway.py"}
     services = {"execution/service.py", "execution/close.py", "execution/stop_modification.py"}
+    probe = {"execution/order_check_probe.py"}  # handoff step L: checks, structurally cannot send
     assert _callers("order_send") <= gateways | services
-    assert _callers("order_check") <= gateways | services
+    assert _callers("order_check") <= gateways | services | probe
+    assert "execution/order_check_probe.py" not in _callers("order_send")
     assert "execution/service.py" in _callers("order_send")
 
 

@@ -29,18 +29,19 @@ for reference is fine; no writes, ever.
 
 ## Current state
 
-This is a fresh project. `MASTER_BUILD_DIRECTIVE.md`, `PROJECT_STATUS.md`,
-and `WORKLOG.md` have not been created yet. No trading system code has been
-written. Only the development environment exists so far.
+`MASTER_BUILD_DIRECTIVE.md`, `PROJECT_STATUS.md`, `WORKLOG.md` and
+`BUG_BACKLOG.md` exist and are current; read them at session start. The
+system is implemented end to end (PAPER + DEMO runtime, CLI, dashboard,
+research, learning observer, RAG + OKF knowledge). Remaining work is
+Windows/MT5-local: follow `LOCAL_MT5_HANDOFF.md`. Architecture:
+`docs/ARCHITECTURE.md`; safety guarantees: `docs/SAFETY.md`.
 
 ## Development environment
 
-- Python 3.11+ (matches the target of the prior `AdaptiveScalper` project).
+- Python 3.13 (`pyproject.toml`: `>=3.13,<3.14`).
 - Virtual environment: `python -m venv .venv`, then
   `.venv\Scripts\activate`.
 - Dependencies: `pip install -r requirements.txt`.
 - Tests: `pytest` (config in `pytest.ini`, tests live under `tests/`).
-
-No trading logic, broker gateway, or strategy code exists yet — do not
-assume any of the module boundaries from the old project apply here until
-`MASTER_BUILD_DIRECTIVE.md` specifies the architecture.
+- CLI: `python -m adaptive_scalper.cli --help`. `tests/test_mt5_gateway_live.py`
+  needs a live MT5 terminal and skips elsewhere.

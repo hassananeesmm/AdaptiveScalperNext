@@ -27,18 +27,12 @@ delete) once fixed, with the fixing commit/date noted.
    documented by the vendor as safe for concurrent multi-thread use.~~
    Fixed: `adaptive_scalper/gateway/synchronized_gateway.py`'s
    `SynchronizedGateway` wraps any `Gateway` and serializes every call
-   through one `threading.RLock`. `cmd_dashboard` (cli.py) now wraps the
-   real `Mt5Gateway` in it before injecting into `create_app()`;
-   `dashboard/app.py`'s docstring documents this as a hard requirement
-   for any real gateway. Regression test:
-   `tests/test_synchronized_gateway.py::test_serializes_concurrent_calls_across_threads`
-   (with a companion unsynchronized-baseline test proving the probe can
-   actually detect a missing lock, not just trivially pass). Not yet
-   wired into anything beyond the dashboard, since the entry
-   scanner/position manager/history jobs that would also need it don't
-   exist yet — revisit as each of those lands to make sure they share one
-   `SynchronizedGateway` instance rather than each constructing their own
-   `Mt5Gateway`.
+   through one `threading.RLock`. Since 2026-09-24 (Checkpoint C/F) the
+   ONE construction site `gateway/factory.create_live_gateway()` always
+   returns a `SynchronizedGateway` (audited), the runtime shares that one
+   instance across every task, and the dashboard no longer connects to
+   MT5 at all (read-only SQLite observer). Regression test:
+   `tests/test_synchronized_gateway.py::test_serializes_concurrent_calls_across_threads`.
 
 3. [SEVERITY: LOW, SUBSYSTEM: history] `adaptive_scalper/history/jobs.py`'s
    `get_or_create_job()` supports extending an existing job's
@@ -63,6 +57,12 @@ delete) once fixed, with the fixing commit/date noted.
    conservatively as out of scope). Must be live-verified with a real
    (never-sent) `order_check()` call before controlled DEMO validation —
    tracked here so it isn't silently assumed correct.
+   2026-09-24: tooling exists -- `python -m adaptive_scalper.cli
+   order-check-probe --symbol XAUUSD` performs exactly that one never-sent
+   check after fresh DEMO/permission/identity/quote/risk/constraint
+   verification and records retcode/comment/margin/broker/build in
+   `order_check_probes` (LOCAL_MT5_HANDOFF.md steps L-M). Still
+   BLOCKED-ON-LOCAL-MT5 until the laptop records the real retcode here.
 
 7. [SEVERITY: LOW, SUBSYSTEM: execution] `execution/reconciliation
    .run_reconciliation()`'s `BrokerPositionSnapshot` construction passes
@@ -137,7 +137,39 @@ delete) once fixed, with the fixing commit/date noted.
    cadence that is ~3600 immutable rows per open position per hour.
    Correct but heavy; consider journaling only action/state changes.
 
+17. [SEVERITY: LOW, SUBSYSTEM: release] `pip-audit` in the cloud audits
+   every pinned requirement except `MetaTrader5` (Windows-only wheel, not
+   installable there). Re-run `pip-audit -r requirements.txt` on the
+   laptop as part of release QA.
+
+18. [SEVERITY: LOW, SUBSYSTEM: release] Windows-local. The release is a
+   source bundle + pinned venv (`scripts/build_release.ps1`); a frozen
+   PyInstaller build is deferred (MetaTrader5/scikit-learn/uvicorn hooks
+   must be produced and verified on Windows). See docs/RELEASE.md.
+
+19. [SEVERITY: LOW, SUBSYSTEM: paper] PAPER keeps one simulated equity per
+   symbol session (no pooled portfolio equity); cross-symbol exposure,
+   correlation and portfolio heat ARE applied between sessions. Documented
+   limit, not a silent approximation.
+
+20. [SEVERITY: LOW, SUBSYSTEM: launchers] The `.bat`/`.ps1` files are
+   verified statically in the cloud (`tests/test_launchers.py`: every CLI
+   invocation parses, banner exact, kill-switch rules) but have never been
+   executed; LOCAL_MT5_HANDOFF.md step G / docs/WINDOWS_DEPLOYMENT.md list
+   the one-time manual checks.
+
 ## Fixed
+
+- ~~[SEVERITY: MEDIUM, SUBSYSTEM: dashboard] The `dashboard` command
+  initialized its own MT5 connection (a second terminal client beside the
+  runtime, contradicting "observer only").~~ Fixed 2026-09-24 (Checkpoint
+  F): read-only SQLite, no gateway; `tests/test_dashboard_panels.py`.
+- ~~[SEVERITY: MEDIUM, SUBSYSTEM: learning] `backtest_trades` never stored
+  the decision-time feature snapshot, so persisted backtests could not
+  become training data.~~ Fixed 2026-09-24 (Checkpoint E, migration 0024).
+- ~~[SEVERITY: LOW, SUBSYSTEM: runtime] Import-time invariant `assert`s
+  (symbol validation / news blocking / exposure maps) vanish under
+  `python -O`.~~ Fixed 2026-09-24 (Checkpoint G): explicit raises.
 
 - ~~[SEVERITY: CRITICAL, SUBSYSTEM: execution] (found by the Phase 2
   broker chaos harness) An exception raised by `Gateway.order_send()`
