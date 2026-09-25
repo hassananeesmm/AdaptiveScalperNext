@@ -18,6 +18,7 @@ OKF knowledge bundle load (advisory; failures = DEGRADED) -> heartbeat.
 Scheduled tasks (priority, cadence from `[runtime]`):
     0 position_cycle  ~1s   DEMO: reconcile/UNKNOWN/position reviews
     1 entry_cycle     ~4s   DEMO: new-entry pipeline; PAPER: paper cycle
+    2 live_telemetry  ~5s   last-known broker/account/quote snapshots (observer only)
     2 news_refresh    ~20m  remote calendar refresh (never per entry cycle)
     3 rag_ingest      ~60s  journal/paper/incident rows -> typed RAG memories
                             (the trading cycles never write RAG themselves)
@@ -238,13 +239,14 @@ class RuntimeEngine:
             self.paper = PaperRuntime(self.conn, self.gateway, self.config, self.symbols, self.news,
                                       clock=self.clock)
             self.scheduler.add("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.paper.cycle)
+        self.scheduler.add("live_telemetry", 5.0, 2, self._publish_telemetry)
         self.scheduler.add("news_refresh", self.config.runtime.news_refresh_seconds, 2, self._refresh_news)
         self.scheduler.add("rag_ingest", RAG_INGEST_SECONDS, 3, self._ingest_rag)
         self.scheduler.add("rag_rebuild", 600, 3, self._rebuild_rag)
         self.scheduler.add("heartbeat", self.config.runtime.heartbeat_seconds, 4, self.heartbeat)
         # news/rag already ran during startup: don't repeat them on the first tick
         for task in self.scheduler.tasks:
-            if task.name in ("news_refresh", "rag_ingest", "rag_rebuild"):
+            if task.name in ("live_telemetry", "news_refresh", "rag_ingest", "rag_rebuild"):
                 task.next_due += task.interval_seconds
 
         self.started_at = now
@@ -259,6 +261,83 @@ class RuntimeEngine:
         record_event(self.conn, "INFO", "engine", "ENGINE_STARTED", f"{self.mode} runtime started", now_utc=now)
         self.heartbeat()
         return summary
+
+    def _publish_telemetry(self) -> None:
+        """Best-effort, sampled broker truth for the read-only dashboard.
+
+        Uses the ONE synchronized runtime gateway; never creates another
+        terminal client, sends orders or changes permissions. It is a
+        lower-priority task rather than a request-time dashboard callback.
+        """
+        now = self.now()
+        errors: list[str] = []
+        snapshot: dict = {
+            "sampled_at_utc": now, "account": None, "terminal": {"connected": False},
+            "quotes": {}, "positions": None, "errors": errors,
+        }
+        try:
+            account = self.gateway.account_info()
+            if account is None:
+                errors.append("MT5 account information unavailable")
+            else:
+                # Do not persist a private account login or credentials.
+                snapshot["account"] = {
+                    "trade_mode": account.trade_mode.name, "balance": account.balance,
+                    "equity": account.equity, "margin_free": account.margin_free,
+                    "currency": account.currency, "company": account.company,
+                    "server": account.server, "trade_allowed": account.trade_allowed,
+                    "trade_expert": account.trade_expert,
+                }
+                if account.trade_mode != TradeMode.DEMO:
+                    errors.append("NON_DEMO_ACCOUNT_CONNECTED: new exposure prohibited")
+        except Exception as exc:
+            errors.append(f"account snapshot: {type(exc).__name__}")
+
+        try:
+            terminal = self.gateway.terminal_info()
+            if terminal is not None:
+                snapshot["terminal"] = {
+                    "connected": terminal.connected, "trade_allowed": terminal.trade_allowed,
+                    "build": terminal.build, "name": terminal.name,
+                }
+            else:
+                errors.append("MT5 terminal information unavailable")
+        except Exception as exc:
+            errors.append(f"terminal snapshot: {type(exc).__name__}")
+
+        if snapshot["terminal"]["connected"] and snapshot["account"] is not None:
+            for canonical, broker in self.symbols.items():
+                try:
+                    tick = self.gateway.symbol_info_tick(broker)
+                    spec = self.gateway.symbol_info(broker)
+                    if tick is None or spec is None:
+                        errors.append(f"{canonical}: tick or specification unavailable")
+                        continue
+                    snapshot["quotes"][canonical] = {
+                        "broker_symbol": broker, "time_utc": tick.time,
+                        "bid": tick.bid, "ask": tick.ask,
+                        "spread": round(tick.ask - tick.bid, max(0, min(10, spec.digits))),
+                        "spread_points": round((tick.ask - tick.bid) / spec.point, 1)
+                        if spec.point > 0 else None,
+                    }
+                except Exception as exc:
+                    errors.append(f"{canonical}: {type(exc).__name__}")
+
+            if self.mode == "DEMO" and snapshot["account"]["trade_mode"] == "DEMO":
+                try:
+                    snapshot["positions"] = [
+                        {"broker_position_id": p.broker_position_id, "broker_symbol": p.symbol,
+                         "direction": p.direction, "volume": p.volume,
+                         "price_open": p.price_open, "stop_loss": p.stop_loss,
+                         "take_profit": p.take_profit, "floating_pnl": p.profit}
+                        for p in self.gateway.positions_get()
+                    ]
+                except Exception as exc:
+                    errors.append(f"broker positions: {type(exc).__name__}")
+
+        put_state(self.conn, "live_telemetry", snapshot, now_utc=now)
+        self._health("telemetry", "DEGRADED" if errors else "OK",
+                     "; ".join(errors[:4]) if errors else "last broker sample recorded")
 
     def _refresh_news(self) -> None:
         now = self.now()
