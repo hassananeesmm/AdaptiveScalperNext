@@ -257,6 +257,7 @@ class RuntimeEngine:
             "recovery": recovery, "news": self.news.health(now).value,
             "server_clock": server_clock["verdict"],
         }
+        put_state(self.conn, "risk_limits", self.config.risk.model_dump(), now_utc=now)
         put_state(self.conn, "startup", summary, now_utc=now)
         record_event(self.conn, "INFO", "engine", "ENGINE_STARTED", f"{self.mode} runtime started", now_utc=now)
         self.heartbeat()
