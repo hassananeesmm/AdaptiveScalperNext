@@ -398,6 +398,12 @@ function paintSummary(){
   const clockStatus=mk.server_clock||{};
   if(clockStatus.verdict&&clockStatus.verdict!=="VERIFIED")
     issues.push("Broker timestamp validation: "+String(clockStatus.verdict)+".");
+  const cfg=risk.configured_limits||{};
+  if(["risk_per_trade_pct","max_total_open_risk_pct","max_daily_loss_pct","max_drawdown_pct"].some(
+    (key,i)=>typeof cfg[key]==="number"&&cfg[key]>[0.25,0.75,2,5][i]+1e-9)||
+    (typeof cfg.max_open_positions==="number"&&cfg.max_open_positions>2)||
+    (typeof cfg.max_positions_per_symbol==="number"&&cfg.max_positions_per_symbol>1))
+    issues.push("Configured risk limits exceed documented ceilings; review config before permitting new exposure.");
   const calendar=((p.news||{}).runtime_snapshot||{});
   if(calendar.health&&calendar.health!=="HEALTHY"&&calendar.health!=="DEGRADED")
     issues.push("Economic calendar: "+String(calendar.health)+". New exposure must respect the fail-closed news gate.");
