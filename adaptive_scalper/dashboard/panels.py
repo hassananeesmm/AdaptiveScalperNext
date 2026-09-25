@@ -188,10 +188,73 @@ def history(conn: sqlite3.Connection, now: int) -> dict:
     return {"bar_coverage": _rows(conn, "SELECT * FROM historical_bar_coverage ORDER BY canonical_symbol, resolution")}
 
 
+
+def market(conn: sqlite3.Connection, now: int) -> dict:
+    """Last sampled broker truth, published by the sole MT5 runtime.
+
+    The dashboard itself never opens the broker terminal. Each value carries
+    provenance and age; a disconnected or expired snapshot is NEVER 'LIVE'.
+    """
+    value, age = _state(conn, "live_telemetry", now)
+    clock, clock_age = _state(conn, "server_clock", now)
+    if value is None:
+        return {"status": "NO_DATA", "detail": "Awaiting the runtime's first MT5 telemetry sample",
+                "server_clock": clock, "clock_age_seconds": clock_age}
+    quotes = {}
+    for symbol in sorted(ALLOWED_CANONICAL_SYMBOLS):
+        quote = (value.get("quotes") or {}).get(symbol)
+        if quote is None:
+            quotes[symbol] = {"status": "UNAVAILABLE", "detail": "No validated broker quote"}
+            continue
+        quote_age = now - quote["time_utc"] if quote.get("time_utc") else None
+        quotes[symbol] = {**quote, "quote_age_seconds": quote_age,
+                          "status": "LIVE" if age is not None and age <= 15
+                          and quote_age is not None and -3 <= quote_age <= 15
+                          and value.get("terminal", {}).get("connected") else "STALE"}
+    return {
+        "status": "OK" if age is not None and age <= 15
+        and value.get("terminal", {}).get("connected") else "STALE",
+        "source": "MT5 runtime snapshot (never a dashboard-side broker connection)",
+        "sampled_at_utc": value.get("sampled_at_utc"), "age_seconds": age,
+        "account": value.get("account"), "terminal": value.get("terminal"),
+        "quotes": quotes, "broker_positions": value.get("positions"),
+        "errors": value.get("errors", []),
+        "server_clock": clock, "clock_age_seconds": clock_age,
+    }
+
+
+def performance(conn: sqlite3.Connection, now: int) -> dict:
+    """Separate evidence classes and currencies; never combine PAPER with DEMO."""
+    demo = _rows(conn,
+        "SELECT date(occurred_at_utc, 'unixepoch') AS day_utc, "
+        "COUNT(*) AS observed_deals, "
+        "ROUND(SUM(profit + commission + swap + COALESCE(fee, 0)), 2) AS booked_net "
+        "FROM deals WHERE occurred_at_utc >= ? "
+        "GROUP BY date(occurred_at_utc, 'unixepoch') ORDER BY day_utc",
+        (now - 30 * 86400,))
+    paper = _rows(conn,
+        "SELECT canonical_symbol, COUNT(*) AS closed_trades, "
+        "ROUND(SUM(realized_pnl), 2) AS net_pnl "
+        "FROM paper_trades GROUP BY canonical_symbol ORDER BY canonical_symbol")
+    recent_paper = _rows(conn,
+        "SELECT canonical_symbol, strategy_key, direction, entry_time_utc, exit_time_utc, "
+        "realized_pnl, realized_r, total_cost, origin "
+        "FROM paper_trades ORDER BY exit_time_utc DESC LIMIT 20")
+    demo_total = sum(float(row["booked_net"] or 0.0) for row in demo)
+    return {
+        "demo": {"label": "DEMO booked net, observed deals only; not account equity or a profitability forecast",
+                 "period_days": 30, "observed_deals": sum(r["observed_deals"] for r in demo),
+                 "net": round(demo_total, 2), "daily_net": demo},
+        "paper": {"label": "PAPER per-symbol simulated results; never pool independent session equity",
+                  "by_symbol": paper, "recent_closed_trades": recent_paper},
+    }
+
+
 PANELS: dict[str, Callable[[sqlite3.Connection, int], dict]] = {
     "overview": overview, "components": components, "symbols": symbols, "positions": positions, "orders": orders,
     "decisions": decisions, "risk": risk, "news": news, "events": events, "research": research,
     "learning": learning, "memory": memory, "knowledge": knowledge, "costs": costs, "history": history,
+    "market": market, "performance": performance,
 }
 
 
