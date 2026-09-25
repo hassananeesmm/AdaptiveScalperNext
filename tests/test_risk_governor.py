@@ -356,17 +356,19 @@ def test_risk_gate_blocks_when_open_plus_pending_plus_proposal_crosses_limit():
 # --------------------------------------------------------------------------
 
 def test_risk_limits_from_config_copies_every_field():
+    # Non-default values, all within the hard ceilings (which config may lower,
+    # never raise); max_positions_per_symbol's ceiling is 1, its only legal value.
     cfg = RiskConfig(
-        risk_per_trade_pct=0.5, max_total_open_risk_pct=1.5, max_daily_loss_pct=3.0,
-        max_drawdown_pct=6.0, max_open_positions=3, max_positions_per_symbol=2,
+        risk_per_trade_pct=0.2, max_total_open_risk_pct=0.6, max_daily_loss_pct=1.5,
+        max_drawdown_pct=4.0, max_open_positions=1, max_positions_per_symbol=1,
     )
     limits = risk_limits_from_config(cfg)
-    assert limits.risk_per_trade_pct == 0.5
-    assert limits.max_total_open_risk_pct == 1.5
-    assert limits.max_daily_loss_pct == 3.0
-    assert limits.max_drawdown_pct == 6.0
-    assert limits.max_open_positions == 3
-    assert limits.max_positions_per_symbol == 2
+    assert limits.risk_per_trade_pct == 0.2
+    assert limits.max_total_open_risk_pct == 0.6
+    assert limits.max_daily_loss_pct == 1.5
+    assert limits.max_drawdown_pct == 4.0
+    assert limits.max_open_positions == 1
+    assert limits.max_positions_per_symbol == 1
 
 
 def test_risk_limits_from_default_config_matches_directive_defaults():

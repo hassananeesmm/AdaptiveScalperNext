@@ -43,7 +43,7 @@ def test_market_panel_exposes_only_fresh_demonstrably_sampled_quotes(tmp_path):
     }, now_utc=now)
     fresh = compute_panel(conn, "market", now=now + 3)
     assert fresh["status"] == "OK"
-    assert fresh["quotes"]["XAUUSD"]["status"] == "LIVE"
+    assert fresh["quotes"]["XAUUSD"]["status"] == "FRESH"
     assert fresh["quotes"]["GBPJPY"]["status"] == "UNAVAILABLE"
     assert fresh["account"]["trade_mode"] == "DEMO"
     stale = compute_panel(conn, "market", now=now + 30)

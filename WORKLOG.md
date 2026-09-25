@@ -2253,3 +2253,45 @@ positions are closed", engine state STOPPED, ENGINE_STOPPED event. Restarted at
 03:21:18 UTC on the new config: RUNNING, 0 failures, no ERROR/CRITICAL events.
 
 Full suite (Windows): 1485 passed, 9 skipped, 0 failed.
+
+## Session: Windows validation W5 -- dashboard integration, risk ceilings, scheduler (2026-09-25)
+
+Working branch: local `dashboard-review` tracking `origin/dashboard/responsive-live-windows`
+(PR #2, base `windows-validation`); it already contained all of windows-validation
+plus 12 dashboard commits; no new migrations (schema 28). Backup before running
+the new code: `data/backups/adaptive_scalper.pre-dashboard-integration.20260925T092146Z.sqlite3`.
+
+PAPER evidence from the pre-dashboard build, running since 03:21 UTC: ~6 h, 4,932
+entry cycles, 0 failures, 17 news refreshes, 0 advisory failures. Kill switch
+still UNINITIALIZED (no operator bootstrap yet), so -- by design (directive
+section 45, backtest/engine.py) -- PAPER does not evaluate strategies. Read-only
+`scan --source mt5` evaluated the six strategies on the live 09:15 bars: BTCUSD
+momentum_continuation BUY 0.39 (TRENDING_UP), XAUUSD microstructure_acceleration
+SELL 0.42 (RANGE), GBPJPY FLAT (ERRATIC).
+
+Defects fixed:
+1. Risk ceilings: `RiskConfig` accepted up to 20 % per trade/day/drawdown and any
+   number of positions; nothing downstream clamped. Now `HARD_RISK_CEILINGS` in
+   `config/constants.py` is enforced by `RiskConfig` AND `RiskLimits.__post_init__`
+   (every construction path). `test_risk_limits_from_config_copies_every_field`
+   used above-ceiling values only to prove copying; now uses distinct in-ceiling
+   values. `test_risk_rejects_per_trade_exceeding_total_open_risk` would have
+   passed via the new ceiling check, so it now uses in-ceiling values that only
+   the per-trade <= total rule rejects.
+2. Scheduler starvation: the scheduled news refresh did its HTTP fetch (httpx
+   timeout 10 s per phase) on the single scheduler thread, delaying the 1 s DEMO
+   position cycle by the whole fetch. Now `fetch_live` (network) runs on a worker
+   thread, the task waits at most `NEWS_FETCH_BUDGET_SECONDS = 2.0`, a 1 s
+   `news_poll` task applies the result on the scheduler thread (all SQLite stays
+   there), one fetch in flight at most, `NEWS_FETCH_OVERDUE` warning after 60 s.
+   The scheduler now records per-task last/max lag and max duration.
+   Measured on the 6 h live run: news refresh 0.80 s, entry cycle 0.08 s, RAG
+   rebuild 0.002 s, RAG ingest 0.0004 s.
+3. The dashboard branch added a `"LIVE"` string (quote freshness), failing the
+   safety audit `test_there_is_no_live_or_real_execution_mode`. The panel status is
+   now FRESH/STALE; the browser shows "LIVE FEED" for a fresh quote.
+
+Tests: `tests/test_runtime_scheduling.py` (lag metrics; a hanging calendar fetch
+never starves DEMO position management -- fails on the old synchronous code),
+risk-ceiling tests in `tests/test_config.py`. Full suite before fix 3: 1500
+passed, 1 failed (the audit), 9 skipped; after: audit + dashboard tests 24 passed.

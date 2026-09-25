@@ -24,6 +24,7 @@ from adaptive_scalper.config.constants import (
     ALLOWED_CANONICAL_SYMBOLS,
     ALLOWED_MODES,
     RETIRED_STRATEGY_KEYS,
+    check_hard_risk_ceilings,
 )
 
 
@@ -77,19 +78,11 @@ class RiskConfig(BaseModel):
     max_open_positions: int = 2
     max_positions_per_symbol: int = 1
 
-    @field_validator("risk_per_trade_pct", "max_total_open_risk_pct",
-                      "max_daily_loss_pct", "max_drawdown_pct")
+    @field_validator("risk_per_trade_pct", "max_total_open_risk_pct", "max_daily_loss_pct", "max_drawdown_pct",
+                     "max_open_positions", "max_positions_per_symbol")
     @classmethod
-    def _positive_and_bounded(cls, value: float, info) -> float:
-        if not (0 < value <= 20):
-            raise ValueError(f"{info.field_name} must be in (0, 20], got {value}")
-        return value
-
-    @field_validator("max_open_positions", "max_positions_per_symbol")
-    @classmethod
-    def _positive_int(cls, value: int, info) -> int:
-        if value < 1:
-            raise ValueError(f"{info.field_name} must be >= 1, got {value}")
+    def _within_hard_ceiling(cls, value, info):
+        check_hard_risk_ceilings(**{info.field_name: value})
         return value
 
     @model_validator(mode="after")

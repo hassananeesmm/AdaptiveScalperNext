@@ -26,6 +26,11 @@ class ScheduledTask:
     failures: int = 0
     last_error: str | None = None
     last_duration_seconds: float | None = None
+    max_duration_seconds: float = 0.0
+    # Scheduling lag: how long after `next_due` the task actually started --
+    # the measure of whether slower work is starving it.
+    last_lag_seconds: float | None = None
+    max_lag_seconds: float = 0.0
 
 
 @dataclass
@@ -45,6 +50,8 @@ class Scheduler:
         ran = []
         for task in sorted((t for t in self.tasks if t.next_due <= now), key=lambda t: (t.priority, t.name)):
             started = self.monotonic()
+            task.last_lag_seconds = max(0.0, started - task.next_due)
+            task.max_lag_seconds = max(task.max_lag_seconds, task.last_lag_seconds)
             try:
                 task.run()
                 task.last_error = None
@@ -55,6 +62,7 @@ class Scheduler:
                     self.on_error(task, exc)
             task.runs += 1
             task.last_duration_seconds = self.monotonic() - started
+            task.max_duration_seconds = max(task.max_duration_seconds, task.last_duration_seconds)
             task.next_due = started + task.interval_seconds
             ran.append(task.name)
         return ran
@@ -73,6 +81,8 @@ class Scheduler:
         return {
             t.name: {"interval_seconds": t.interval_seconds, "priority": t.priority, "runs": t.runs,
                      "failures": t.failures, "last_error": t.last_error,
-                     "last_duration_seconds": t.last_duration_seconds}
+                     "last_duration_seconds": t.last_duration_seconds,
+                     "max_duration_seconds": t.max_duration_seconds,
+                     "last_lag_seconds": t.last_lag_seconds, "max_lag_seconds": t.max_lag_seconds}
             for t in self.tasks
         }

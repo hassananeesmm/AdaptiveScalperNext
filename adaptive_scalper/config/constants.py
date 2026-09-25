@@ -37,3 +37,26 @@ ALLOWED_MODES: frozenset[str] = frozenset({
     "PAPER",
     "DEMO",
 })
+
+
+# Documented HARD risk ceilings (CLAUDE.md, MASTER_BUILD_DIRECTIVE.md; docs/SAFETY.md
+# guarantee 5). Configuration may LOWER any of these but never raise them: both
+# `config.loader.RiskConfig` and `risk.governor.RiskLimits` refuse larger values, so
+# no config file, research run, model or knowledge source can exceed them.
+HARD_RISK_CEILINGS: dict[str, float] = {
+    "risk_per_trade_pct": 0.25,
+    "max_total_open_risk_pct": 0.75,
+    "max_daily_loss_pct": 2.00,
+    "max_drawdown_pct": 5.00,
+    "max_open_positions": 2,
+    "max_positions_per_symbol": 1,
+}
+
+
+def check_hard_risk_ceilings(**limits: float) -> None:
+    """Raise ValueError if any given limit is non-positive or above its hard ceiling."""
+    for name, value in limits.items():
+        ceiling = HARD_RISK_CEILINGS[name]
+        if not (0 < value <= ceiling):
+            raise ValueError(f"{name}={value} is outside (0, {ceiling}]: the hard ceiling can be lowered, never raised")
+

@@ -19,7 +19,9 @@ Scheduled tasks (priority, cadence from `[runtime]`):
     0 position_cycle  ~1s   DEMO: reconcile/UNKNOWN/position reviews
     1 entry_cycle     ~4s   DEMO: new-entry pipeline; PAPER: paper cycle
     2 live_telemetry  ~5s   last-known broker/account/quote snapshots (observer only)
-    2 news_refresh    ~20m  remote calendar refresh (never per entry cycle)
+    2 news_refresh    ~20m  remote calendar refresh (never per entry cycle); the HTTP
+                            fetch runs off-thread, waited on for at most 2 s
+    2 news_poll       ~1s   applies a finished off-thread fetch (SQLite on this thread)
     3 rag_ingest      ~60s  journal/paper/incident rows -> typed RAG memories
                             (the trading cycles never write RAG themselves)
     3 rag_rebuild     ~10m  rebuild the derived TF-IDF index
@@ -71,6 +73,10 @@ logger = logging.getLogger(__name__)
 
 ENGINE_RUNNING = "RUNNING"
 ENGINE_DEGRADED = "DEGRADED"
+# Scheduled news refresh: the longest the scheduler thread waits for the
+# off-thread calendar fetch, and when a still-running fetch is reported.
+NEWS_FETCH_BUDGET_SECONDS = 2.0
+NEWS_FETCH_OVERDUE_SECONDS = 60
 ENGINE_STOPPED = "STOPPED"
 RAG_INGEST_SECONDS = 60.0
 
@@ -240,7 +246,8 @@ class RuntimeEngine:
                                       clock=self.clock)
             self.scheduler.add("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.paper.cycle)
         self.scheduler.add("live_telemetry", 5.0, 2, self._publish_telemetry)
-        self.scheduler.add("news_refresh", self.config.runtime.news_refresh_seconds, 2, self._refresh_news)
+        self.scheduler.add("news_refresh", self.config.runtime.news_refresh_seconds, 2, self._refresh_news_bounded)
+        self.scheduler.add("news_poll", 1.0, 2, self._poll_news)
         self.scheduler.add("rag_ingest", RAG_INGEST_SECONDS, 3, self._ingest_rag)
         self.scheduler.add("rag_rebuild", 600, 3, self._rebuild_rag)
         self.scheduler.add("heartbeat", self.config.runtime.heartbeat_seconds, 4, self.heartbeat)
@@ -341,8 +348,31 @@ class RuntimeEngine:
                      "; ".join(errors[:4]) if errors else "last broker sample recorded")
 
     def _refresh_news(self) -> None:
+        """Synchronous refresh: startup only, before any cycle is scheduled."""
+        self.news.refresh(self.now())
+        self._after_news()
+
+    def _refresh_news_bounded(self) -> None:
+        """Scheduled refresh: the HTTP fetch runs off the scheduler thread and
+        this task waits at most NEWS_FETCH_BUDGET_SECONDS, so a slow calendar
+        can never hold up the protective position cycle for longer."""
+        if self.news.refresh_bounded(self.now(), NEWS_FETCH_BUDGET_SECONDS):
+            self._after_news()
+
+    def _poll_news(self) -> None:
         now = self.now()
-        health = self.news.refresh(now)
+        if self.news.poll(now):
+            self._after_news()
+            return
+        in_flight = self.news.fetch_in_flight_seconds
+        if in_flight is not None and in_flight > NEWS_FETCH_OVERDUE_SECONDS:
+            record_event(self.conn, "WARNING", "news", "NEWS_FETCH_OVERDUE",
+                         f"calendar fetch still running after {in_flight}s; health ages toward STALE "
+                         f"(which blocks new entries)", dedup_key="news:fetch_overdue", now_utc=now)
+
+    def _after_news(self) -> None:
+        now = self.now()
+        health = self.news.health(now)
         self._health("news", health.value, "; ".join(f"{k}: {v}" for k, v in self.news.errors.items()))
         put_state(self.conn, "news", self.news.snapshot(now), now_utc=now)
         if self.news.global_block(now) is not None:

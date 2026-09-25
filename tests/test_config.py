@@ -134,8 +134,41 @@ def test_risk_rejects_zero_or_negative_percentages():
 
 
 def test_risk_rejects_per_trade_exceeding_total_open_risk():
-    with pytest.raises(ValidationError):
-        AppConfig(risk={"risk_per_trade_pct": 5.0, "max_total_open_risk_pct": 1.0})
+    # Both values within the hard ceilings, so only the per-trade <= total rule can fail.
+    with pytest.raises(ValidationError, match="cannot exceed max_total_open_risk_pct"):
+        AppConfig(risk={"risk_per_trade_pct": 0.25, "max_total_open_risk_pct": 0.20})
+
+
+@pytest.mark.parametrize("field,above", [
+    ("risk_per_trade_pct", 0.26), ("max_total_open_risk_pct", 0.76), ("max_daily_loss_pct", 2.01),
+    ("max_drawdown_pct", 5.01), ("max_open_positions", 3), ("max_positions_per_symbol", 2),
+])
+def test_config_can_never_raise_a_hard_risk_ceiling(field, above):
+    # Before the Windows validation fix the validator accepted up to 20 % per trade/day
+    # and any number of positions.
+    with pytest.raises(ValidationError, match="hard ceiling"):
+        AppConfig(risk={field: above})
+
+
+def test_config_may_lower_the_hard_risk_ceilings():
+    cfg = AppConfig(risk={"risk_per_trade_pct": 0.10, "max_total_open_risk_pct": 0.30, "max_daily_loss_pct": 1.0,
+                          "max_drawdown_pct": 3.0, "max_open_positions": 1})
+    assert cfg.risk.risk_per_trade_pct == 0.10 and cfg.risk.max_open_positions == 1
+
+
+def test_no_construction_path_can_build_risk_limits_above_the_ceilings():
+    from adaptive_scalper.config.constants import HARD_RISK_CEILINGS
+    from adaptive_scalper.risk.governor import RiskLimits
+
+    assert HARD_RISK_CEILINGS == {"risk_per_trade_pct": 0.25, "max_total_open_risk_pct": 0.75,
+                                  "max_daily_loss_pct": 2.00, "max_drawdown_pct": 5.00,
+                                  "max_open_positions": 2, "max_positions_per_symbol": 1}
+    RiskLimits(0.25, 0.75, 2.0, 5.0, 2, 1)
+    for i, above in enumerate((0.3, 1.0, 3.0, 6.0, 3, 2)):
+        values = [0.25, 0.75, 2.0, 5.0, 2, 1]
+        values[i] = above
+        with pytest.raises(ValueError, match="hard ceiling"):
+            RiskLimits(*values)
 
 
 def test_risk_rejects_zero_max_positions():

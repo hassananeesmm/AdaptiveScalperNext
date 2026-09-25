@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from adaptive_scalper.config.constants import check_hard_risk_ceilings
 from adaptive_scalper.gateway.types import SymbolSpec
 
 ALLOW = "ALLOW"
@@ -32,6 +33,15 @@ class RiskLimits:
     max_drawdown_pct: float
     max_open_positions: int
     max_positions_per_symbol: int
+
+    def __post_init__(self) -> None:
+        # Every construction path, not only the config loader, is bound by the
+        # documented hard ceilings (they can be lowered, never raised).
+        check_hard_risk_ceilings(
+            risk_per_trade_pct=self.risk_per_trade_pct, max_total_open_risk_pct=self.max_total_open_risk_pct,
+            max_daily_loss_pct=self.max_daily_loss_pct, max_drawdown_pct=self.max_drawdown_pct,
+            max_open_positions=self.max_open_positions, max_positions_per_symbol=self.max_positions_per_symbol,
+        )
 
 
 def risk_limits_from_config(risk_config) -> RiskLimits:

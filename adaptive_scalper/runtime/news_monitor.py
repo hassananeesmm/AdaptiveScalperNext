@@ -17,6 +17,8 @@ engage the persistent kill switch and never stop position management.
 from __future__ import annotations
 
 import sqlite3
+import threading
+import time
 
 from adaptive_scalper.news.blocking import (
     ALLOW,
@@ -27,7 +29,7 @@ from adaptive_scalper.news.blocking import (
     _event_window,
     evaluate_news_block,
 )
-from adaptive_scalper.news.calendar_service import fetch_with_fallback
+from adaptive_scalper.news.calendar_service import fetch_live, fetch_with_fallback, resolve_fetched
 from adaptive_scalper.news.provider import EconomicCalendarProvider
 from adaptive_scalper.news.types import EconomicEvent, ProviderHealth
 
@@ -50,6 +52,10 @@ class NewsMonitor:
         self.last_success_utc: int | None = None
         self.successful_provider: str | None = None
         self.errors: dict[str, str] = {}
+        # Background network fetch (refresh_bounded/poll): at most one in flight.
+        self._inflight: threading.Thread | None = None
+        self._inflight_started_utc: int | None = None
+        self._inflight_result: list | BaseException | None = None
 
     def refresh(self, now_utc: int) -> ProviderHealth:
         self.last_attempt_utc = now_utc
@@ -65,6 +71,61 @@ class NewsMonitor:
             self.successful_provider = result.successful_provider
             self.last_success_utc = now_utc
         return self.health(now_utc)
+
+    def refresh_bounded(self, now_utc: int, budget_seconds: float) -> bool:
+        """Start the network fetch on a worker thread and wait at most
+        `budget_seconds` for it; True when the result was applied now.
+
+        Only the HTTP phase leaves the calling (scheduler) thread -- every
+        SQLite write happens in `poll()` on the caller's thread -- so a slow
+        or hung calendar can delay the protective position cycle by at most
+        the budget. A still-running fetch is applied by a later `poll()`;
+        meanwhile health ages toward STALE, which blocks new entries."""
+        if self._inflight is None:
+            self.last_attempt_utc = now_utc
+            self._inflight_started_utc = now_utc
+            self._inflight_result = None
+            providers = list(self._live)
+
+            def work() -> None:
+                try:
+                    self._inflight_result = fetch_live(providers, now_utc)
+                except BaseException as exc:  # noqa: BLE001 - handed back to the scheduler thread
+                    self._inflight_result = exc
+
+            self._inflight = threading.Thread(target=work, name="news-fetch", daemon=True)
+            self._inflight.start()
+        self._inflight.join(timeout=budget_seconds)
+        return self.poll(now_utc)
+
+    @property
+    def fetch_in_flight_seconds(self) -> int | None:
+        if self._inflight is None or self._inflight_started_utc is None:
+            return None
+        return int(time.time()) - self._inflight_started_utc if self._inflight.is_alive() else 0
+
+    def poll(self, now_utc: int) -> bool:
+        """Apply a finished background fetch (on the caller's thread)."""
+        if self._inflight is None or self._inflight.is_alive():
+            return False
+        outcome, fetched_at = self._inflight_result, self._inflight_started_utc
+        self._inflight = None
+        self._inflight_result = None
+        if isinstance(outcome, BaseException) or outcome is None:
+            self.errors = {"calendar_service": f"{type(outcome).__name__}: {outcome}"}
+            return True
+        try:
+            result = resolve_fetched(self._conn, outcome, self._cache, fetched_at)
+        except Exception as exc:  # a broken provider must degrade news, never crash the runtime
+            self.errors = {"calendar_service": f"{type(exc).__name__}: {exc}"}
+            return True
+        self.errors = dict(result.errors)
+        if result.health != ProviderHealth.UNAVAILABLE:
+            self.events = list(result.events)
+            self._fetched_health = result.health
+            self.successful_provider = result.successful_provider
+            self.last_success_utc = fetched_at
+        return True
 
     def refresh_if_due(self, now_utc: int) -> bool:
         if self.last_attempt_utc is None or now_utc - self.last_attempt_utc >= self.refresh_seconds:

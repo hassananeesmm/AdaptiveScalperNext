@@ -57,26 +57,40 @@ def _detect_conflict(
     return False
 
 
-def fetch_with_fallback(
+def fetch_live(
+    live_providers: list[EconomicCalendarProvider], now_utc: int,
+) -> list[tuple[str, list[EconomicEvent] | ProviderError]]:
+    """The network phase only: every live provider's events or its
+    ProviderError, in provider order. Touches no database, so the runtime
+    can run it off the scheduler thread (runtime/news_monitor.py)."""
+    fetched: list[tuple[str, list[EconomicEvent] | ProviderError]] = []
+    for provider in live_providers:
+        try:
+            fetched.append((provider.name, provider.fetch(now_utc)))
+        except ProviderError as exc:
+            fetched.append((provider.name, exc))
+    return fetched
+
+
+def resolve_fetched(
     conn: sqlite3.Connection,
-    live_providers: list[EconomicCalendarProvider],
+    fetched: list[tuple[str, list[EconomicEvent] | ProviderError]],
     cache_provider: CacheProvider,
-    now_utc: int | None = None,
+    now_utc: int,
 ) -> CalendarFetchResult:
-    now = now_utc if now_utc is not None else int(time.time())
+    """The database phase: record attempts, persist successful fetches,
+    cross-check for conflicts, fall back to the cache."""
     results: dict[str, list[EconomicEvent]] = {}
     errors: dict[str, str] = {}
 
-    for provider in live_providers:
-        try:
-            events = provider.fetch(now)
-        except ProviderError as exc:
-            errors[provider.name] = str(exc)
-            record_provider_attempt(conn, provider.name, success=False, error=str(exc), now_utc=now)
+    for name, outcome in fetched:
+        if isinstance(outcome, ProviderError):
+            errors[name] = str(outcome)
+            record_provider_attempt(conn, name, success=False, error=str(outcome), now_utc=now_utc)
             continue
-        record_provider_attempt(conn, provider.name, success=True, now_utc=now)
-        results[provider.name] = events
-        persist_events(conn, events)
+        record_provider_attempt(conn, name, success=True, now_utc=now_utc)
+        results[name] = outcome
+        persist_events(conn, outcome)
 
     names = list(results.keys())
     for i in range(len(names)):
@@ -84,14 +98,24 @@ def fetch_with_fallback(
             if _detect_conflict(results[names[i]], results[names[j]]):
                 return CalendarFetchResult(results[names[i]], ProviderHealth.CONFLICT, names[i], errors)
 
-    for provider in live_providers:
-        if provider.name in results:
-            return CalendarFetchResult(results[provider.name], ProviderHealth.HEALTHY, provider.name, errors)
+    for name, _ in fetched:
+        if name in results:
+            return CalendarFetchResult(results[name], ProviderHealth.HEALTHY, name, errors)
 
     try:
-        cached = cache_provider.fetch(now)
+        cached = cache_provider.fetch(now_utc)
     except ProviderError as exc:
         errors[cache_provider.name] = str(exc)
         return CalendarFetchResult([], ProviderHealth.UNAVAILABLE, None, errors)
 
     return CalendarFetchResult(cached, ProviderHealth.DEGRADED, cache_provider.name, errors)
+
+
+def fetch_with_fallback(
+    conn: sqlite3.Connection,
+    live_providers: list[EconomicCalendarProvider],
+    cache_provider: CacheProvider,
+    now_utc: int | None = None,
+) -> CalendarFetchResult:
+    now = now_utc if now_utc is not None else int(time.time())
+    return resolve_fetched(conn, fetch_live(live_providers, now), cache_provider, now)

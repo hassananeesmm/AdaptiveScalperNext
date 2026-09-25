@@ -284,7 +284,7 @@ function marketPanel(panel){
   wrap.appendChild(stats);
   const quotes=Object.entries(panel.quotes||{}).map(([symbol,v])=>({
     symbol: symbol,broker_symbol:v.broker_symbol||"—",bid:v.bid??null,ask:v.ask??null,
-    spread_points:v.spread_points??null,status:v.status||"UNAVAILABLE",
+    spread_points:v.spread_points??null,status:v.status==="FRESH"?"LIVE FEED":(v.status||"UNAVAILABLE"),
     quote_age_seconds:v.quote_age_seconds??null,time_utc:v.time_utc??null
   }));
   wrap.appendChild(el("div","Sampled broker quotes","mini-title"));wrap.appendChild(table(quotes));

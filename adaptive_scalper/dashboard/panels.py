@@ -226,7 +226,9 @@ def market(conn: sqlite3.Connection, now: int) -> dict:
     """Last sampled broker truth, published by the sole MT5 runtime.
 
     The dashboard itself never opens the broker terminal. Each value carries
-    provenance and age; a disconnected or expired snapshot is NEVER 'LIVE'.
+    provenance and age; a disconnected or expired snapshot is never FRESH.
+    (Freshness is FRESH/STALE -- the word for an execution mode that does
+    not exist is kept out of the source; test_runtime_architecture audits it.)
     """
     value, age = _state(conn, "live_telemetry", now)
     clock, clock_age = _state(conn, "server_clock", now)
@@ -241,7 +243,7 @@ def market(conn: sqlite3.Connection, now: int) -> dict:
             continue
         quote_age = now - quote["time_utc"] if quote.get("time_utc") else None
         quotes[symbol] = {**quote, "quote_age_seconds": quote_age,
-                          "status": "LIVE" if age is not None and age <= 15
+                          "status": "FRESH" if age is not None and age <= 15
                           and quote_age is not None and -3 <= quote_age <= 15
                           and value.get("terminal", {}).get("connected") else "STALE"}
     return {
