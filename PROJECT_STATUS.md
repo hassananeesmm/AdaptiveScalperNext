@@ -67,7 +67,7 @@ docs/QA_REPORT.md "DEMO readiness".
 | Position management on a real DEMO position | NOT VERIFIED | no DEMO position has existed |
 | RAG / OKF / learning observer | TESTED; running advisory-only in PAPER | OKF valid (21 concepts); 0 models (INSUFFICIENT_DATA path) |
 | Historical backtests on broker history | VERIFIED WITH LIVE MT5 DATA (broker history) | backtest + walk-forward (15/15 folds hit the 5 % halt, PF 0.46-0.56) + path stress + purged CV (PSR 0.003-0.028); OOS 2026-07-01..2026-09-18 reserved, never run |
-| Windows release zip | see WORKLOG / docs/RELEASE.md | |
+| Windows release zip (source bundle) | VERIFIED ON WINDOWS | distAdaptiveScalperNext-0.1.0.zip built from e9e599c, zip audit clean, release_smoke_test PASSED; no frozen executable |
 
 ## Completed components
 

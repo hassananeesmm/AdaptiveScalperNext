@@ -2360,3 +2360,17 @@ failed; launcher tests after: 50 passed.
   cloud report marked historical), docs/DASHBOARD, docs/WINDOWS_DEPLOYMENT (combined
   launchers, WAL-safe backup), docs/RELEASE, docs/SAFETY guarantee 5, LOCAL_MT5_HANDOFF
   status, BUG_BACKLOG #17/#23, CLAUDE.md current state.
+
+## Session: Windows validation W8 -- release (2026-09-25)
+
+- `scripts\build_release.ps1 -Version 0.1.0` at commit `e9e599c`: suite 1514 passed / 9
+  skipped inside the build, OKF valid, `dist\AdaptiveScalperNext-0.1.0.zip` (391 entries,
+  sha256 cc82c19c969fa6c4518fb173cb8d5fe8fb7030371f3f7a69087e5c5f84a48ebd) + manifest.
+- Independent zip audit: no databases, logs, data/, .venv, dist, screenshots, keys, .env or
+  credentials; secret-pattern hits only in the synthetic detector fixtures of
+  `tests/test_knowledge.py` / `tests/test_guardrails.py`; all 8 launchers, 28 migrations and
+  the dashboard present.
+- `scripts\release_smoke_test.ps1`: PASSED. Its throwaway config has no `[mt5]` rule, so its
+  informational `doctor` reported the clock MISMATCH (+10799 s) and "the runtime will refuse
+  to start" -- the fail-closed check working as intended.
+- Source release only; no frozen executable was built.
