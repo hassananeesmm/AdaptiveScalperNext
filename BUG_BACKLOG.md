@@ -132,6 +132,12 @@ delete) once fixed, with the fixing commit/date noted.
    step U assumes the operator enables Algo Trading only at DEMO time -- the
    operator may prefer to turn it off until then.
 
+23. [SEVERITY: LOW, SUBSYSTEM: dashboard] Panel ages can read -1/-2 s:
+   `compute_all` takes one `now` before reading the panels while the runtime
+   keeps writing `runtime_state`, so a row updated mid-computation looks newer
+   than `now`. Cosmetic; do not clamp (that would hide real clock skew). Fix by
+   pinning one read snapshot and taking `now` after it.
+
 15. [SEVERITY: LOW, SUBSYSTEM: position_management] `re_entry.evaluate_reentry`
    requires `original_raw_confidence + 0.08` for a same-direction
    re-entry, so after a trade entered at raw_confidence >= 0.93 a same-

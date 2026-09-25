@@ -1,4 +1,4 @@
-# Adaptive Scalper Next — default configuration.
+# Adaptive Scalper Next â€” default configuration.
 #
 # Hard safety sections (mode, market.symbols, strategies.retired, risk,
 # news.fail_closed) are validated by adaptive_scalper.config.loader and
@@ -50,7 +50,7 @@ news_refresh_seconds = 1200
 news_stale_after_seconds = 7200
 bar_history_count = 300
 paper_initial_equity = 10000.0
-paper_session_tag = "v1"
+paper_session_tag = "v2"
 magic = 240924
 log_dir = "logs"
 
@@ -60,11 +60,27 @@ log_dir = "logs"
 # broker's contract specification (provenance = "BROKER_SPEC_ESTIMATE")
 # or from measured DEMO fills ("BROKER_DEMO_CONFIRMED") -- see
 # LOCAL_MT5_HANDOFF.md.
+#
+# Evidence (2026-09-25): the ICMarketsSC-Demo account's own imported history,
+# 2,222 deals 2026-09-11..18 (`broker_account_deals` / `broker_account_orders`).
+# Commission = sum(commission) / sum(volume) per side, x2. Slippage = the p90 of
+# adverse (fill - requested price) on market orders -- conservative, not fitted.
+# Swap 0.0: every measured position was intraday (swap 0 on all deals).
 [costs.XAUUSD]
-provenance = "UNVERIFIED_ASSUMPTION"
+# 212 round trips, 31.79 lots: 3.514 USD/lot/side. Slippage n=196: median 0.03, p90 0.41.
+commission_per_lot_round_trip = 7.03
+slippage_price = 0.41
+provenance = "BROKER_DEMO_CONFIRMED"
 
 [costs.GBPJPY]
+# 7 round trips, 5.07 lots: 3.501 USD/lot/side. Slippage: only n=7 samples -- too
+# few to trust, so it stays UNKNOWN and DEMO entries block with BLOCK_COST until
+# real fills accumulate (`costs observed --symbol GBPJPY`).
+commission_per_lot_round_trip = 7.00
 provenance = "UNVERIFIED_ASSUMPTION"
 
 [costs.BTCUSD]
-provenance = "UNVERIFIED_ASSUMPTION"
+# 159 round trips, 73.5 lots: commission 0.00. Slippage n=141: median 0.41, p90 11.97.
+commission_per_lot_round_trip = 0.0
+slippage_price = 11.97
+provenance = "BROKER_DEMO_CONFIRMED"

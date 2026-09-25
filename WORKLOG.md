@@ -2217,3 +2217,39 @@ forexfactory HEALTHY (cache from 2026-09-19).
 0.86, NOT sent; 0 positions / 0 orders after. BUG_BACKLOG #5 confirmed.
 
 Full suite (Windows): 1485 passed, 9 skipped (8 opt-in live, 1 symlink), 0 failed.
+
+## Session: Windows validation, checkpoint W4 -- live PAPER, dashboard, cost evidence (2026-09-25)
+
+Live PAPER (CLI equivalent of START PAPER.bat, hidden console, output in
+`logs/paper_stdout.txt`) started 03:10:11 UTC: ICMarketsSC-Demo, DEMO account,
+three symbols resolved, `server_clock` VERIFIED, news HEALTHY, entry cycle every
+4 s with 0 failures. Kill switch UNINITIALIZED -> `BLOCK_KILL_SWITCH` on every
+cycle (correct; PAPER still processes bars). The 03:10 bar was processed at
+03:14:59-03:15:03 (session cursors advanced to 03:10; 03:15 correctly treated as
+still forming).
+
+Dashboard (CLI equivalent of START DASHBOARD.bat): listens on 127.0.0.1:8765
+only; all 15 panels status OK from the real DB (NO data shown as empty lists,
+not invented); WebSocket pushes all 15 panels every ~4 s; `/api/panels` polling
+works. Isolation: dashboard killed -> PAPER stayed RUNNING (heartbeat 1 s, 0
+failures) -> dashboard restarted independently. Cosmetic finding: panel ages can
+read -1/-2 s (one `now` taken before the panels are read while the runtime keeps
+writing) -- BUG_BACKLOG #23.
+
+Execution costs configured from this DEMO account's own history (2,222 deals,
+2026-09-11..18): commission XAUUSD 3.514 / GBPJPY 3.501 / BTCUSD 0.00 USD per
+lot per side; adverse slippage (fill vs requested, market orders) p90 XAUUSD 0.41
+(n=196), BTCUSD 11.97 (n=141); GBPJPY n=7 is too thin, so its slippage stays
+UNKNOWN and GBPJPY DEMO entries keep blocking with BLOCK_COST. Swap 0.0 (all
+intraday). XAUUSD and BTCUSD -> BROKER_DEMO_CONFIRMED.
+
+Because fill assumptions are part of the PAPER fingerprint, `paper_session_tag`
+moved v1 -> v2 (the v1 sessions were 10 minutes old with no trades). Writing it
+with PowerShell 5.1 `Set-Content -Encoding utf8` added a BOM that tomllib
+rejects; `test_load_config_reads_the_shipped_default_toml` caught it; BOM removed.
+
+Graceful stop verified (real Ctrl+C to the PAPER console): "stopping (Ctrl+C): no
+positions are closed", engine state STOPPED, ENGINE_STOPPED event. Restarted at
+03:21:18 UTC on the new config: RUNNING, 0 failures, no ERROR/CRITICAL events.
+
+Full suite (Windows): 1485 passed, 9 skipped, 0 failed.
