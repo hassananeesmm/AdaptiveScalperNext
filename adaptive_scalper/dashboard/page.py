@@ -392,6 +392,18 @@ function paintSummary(){
   if(Array.isArray(ord.dangerous_unknown)&&ord.dangerous_unknown.length)
     issues.push(String(ord.dangerous_unknown.length)+" dangerous UNKNOWN/PENDING_RECONCILIATION orders require investigation.");
   if(acct.trade_mode&&acct.trade_mode!=="DEMO")issues.push("NON-DEMO ACCOUNT DETECTED: broker mutations must remain blocked.");
+  if(rt.mode==="DEMO"&&mk.status==="OK"&&mk.terminal&&
+    (!mk.terminal.trade_allowed||acct.trade_allowed===false||acct.trade_expert===false))
+    issues.push("MT5 or account Algo Trading is disabled; new DEMO execution should remain blocked.");
+  const clockStatus=mk.server_clock||{};
+  if(clockStatus.verdict&&clockStatus.verdict!=="VERIFIED")
+    issues.push("Broker timestamp validation: "+String(clockStatus.verdict)+".");
+  const calendar=((p.news||{}).runtime_snapshot||{});
+  if(calendar.health&&calendar.health!=="HEALTHY"&&calendar.health!=="DEGRADED")
+    issues.push("Economic calendar: "+String(calendar.health)+". New exposure must respect the fail-closed news gate.");
+  const inc=((p.events||{}).open_execution_incidents||[]);
+  if(Array.isArray(inc)&&inc.length)
+    issues.push(String(inc.length)+" unresolved execution incident(s) are recorded.");
   if(issues.length){alarm.textContent=issues.join(" ");alarm.className="warning-banner visible";}
   else{alarm.textContent="";alarm.className="warning-banner";}
   document.getElementById("data-age").textContent=
