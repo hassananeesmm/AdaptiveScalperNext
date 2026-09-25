@@ -5,7 +5,7 @@ snapshots written by the runtime; this browser never opens MT5 or writes to
 the database. Designed for Windows laptop sizes, scaling and touch input.
 """
 
-PAGE_HTML = """<!doctype html>
+PAGE_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
