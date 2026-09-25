@@ -71,3 +71,13 @@ python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt   # MetaTr
 
 Tests that need the live terminal (`tests/test_mt5_gateway_live.py`) skip automatically when
 MetaTrader5 is unavailable.
+
+## Responsive Windows live dashboard
+
+On the dashboard enhancement branch, `START DASHBOARD.bat` serves a responsive, read-only
+17-panel monitor at http://127.0.0.1:8765/. The separate PAPER or DEMO runtime publishes
+sampled MT5 account/quote/position snapshots about every five seconds; the browser receives
+updates via WebSocket with polling fallback. Stale broker data and disconnected runtimes are
+labelled, never presented as live. The dashboard has no trading or kill-switch mutation
+controls. See [docs/DASHBOARD.md](docs/DASHBOARD.md) for Windows layout, evidence limitations,
+startup steps and acceptance checks. These enhancements still require local Windows testing.
