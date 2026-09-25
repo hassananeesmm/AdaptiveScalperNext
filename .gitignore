@@ -45,3 +45,6 @@ Thumbs.db
 .claude/*.local.json
 .claude/*.local.yaml
 .claude/*.local.yml
+
+# Local browser-test screenshots and logs (Playwright MCP)
+.playwright-mcp/

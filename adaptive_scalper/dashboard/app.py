@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
-from adaptive_scalper.dashboard.health import compute_health
+from adaptive_scalper.dashboard.health import DASHBOARD_INTEGRITY, compute_health
 from adaptive_scalper.dashboard.page import PAGE_HTML
 from adaptive_scalper.dashboard.panels import PANELS, compute_all, compute_panel
 from adaptive_scalper.persistence.database import connect_readonly
@@ -59,7 +59,7 @@ def create_app(db_path: str | Path, *, push_seconds: float = DEFAULT_PUSH_SECOND
     def get_health() -> dict:
         try:
             with contextlib.closing(connect_readonly(db_path)) as conn:
-                report = compute_health(conn)
+                report = compute_health(conn, integrity=DASHBOARD_INTEGRITY.status(db_path)[0])
         except sqlite3.Error as exc:
             return {"state": "UNAVAILABLE", **_unavailable(exc)}
         return {

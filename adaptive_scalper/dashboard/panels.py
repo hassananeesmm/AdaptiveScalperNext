@@ -18,7 +18,7 @@ from typing import Callable
 
 from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, RETIRED_STRATEGY_KEYS
 from adaptive_scalper.core.kill_switch import get_state as kill_switch_state
-from adaptive_scalper.dashboard.health import compute_health
+from adaptive_scalper.dashboard.health import DASHBOARD_INTEGRITY, compute_health
 
 STALE_HEARTBEAT_SECONDS = 15
 OPEN_ORDER_STATES = ("SUBMITTED", "ACCEPTED", "PENDING", "RESTING", "PARTIAL", "UNKNOWN", "PENDING_RECONCILIATION")
@@ -34,7 +34,9 @@ def _rows(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
 
 
 def overview(conn: sqlite3.Connection, now: int) -> dict:
-    health = compute_health(conn)
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    integrity, checked_at = DASHBOARD_INTEGRITY.status(db_path)
+    health = compute_health(conn, integrity=integrity)
     ks = kill_switch_state(conn)
     engine, age = _state(conn, "engine", now)
     if engine is None:
@@ -47,6 +49,8 @@ def overview(conn: sqlite3.Connection, now: int) -> dict:
         runtime = {"status": engine.get("state"), "heartbeat_age_seconds": age, **engine}
     return {
         "real_money_execution": "DISABLED", "health": health.state.value, "reasons": list(health.reasons),
+        "database_integrity": {"result": integrity,
+                               "checked_age_seconds": None if checked_at is None else max(0, int(now - checked_at))},
         "kill_switch": {"status": ks.status.value, "blocks_new_entries": ks.blocks_new_entries, "reason": ks.reason,
                         "changed_by": ks.changed_by, "changed_at": ks.changed_at},
         "runtime": runtime,
@@ -302,5 +306,15 @@ def compute_panel(conn: sqlite3.Connection, name: str, now: int | None = None) -
 
 
 def compute_all(conn: sqlite3.Connection, now: int | None = None) -> dict:
-    now = now if now is not None else int(time.time())
-    return {"generated_at_utc": now, "panels": {name: compute_panel(conn, name, now) for name in PANELS}}
+    """Every panel from ONE read snapshot. The snapshot is pinned first and
+    `now` taken after it, so nothing read can be newer than `now` (before,
+    rows the runtime wrote mid-computation showed negative ages)."""
+    if now is not None:
+        return {"generated_at_utc": now, "panels": {name: compute_panel(conn, name, now) for name in PANELS}}
+    conn.execute("BEGIN")
+    try:
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()  # starts the read snapshot
+        now = int(time.time())
+        return {"generated_at_utc": now, "panels": {name: compute_panel(conn, name, now) for name in PANELS}}
+    finally:
+        conn.execute("COMMIT")

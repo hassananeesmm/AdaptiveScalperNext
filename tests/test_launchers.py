@@ -18,7 +18,7 @@ from adaptive_scalper.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHERS = ["SETUP.bat", "START PAPER.bat", "START DEMO.bat", "START DASHBOARD.bat", "RUN BACKTEST.bat",
-             "STOP TRADING.bat"]
+             "STOP TRADING.bat", "START PAPER + DASHBOARD.bat", "START DEMO + DASHBOARD.bat"]
 SCRIPTS = ["scripts/windows_verify.ps1", "scripts/build_release.ps1", "scripts/release_smoke_test.ps1"]
 CLI_CALL = re.compile(r"-m adaptive_scalper\.cli (?:--config \$Cfg )?(.+)$")
 
@@ -86,6 +86,22 @@ def test_paper_and_dashboard_launchers():
     assert _cli_invocations("START PAPER.bat") == [["paper"]]
     (dash,) = _cli_invocations("START DASHBOARD.bat")
     assert dash[0] == "dashboard" and dash[dash.index("--host") + 1] == "127.0.0.1"
+
+
+def test_combined_launchers_check_prerequisites_then_run_one_runtime_beside_the_dashboard():
+    paper = _cli_invocations("START PAPER + DASHBOARD.bat")
+    demo = _cli_invocations("START DEMO + DASHBOARD.bat")
+    assert paper == [["doctor"], ["kill-switch", "status"], ["paper"]]
+    assert demo == [["doctor"], ["reconcile"], ["kill-switch", "status"], ["demo"]]
+    for rel in ("START PAPER + DASHBOARD.bat", "START DEMO + DASHBOARD.bat"):
+        text = _text(rel)
+        # doctor must pass before anything starts, and a failure is shown, not hidden
+        assert text.index("errorlevel 1") < text.index('start "Adaptive Scalper Next - Dashboard"')
+        assert 'cmd /c "START DASHBOARD.bat"' in text        # the observer-only dashboard, 127.0.0.1
+        assert text.count("-m adaptive_scalper.cli paper") + text.count("-m adaptive_scalper.cli demo") == 1
+    banner = _text("START DEMO + DASHBOARD.bat")
+    for line in ("REAL-MONEY EXECUTION: DISABLED", "DEMO ACCOUNT REQUIRED", "NEW ENTRIES REQUIRE KILL SWITCH DISENGAGED"):
+        assert line in banner
 
 
 def test_the_release_is_built_from_tracked_files_only():

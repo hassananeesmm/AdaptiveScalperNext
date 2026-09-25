@@ -8,6 +8,7 @@ the database. Designed for Windows laptop sizes, scaling and touch input.
 PAGE_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
+<link rel="icon" href="data:,">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
@@ -29,12 +30,13 @@ PAGE_HTML = r"""<!doctype html>
 button,input{font:inherit}button{cursor:pointer}
 button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .shell{min-height:100vh;display:grid;grid-template-columns:222px minmax(0,1fr)}
-.sidebar{background:var(--side);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;overflow-y:auto}
-.brand{display:flex;gap:11px;align-items:center;padding:5px 8px 20px}
+.sidebar{background:var(--side);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;overflow-y:auto;overflow-x:hidden}
+.brand{display:flex;gap:11px;align-items:center;padding:5px 8px 20px;min-width:0}
+.brand>div:not(.logo){min-width:0}
 .logo{background:linear-gradient(135deg,#2c81c7,#75c5db);color:#061629;font-weight:900;
   width:36px;height:36px;border-radius:11px;display:grid;place-items:center}
-.brand-title{font-size:15px;font-weight:800;letter-spacing:.01em}
-.brand-sub{font-size:11px;color:var(--muted)}
+.brand-title{font-size:15px;font-weight:800;letter-spacing:.01em;line-height:1.2;overflow-wrap:break-word}
+.brand-sub{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nav-label{font-size:11px;letter-spacing:.1em;font-weight:750;color:var(--muted);
   text-transform:uppercase;margin:12px 12px 7px}
 .nav{display:grid;gap:4px}
@@ -141,7 +143,7 @@ summary{cursor:pointer;font-weight:680;color:var(--text)}
 <div class="shell">
   <aside class="sidebar" aria-label="Dashboard navigation">
     <div class="brand"><div class="logo" aria-hidden="true">AS</div>
-      <div><div class="brand-title">AdaptiveScalperNext</div><div class="brand-sub">Local operations monitor</div></div>
+      <div><div class="brand-title">AdaptiveScalper<wbr>Next</div><div class="brand-sub">Local operations monitor</div></div>
     </div>
     <div class="nav-label">Views</div><nav class="nav" id="nav" aria-label="Views"></nav>
     <div class="side-foot">Observer only<br>MT5 DEMO / PAPER<br>Broker orders cannot be sent here.</div>
@@ -350,7 +352,9 @@ FRIENDLY && Object.keys(FRIENDLY).forEach(name=>{
 const kpis=[
   ["Account equity","Actual DEMO account snapshot"],["Floating P&L","Observed DEMO broker positions"],
   ["DEMO booked net","Today's recorded deals"],["Broker positions","Fresh DEMO terminal snapshot"],
-  ["Dangerous UNKNOWN","Active unresolved orders"],["Feed freshness","Runtime and broker data"]
+  ["Dangerous UNKNOWN","Active unresolved orders"],["Feed freshness","Runtime and broker data"],
+  ["Account balance","Actual DEMO account snapshot"],["MT5 & account","Terminal connection and trade mode"],
+  ["Total risk","Local open + pending, % of fresh equity (ceiling 0.75 %)"]
 ];
 kpis.forEach(([label,hint],i)=>{
   const k=el("div",null,"kpi");k.appendChild(el("span",label,"label"));
@@ -364,13 +368,19 @@ function paintSummary(){
   if(!data)return;
   const p=data.panels||{},ov=p.overview||{},mk=p.market||{},ord=p.orders||{},risk=p.risk||{};
   const rt=ov.runtime||{},ks=ov.kill_switch||{},acct=mk.account||{};
-  const live=mk.status==="OK"&&mk.age_seconds<=15&&acct.trade_mode==="DEMO";
-  const runtimeFresh=rt.status==="RUNNING"||rt.status==="DEGRADED";
-  const rtStatus=runtimeFresh?"RUNNING"+(rt.mode?" · "+rt.mode:""):fmt(rt.status);
+  // The dashboard's OWN data can be old too (server stopped, network): then
+  // nothing below may be presented as current.
+  const dataAge=Math.max(0,Math.round(Date.now()/1000-Number(data.generated_at_utc||0)));
+  const snapshotStale=feedState==="OFFLINE"||dataAge>15;
+  const live=!snapshotStale&&mk.status==="OK"&&mk.age_seconds<=15&&acct.trade_mode==="DEMO";
+  const runtimeFresh=!snapshotStale&&(rt.status==="RUNNING"||rt.status==="DEGRADED");
+  const rtStatus=snapshotStale?"UNKNOWN (dashboard data "+dataAge+"s old)":
+    runtimeFresh?"RUNNING"+(rt.mode?" · "+rt.mode:""):fmt(rt.status);
   pill("runtime","Runtime: "+rtStatus,runtimeFresh?"good":"bad");
-  pill("health","Health: "+fmt(ov.health),
+  pill("health","Health: "+(snapshotStale?"UNKNOWN":fmt(ov.health)),
     ov.health==="HEALTHY"&&runtimeFresh?"good":ov.health==="CRITICAL"?"bad":"warn");
-  pill("kill","Kill switch: "+fmt(ks.status),ks.blocks_new_entries?"warn":"good");
+  pill("kill","Kill switch: "+fmt(ks.status)+(snapshotStale?" (last known)":""),
+    ks.blocks_new_entries||snapshotStale?"warn":"good");
   pill("feed",feedState==="WS"?"Dashboard: live":feedState==="POLL"?"Dashboard: polling":"Dashboard: offline",
     feedState==="WS"?"good":feedState==="POLL"?"warn":"bad");
   const curr=acct.currency||"";
@@ -379,14 +389,22 @@ function paintSummary(){
   const floatValid=live&&Array.isArray(brokerPositions)&&brokerPositions.every(x=>typeof x.floating_pnl==="number");
   document.getElementById("kpi-1").textContent=floatValid?
     money(brokerPositions.reduce((sum,x)=>sum+x.floating_pnl,0),curr):"—";
-  document.getElementById("kpi-2").textContent=typeof risk.demo_realized_pnl_today_utc==="number"?
+  document.getElementById("kpi-2").textContent=!snapshotStale&&typeof risk.demo_realized_pnl_today_utc==="number"?
     money(risk.demo_realized_pnl_today_utc,curr):"—";
   document.getElementById("kpi-3").textContent=live&&Array.isArray(brokerPositions)?
     fmt(brokerPositions.length):"—";
-  document.getElementById("kpi-4").textContent=Array.isArray(ord.dangerous_unknown)?
+  document.getElementById("kpi-4").textContent=!snapshotStale&&Array.isArray(ord.dangerous_unknown)?
     fmt(ord.dangerous_unknown.length):"—";
   document.getElementById("kpi-5").textContent=runtimeFresh&&live?"Fresh":runtimeFresh?"Broker stale":"Unavailable";
+  document.getElementById("kpi-6").textContent=live&&typeof acct.balance==="number"?money(acct.balance,curr):"—";
+  const term=mk.terminal||{};
+  document.getElementById("kpi-7").textContent=snapshotStale?"Unknown":mk.status==="NO_DATA"||!mk.status?"Unavailable":
+    mk.status!=="OK"?"Stale":(term.connected?"Connected":"Disconnected")+" · "+fmt(acct.trade_mode);
+  const totalRisk=risk.estimated_total_risk_pct_of_fresh_equity;
+  document.getElementById("kpi-8").textContent=!snapshotStale&&typeof totalRisk==="number"?totalRisk.toFixed(2)+" %":"—";
   const alarm=document.getElementById("alert"),issues=[];
+  if(snapshotStale)issues.push("Dashboard server unreachable or not updating: the last data is "+dataAge+
+    "s old, so runtime and broker figures are not shown as current.");
   if(!runtimeFresh)issues.push("Runtime is not reporting a fresh running heartbeat.");
   if(!live)issues.push("Fresh verified MT5 DEMO telemetry is unavailable; displayed figures may be old.");
   if(Array.isArray(ord.dangerous_unknown)&&ord.dangerous_unknown.length)

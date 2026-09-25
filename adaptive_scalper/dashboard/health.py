@@ -13,13 +13,18 @@ fields for things that don't exist yet.
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
+import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
 
 from adaptive_scalper.core.kill_switch import get_state
 from adaptive_scalper.gateway.protocol import Gateway
-from adaptive_scalper.persistence.database import integrity_check
+from adaptive_scalper.persistence.database import connect_readonly, integrity_check
+
+INTEGRITY_PENDING = "PENDING"
 
 
 class HealthState(str, Enum):
@@ -41,7 +46,55 @@ class HealthReport:
     mt5_connected: bool | None  # None = no gateway supplied, i.e. not checked
 
 
-def compute_health(conn: sqlite3.Connection, gateway: Gateway | None = None) -> HealthReport:
+class IntegrityMonitor:
+    """Full `PRAGMA integrity_check`, off the request path, at most every
+    `ttl_seconds` per database (the dashboard process).
+
+    On the laptop's 218 MB database the check takes ~6 s; run on every panel
+    refresh it made each 2-s dashboard update take 6 s. Each check uses its
+    own read-only connection on a background thread; callers get the last
+    result and when it was taken, or PENDING before the first one finishes
+    (never reported as "ok"). The CLI `health`/`doctor` keep a synchronous check."""
+
+    def __init__(self, ttl_seconds: float = 600.0) -> None:
+        self.ttl_seconds = ttl_seconds
+        self._lock = threading.Lock()
+        self._results: dict[str, tuple[str, float]] = {}
+        self._running: dict[str, threading.Thread] = {}
+
+    def _check(self, db_path: str) -> None:
+        try:
+            with contextlib.closing(connect_readonly(db_path)) as conn:
+                result = integrity_check(conn)
+        except sqlite3.Error as exc:
+            result = f"integrity check could not run: {type(exc).__name__}: {exc}"
+        with self._lock:
+            self._results[db_path] = (result, time.time())
+            self._running.pop(db_path, None)
+
+    def status(self, db_path: str, wait_seconds: float = 0.5) -> tuple[str, float | None]:
+        """(result or PENDING, epoch seconds of that result or None)."""
+        db_path = str(db_path)
+        with self._lock:
+            cached = self._results.get(db_path)
+            thread = self._running.get(db_path)
+            if thread is None and (cached is None or time.time() - cached[1] >= self.ttl_seconds):
+                thread = threading.Thread(target=self._check, args=(db_path,), name="integrity-check", daemon=True)
+                self._running[db_path] = thread
+                thread.start()
+        if cached is None and thread is not None:
+            thread.join(timeout=wait_seconds)
+            with self._lock:
+                cached = self._results.get(db_path)
+        return cached if cached is not None else (INTEGRITY_PENDING, None)
+
+
+DASHBOARD_INTEGRITY = IntegrityMonitor()
+
+
+def compute_health(
+    conn: sqlite3.Connection, gateway: Gateway | None = None, *, integrity: str | None = None,
+) -> HealthReport:
     """Compose current health from whatever subsystems exist today.
 
     Precedence (highest wins): CRITICAL (database integrity failure) >
@@ -52,8 +105,11 @@ def compute_health(conn: sqlite3.Connection, gateway: Gateway | None = None) -> 
     """
     reasons: list[str] = []
 
-    integrity = integrity_check(conn)
-    if integrity != "ok":
+    if integrity is None:  # `integrity`: a recent IntegrityMonitor result, instead of checking now
+        integrity = integrity_check(conn)
+    if integrity == INTEGRITY_PENDING:
+        reasons.append("database integrity check pending (first check still running)")
+    elif integrity != "ok":
         reasons.append(f"database integrity check failed: {integrity}")
 
     ks = get_state(conn)
@@ -71,7 +127,7 @@ def compute_health(conn: sqlite3.Connection, gateway: Gateway | None = None) -> 
         if mt5_connected is False:
             reasons.append("MT5 terminal not connected")
 
-    if integrity != "ok":
+    if integrity not in ("ok", INTEGRITY_PENDING):
         state = HealthState.CRITICAL
     elif ks.blocks_new_entries:
         state = HealthState.TRADING_BLOCKED

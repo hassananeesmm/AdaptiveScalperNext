@@ -2295,3 +2295,43 @@ Tests: `tests/test_runtime_scheduling.py` (lag metrics; a hanging calendar fetch
 never starves DEMO position management -- fails on the old synchronous code),
 risk-ceiling tests in `tests/test_config.py`. Full suite before fix 3: 1500
 passed, 1 failed (the audit), 9 skipped; after: audit + dashboard tests 24 passed.
+
+## Session: Windows validation W6 -- dashboard performance, honesty, screen fit, launchers (2026-09-25)
+
+Dashboard defects found with a real Chromium (Playwright) against the live PAPER
+runtime and the real 218 MB database:
+1. Overview panel ran a full `PRAGMA integrity_check` on every refresh: 6.1 s per
+   `/api/panels`, so the 2 s WebSocket feed fell back to polling and ages read
+   -4..-6 s. Now `dashboard/health.IntegrityMonitor` checks off-thread at most
+   every 600 s (own read-only connection; PENDING until the first result, never
+   reported as "ok" or as a failure); `compute_all` pins one read snapshot before
+   taking `now`. Measured after: 0.04-0.06 s per refresh, ages >= 0. The CLI
+   `health`/`doctor` keep their synchronous full check.
+2. With the dashboard server stopped, the page kept showing "Runtime: RUNNING" and
+   the equity as current. Now, when the dashboard's own data is > 15 s old or the
+   feed is offline: runtime/health "UNKNOWN", broker figures "—", kill switch
+   "(last known)", banner with the data age. Verified: stop server -> after 20 s
+   all of that shown; restart -> WebSocket reconnected by itself ("Dashboard: live").
+3. Required summary items added: account balance, MT5 & account (connection +
+   trade mode, stale-aware), total risk (% of fresh equity vs the 0.75 % ceiling).
+4. At 911x512 (1366x768 at 150 %) the sidebar had its own horizontal scrollbar
+   (brand name overflow): sidebar overflow-x hidden, brand wraps at a word break.
+5. favicon 404 on every load: inline empty icon.
+
+Screen-fit matrix (CSS px = physical / scale; all 7 views at each size): 1366x768,
+1600x900, 1920x1080, 2560x1440, 1093x614 (1366@125), 911x512 (1366@150), 1280x720
+(1600@125, 1920@150), 1536x864 (1920@125), 1707x960 (2560@150). Every size: no
+page-level horizontal scroll, no header/content overlap, no sidebar overflow, no
+table escaping its container, all nav buttons reachable, minimum font 11 px,
+panels per view 6,4,5,5,6,5,17. Keyboard: nav buttons are <button>s with a 2.4 px
+focus outline; Enter switches views. Light theme checked. Limitation: Chromium
+viewport emulation of scaling, not the Windows display-scaling setting itself.
+
+Launchers: `START PAPER + DASHBOARD.bat` and `START DEMO + DASHBOARD.bat` run
+`doctor` first (stop with a visible error if it fails), DEMO also runs read-only
+`reconcile`; both show kill-switch status (never change it), open the dashboard in
+its own window and run the one runtime in the foreground (Ctrl+C). Added to every
+launcher audit in `tests/test_launchers.py` plus a dedicated test.
+
+Full suite (Windows, before the launcher change): 1505 passed, 9 skipped, 0
+failed; launcher tests after: 50 passed.
