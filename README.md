@@ -37,7 +37,7 @@ Run `.venv\Scripts\python.exe -m adaptive_scalper.cli --help`. The commands are:
 
 | Area | Commands |
 |---|---|
-| System | `doctor`, `status`, `health`, `symbols`, `strategies`, `why-no-trade`, `journal recent`, `costs observed` |
+| System | `preflight`, `doctor`, `status`, `health`, `symbols`, `strategies`, `why-no-trade`, `journal recent`, `costs observed` |
 | Operator | `kill-switch status`, `engage`, `bootstrap`, `clear` |
 | Data | `history bootstrap`, `history status`, `broker-history import`, `broker-history status` |
 | Runtime | `paper`, `demo`, `scan`, `analyse`, `reconcile`, `order-check-probe`, `news status`, `news refresh`, `news upcoming` |

@@ -1,4 +1,4 @@
-"""System and observability commands: doctor, status, health, symbols,
+"""System and observability commands: preflight, doctor, status, health, symbols,
 strategies, why-no-trade, journal recent, costs observed. Everything
 except `doctor`'s terminal probe and `symbols` reads SQLite only."""
 
@@ -17,6 +17,7 @@ from adaptive_scalper.dashboard.health import compute_health
 from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
 from adaptive_scalper.persistence.database import integrity_check
+from adaptive_scalper.preflight import run_preflight
 from adaptive_scalper.runtime.state import decision_counts, get_state_with_age, recent_events
 from adaptive_scalper.strategies import build_active_registry
 
@@ -192,7 +193,16 @@ def cmd_costs_observed(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preflight(args: argparse.Namespace) -> int:
+    report = run_preflight(args.config, dashboard_url=args.dashboard_url)
+    print_json(report)
+    return 1 if report["result"] == "BLOCKED" else 0
+
+
 def register(sub) -> None:
+    preflight = sub.add_parser("preflight", help="non-mutating PAPER/DEMO readiness diagnostic")
+    preflight.add_argument("--dashboard-url", default="http://127.0.0.1:8765")
+    preflight.set_defaults(func=cmd_preflight)
     sub.add_parser("doctor", help="verify config, database, kill switch and MT5 reachability").set_defaults(func=cmd_doctor)
     sub.add_parser("status", help="mode, symbols, health, kill switch, engine heartbeat").set_defaults(func=cmd_status)
     sub.add_parser("health", help="health report (exit 1 unless HEALTHY)").set_defaults(func=cmd_health)

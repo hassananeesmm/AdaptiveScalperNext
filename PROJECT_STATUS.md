@@ -1624,6 +1624,13 @@ responds to) is not wired to anything live. 71 tests
 
 ## Tests
 
+Deep-audit checkpoint (2026-09-25): the canonical Windows suite reports 1517
+passed, 9 skipped. A new non-mutating `preflight` command reports
+`READY_FOR_PAPER`. DEMO remains blocked by the human-owned UNINITIALIZED kill
+switch, absence of a fresh CLEAN DEMO reconciliation snapshot, and insufficient
+GBPJPY slippage evidence. See `docs/DEEP_AUDIT_REPORT.md` and the six companion
+audit/operations reports. No order was sent.
+
 Latest full run: see WORKLOG.md's final entry and docs/QA_REPORT.md
 (Linux cloud runner, Python 3.13; `MetaTrader5` not installable there).
 The 7 skipped tests are `tests/test_mt5_gateway_live.py`, which need the
@@ -1637,4 +1644,3 @@ executed.
 - `Mt5Gateway.copy_rates_from_pos` — implemented, no test exercises it
   (superseded by `copy_rates_range`).
 - A frozen (PyInstaller) Windows build — deferred (BUG_BACKLOG #18).
-

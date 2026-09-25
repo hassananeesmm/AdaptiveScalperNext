@@ -5,6 +5,20 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
+24. [SEVERITY: LOW, SUBSYSTEM: CLI/performance] On the 275 MB Windows
+    database, `status` took 4.487 s and `health` 5.576 s because both run a
+    synchronous full `PRAGMA integrity_check`. This does not delay the separate
+    trading process. Keep the full check in `doctor`/`preflight`; consider an
+    age-labelled cached result for the fast operator commands.
+
+25. [SEVERITY: MEDIUM, SUBSYSTEM: learning/security] Locally produced model
+    artifacts are loaded with `joblib.load` after a SHA-256 integrity check.
+    This rejects accidental/tampered bytes when the stored checksum is trusted,
+    but pickle-compatible deserialization is not safe for externally supplied
+    artifacts or an attacker who can replace both artifact and metadata. There
+    is no external artifact ingestion path today. Keep artifacts local and move
+    to a non-executable format before accepting imported models.
+
 1. **security-guidance plugin's agent-sdk-venv is a machine-global,
    non-git-tracked resource.** `~/.claude/security/agent-sdk-venv`
    (Python 3.14) can independently go stale/broken (observed once this
@@ -173,6 +187,14 @@ delete) once fixed, with the fixing commit/date noted.
    the one-time manual checks.
 
 ## Fixed
+
+- ~~#26 [MEDIUM, operations] No single non-mutating readiness command covered
+  config, dependencies, database/schema/time basis, MT5/account/symbol/clock/
+  quote state, news, reconciliation, UNKNOWN incidents, costs, kill switch and
+  dashboard availability.~~ Fixed 2026-09-25: `preflight` returns
+  `READY_FOR_PAPER`, `READY_FOR_DEMO`, or `BLOCKED` with precise reasons and
+  never migrates, reconciles, clears controls, calls `order_check` or sends.
+  `tests/test_preflight.py` proves the database remains byte-for-byte unchanged.
 
 - ~~#7 [LOW, execution] reconciliation passed the broker's raw symbol as
   `canonical_symbol`.~~ Fixed 2026-09-24 (Checkpoint I): translated through

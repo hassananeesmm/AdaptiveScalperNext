@@ -2374,3 +2374,23 @@ failed; launcher tests after: 50 passed.
   informational `doctor` reported the clock MISMATCH (+10799 s) and "the runtime will refuse
   to start" -- the fail-closed check working as intended.
 - Source release only; no frozen executable was built.
+## Session: Deep audit and non-mutating preflight (2026-09-25)
+
+Created branch `codex/deep-audit-20260925` from the integrated local dashboard
+line after fetching all refs. Preserved concurrent Windows-validation commits;
+did not merge to main. Backed up the active WAL database with SQLite's online
+backup API to `data/backups/adaptive_scalper.pre-deep-audit.20260925T095839Z.sqlite3`;
+source and backup integrity both `ok`.
+
+Initial offline suite: 1514 passed, 9 skipped in 260.97 s. Final suite after
+the preflight implementation: 1517 passed, 9 skipped in 119.54 s. `pip check` clean;
+isolated pip-audit found no known vulnerabilities. Live doctor: DEMO, schema 28,
+UTC storage and all three server clocks VERIFIED. Chrome validated the integrated
+17-panel dashboard at the four required resolutions plus scaling-equivalent
+viewports: no page overflow, sidebar overflow or escaped panels.
+
+Implemented `preflight`, a read-only diagnostic that never migrates, reconciles,
+checks/sends orders or changes safety state. Live result: READY_FOR_PAPER. DEMO
+blockers are kill switch UNINITIALIZED, no fresh CLEAN reconciliation snapshot
+in PAPER, and unknown GBPJPY slippage. Added three regression tests and the seven
+required audit/operations documents. No `order_send` was performed.

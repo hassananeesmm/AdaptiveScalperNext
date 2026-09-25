@@ -4,7 +4,7 @@
 Every command is backed by a real subsystem (directive section 118: no
 placeholder commands). Modules:
 
-    system     doctor, status, health, symbols, strategies, why-no-trade,
+    system     preflight, doctor, status, health, symbols, strategies, why-no-trade,
                journal recent, costs observed
     operator   kill-switch status/engage/bootstrap/clear (the ONLY place an
                OperatorAuthority is constructed)

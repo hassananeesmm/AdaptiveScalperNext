@@ -48,6 +48,10 @@ integration only works on that machine. **Never** deploy this as a cloud trading
 | Stop new entries now | `STOP TRADING.bat`. Positions are **not** closed. |
 | Resume | `kill-switch clear --operator-id YOU --reason "..."` (explicit operator decision) |
 | Stop the runtime | Ctrl+C in its window. Stopping never closes positions; broker-side stops remain. |
+
+Before PAPER or DEMO, run `.venv\Scripts\python.exe -m adaptive_scalper.cli preflight`.
+It is non-mutating and returns `READY_FOR_PAPER`, `READY_FOR_DEMO`, or `BLOCKED` with exact
+reasons. `READY_FOR_DEMO` does not clear the kill switch or replace operator approval.
 | Stop the dashboard | Close its window. The runtime is unaffected (verified). |
 
 Only one trading runtime may use the database at a time: a second `paper`/`demo` is refused

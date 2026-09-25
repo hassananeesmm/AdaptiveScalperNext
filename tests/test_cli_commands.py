@@ -65,7 +65,7 @@ EXPECTED = {
     "doctor", "status", "health", "symbols", "strategies", "why-no-trade", "journal", "costs", "kill-switch",
     "history", "broker-history", "paper", "demo", "scan", "analyse", "reconcile", "news", "backtest",
     "walk-forward", "oos", "path-stress", "purged-validation", "models", "learning", "model-walk-forward", "rag",
-    "okf", "dashboard", "order-check-probe",
+    "okf", "dashboard", "order-check-probe", "preflight",
 }
 
 
