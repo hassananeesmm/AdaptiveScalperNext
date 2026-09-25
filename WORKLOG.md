@@ -2383,7 +2383,7 @@ backup API to `data/backups/adaptive_scalper.pre-deep-audit.20260925T095839Z.sql
 source and backup integrity both `ok`.
 
 Initial offline suite: 1514 passed, 9 skipped in 260.97 s. Final suite after
-the preflight implementation: 1517 passed, 9 skipped in 119.54 s. `pip check` clean;
+the preflight and smoke-isolation fixes: 1518 passed, 9 skipped in 115.05 s. `pip check` clean;
 isolated pip-audit found no known vulnerabilities. Live doctor: DEMO, schema 28,
 UTC storage and all three server clocks VERIFIED. Chrome validated the integrated
 17-panel dashboard at the four required resolutions plus scaling-equivalent
@@ -2394,3 +2394,9 @@ checks/sends orders or changes safety state. Live result: READY_FOR_PAPER. DEMO
 blockers are kill switch UNINITIALIZED, no fresh CLEAN reconciliation snapshot
 in PAPER, and unknown GBPJPY slippage. Added three regression tests and the seven
 required audit/operations documents. No `order_send` was performed.
+
+The first 0.1.1 release smoke attempt exposed that its pre-pytest `doctor`
+initialized the live terminal (read-only) despite the script's isolation claim,
+and its nonzero result was ignored. Added the `ASN_DISABLE_MT5=1` import-boundary
+guard, made doctor failure fatal, and added a fresh-process regression. No order
+check or order send occurred.

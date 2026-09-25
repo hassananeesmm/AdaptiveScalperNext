@@ -188,6 +188,13 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~#27 [MEDIUM, release safety] `release_smoke_test.ps1` ran `doctor`
+  before pytest's MT5-blocking fixture existed, so it initialized the real
+  terminal despite claiming broker isolation; it also ignored doctor's nonzero
+  exit.~~ Fixed 2026-09-25: the smoke script sets `ASN_DISABLE_MT5=1` before
+  any application command, the sole MT5 import boundary enforces it, doctor is
+  checked, and a fresh-process regression proves the guard.
+
 - ~~#26 [MEDIUM, operations] No single non-mutating readiness command covered
   config, dependencies, database/schema/time basis, MT5/account/symbol/clock/
   quote state, news, reconciliation, UNKNOWN incidents, costs, kill switch and

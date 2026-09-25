@@ -64,7 +64,7 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
 - Root cause: a skip guard looked for a lazy-import module global that never existed.
 - Consequence: unintended broker reads and potential progression to dry-run trade requests.
 - Correction/regression: suite-wide import block except explicit `ASN_LIVE_MT5=1` tests.
-- Verification/status: final full suite `1517 passed, 9 skipped`; **FIXED**.
+- Verification/status: final full suite `1518 passed, 9 skipped`; **FIXED**.
 
 ### ASN-002 — Broker server timestamps were stored as UTC
 
@@ -184,6 +184,22 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
 - Proposed correction/test: optional configured terminal path plus identity assertion.
 - Status: **OPEN**.
 
+### ASN-011 — Release smoke test initialized the real MT5 terminal
+
+- Severity/type: **MEDIUM — confirmed defect, fixed in this audit**.
+- Affected: `scripts/release_smoke_test.ps1`, `gateway/mt5_gateway.py`.
+- Actual/expected: the smoke script described itself as broker-isolated, but its pre-pytest
+  `doctor` initialized the installed terminal. It also did not check doctor's nonzero exit.
+- Reproduction/evidence: the 0.1.1 first smoke attempt reported live DEMO account data and a
+  +10,799 s clock mismatch from its throwaway UTC config. No order API was called.
+- Root cause: pytest's autouse MT5 block does not exist for CLI commands executed before
+  pytest, and the script omitted the doctor exit-code check.
+- Consequence: unintended broker reads during packaging and a false-positive smoke result.
+- Correction: `ASN_DISABLE_MT5=1` is enforced at the sole import boundary before all smoke
+  commands; doctor failure now aborts immediately.
+- Regression/verification: fresh-process environment-guard test plus rebuilt smoke release.
+- Status: **FIXED**.
+
 ## Backtest, ML and knowledge conclusions
 
 The backtest uses next-bar-open entry, executable bid/ask sides, conservative same-bar
@@ -199,7 +215,7 @@ the kill switch. No paid LLM is required at runtime.
 
 ## Final disposition
 
-- Confirmed defects fixed: ASN-001 through ASN-006 (some fixed in preceding Windows commits).
+- Confirmed defects fixed: ASN-001 through ASN-006 and ASN-011 (some fixed in preceding Windows commits).
 - Remaining confirmed defect: none known in a currently authorized PAPER send-free path.
 - Remaining blocks/risks: ASN-007 through ASN-010.
 - Live PAPER: genuine current MT5 data, fresh heartbeats, no task failures observed; zero

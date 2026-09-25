@@ -1624,7 +1624,7 @@ responds to) is not wired to anything live. 71 tests
 
 ## Tests
 
-Deep-audit checkpoint (2026-09-25): the canonical Windows suite reports 1517
+Deep-audit checkpoint (2026-09-25): the canonical Windows suite reports 1518
 passed, 9 skipped. A new non-mutating `preflight` command reports
 `READY_FOR_PAPER`. DEMO remains blocked by the human-owned UNINITIALIZED kill
 switch, absence of a fresh CLEAN DEMO reconciliation snapshot, and insufficient

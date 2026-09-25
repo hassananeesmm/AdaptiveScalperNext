@@ -17,6 +17,23 @@ from adaptive_scalper.gateway.factory import create_live_gateway
 from adaptive_scalper.gateway.mt5_gateway import Mt5NotAvailableError
 
 
+def test_environment_guard_blocks_mt5_in_a_fresh_process():
+    """Release smoke commands run before pytest's fixture exists."""
+    import os
+    import subprocess
+    import sys
+
+    env = os.environ.copy()
+    env["ASN_DISABLE_MT5"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "from adaptive_scalper.gateway.mt5_gateway import _import_mt5; _import_mt5()"],
+        capture_output=True, text=True, env=env, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "ASN_DISABLE_MT5=1" in result.stderr
+
+
 def test_the_live_gateway_cannot_initialize_inside_the_offline_suite():
     gateway = create_live_gateway("UTC")
     with pytest.raises(Mt5NotAvailableError, match="blocked in the offline test suite"):

@@ -13,6 +13,7 @@ CI) without ever touching this class.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 
 from adaptive_scalper.gateway.server_time import (
@@ -60,6 +61,10 @@ class Mt5NotAvailableError(RuntimeError):
 
 
 def _import_mt5():
+    if os.environ.get("ASN_DISABLE_MT5") == "1":
+        raise Mt5NotAvailableError(
+            "MetaTrader5 access is disabled by ASN_DISABLE_MT5=1 (offline/smoke-test safety guard)"
+        )
     try:
         import MetaTrader5 as mt5  # type: ignore
     except ImportError as exc:

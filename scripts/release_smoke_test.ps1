@@ -42,11 +42,17 @@ symbols = ["XAUUSD", "GBPJPY", "BTCUSD"]
 path = "$($Db -replace '\\', '/')"
 "@ | Out-File -Encoding ascii $Cfg
 
+# The smoke test runs on the same laptop as the real terminal. Explicitly
+# disable the one MT5 import boundary before ANY application command so a
+# release verification can never initialize or launch the terminal.
+$env:ASN_DISABLE_MT5 = "1"
 & $Py -m adaptive_scalper.cli --config $Cfg doctor
+if ($LASTEXITCODE -ne 0) { throw "doctor failed" }
 & $Py -m adaptive_scalper.cli --config $Cfg strategies; if ($LASTEXITCODE -ne 0) { throw "strategies failed" }
 & $Py -m adaptive_scalper.cli --config $Cfg okf validate; if ($LASTEXITCODE -ne 0) { throw "okf validate failed" }
 & $Py -m adaptive_scalper.cli --config $Cfg kill-switch status; if ($LASTEXITCODE -ne 0) { throw "kill-switch status failed" }
 & $Py -m pytest -q; if ($LASTEXITCODE -ne 0) { throw "test suite failed in the installed release" }
+Remove-Item Env:ASN_DISABLE_MT5
 
 Write-Host "Release smoke test PASSED in $($App.FullName)" -ForegroundColor Green
 Write-Host "REAL-MONEY EXECUTION REMAINS DISABLED"

@@ -6,7 +6,7 @@ Target: Windows 11, Intel CPU, approximately 16 GB RAM, no GPU requirement.
 
 | Item | Observation |
 |---|---|
-| Full test suite | 260.97 s initial; 119.54 s final warm-cache run |
+| Full test suite | 260.97 s initial; 115.05 s final warm-cache run |
 | Dashboard `/api/panels` (19 KB, five samples) | median 0.148 s, max 0.170 s |
 | PAPER worker resident memory | about 127 MB |
 | Dashboard worker resident memory | about 133 MB |

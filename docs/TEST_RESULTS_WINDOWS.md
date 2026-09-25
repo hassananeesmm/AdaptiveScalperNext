@@ -7,7 +7,7 @@ Date: 2026-09-25. Interpreter: `C:\AdaptiveScalperNext\.venv\Scripts\python.exe`
 
 | Check | Exact command | Result |
 |---|---|---|
-| Full suite (final) | `.venv\Scripts\python.exe -m pytest -q` | **1517 passed, 9 skipped**, 2 third-party deprecation warnings, 119.54 s |
+| Full suite (final) | `.venv\Scripts\python.exe -m pytest -q` | **1518 passed, 9 skipped**, 2 third-party deprecation warnings, 115.05 s |
 | Preflight regression | `.venv\Scripts\python.exe -m pytest -q tests\test_preflight.py tests\test_cli_commands.py::test_every_directive_command_is_registered` | **4 passed**, 8.10 s |
 | Dependency consistency | `.venv\Scripts\python.exe -m pip check` | No broken requirements |
 | Vulnerability audit | temporary `pip-audit -r requirements.txt` | No known vulnerabilities found |
