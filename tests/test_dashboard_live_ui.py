@@ -6,8 +6,6 @@ none of these tests send a broker order or require a real terminal.
 
 from __future__ import annotations
 
-import sqlite3
-
 from adaptive_scalper.dashboard.page import PAGE_HTML
 from adaptive_scalper.dashboard.panels import compute_all, compute_panel
 from adaptive_scalper.persistence import connect, migrate
@@ -25,7 +23,7 @@ def test_market_panel_never_claims_liveness_without_a_runtime_sample(tmp_path):
     conn = _database(tmp_path)
     result = compute_panel(conn, "market", now=1_700_000_000)
     assert result["status"] == "NO_DATA"
-    assert result["account"] if "account" in result else True
+    assert "account" not in result
     conn.close()
 
 
