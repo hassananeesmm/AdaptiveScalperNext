@@ -12,10 +12,12 @@ CI) without ever touching this class.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from adaptive_scalper.gateway.server_time import (
     RULE_UTC,
+    is_skipped_server_time,
     server_ms_to_utc_ms,
     server_to_utc,
     utc_to_server,
@@ -38,6 +40,8 @@ from adaptive_scalper.gateway.types import (
     Tick,
     TradeMode,
 )
+
+logger = logging.getLogger(__name__)
 
 # Canonical resolution string -> MetaTrader5.TIMEFRAME_* attribute name.
 # Built lazily against the real imported module (never hardcoded integer
@@ -355,6 +359,16 @@ class Mt5Gateway:
         # boundary so everything past the gateway is real UTC (server_time.py).
         self.server_time_rule = validate_rule(server_time_rule)
 
+    def _convertible(self, rows, name: str, what: str) -> list:
+        """Drop rows stamped inside the hour the server clock skips at the
+        spring DST change: they have no UTC instant and would duplicate a
+        real later timestamp (server_time.is_skipped_server_time)."""
+        kept = [r for r in rows if not is_skipped_server_time(self.server_time_rule, int(r["time"]))]
+        if len(kept) != len(rows):
+            logger.warning("dropped %d %s %s row(s) stamped inside the skipped spring DST server hour",
+                           len(rows) - len(kept), name, what)
+        return kept
+
     def _server_dt(self, utc_ts: int) -> datetime:
         return datetime.fromtimestamp(utc_to_server(self.server_time_rule, utc_ts), tz=timezone.utc)
 
@@ -390,7 +404,7 @@ class Mt5Gateway:
         raw = self._mt5.copy_rates_from_pos(name, timeframe, start_pos, count)
         if raw is None:
             return []
-        return [_bar(row, self.server_time_rule) for row in raw]
+        return [_bar(row, self.server_time_rule) for row in self._convertible(raw, name, "bar")]
 
     def copy_rates_range(
         self, name: str, resolution: str, date_from_utc: int, date_to_utc: int
@@ -407,7 +421,7 @@ class Mt5Gateway:
         raw = self._mt5.copy_rates_range(name, timeframe, date_from, date_to)
         if raw is None:
             return []
-        return [_bar(row, self.server_time_rule) for row in raw]
+        return [_bar(row, self.server_time_rule) for row in self._convertible(raw, name, "bar")]
 
     def copy_ticks_range(self, name: str, date_from_utc: int, date_to_utc: int) -> list[Tick]:
         date_from = self._server_dt(date_from_utc)
@@ -415,7 +429,7 @@ class Mt5Gateway:
         raw = self._mt5.copy_ticks_range(name, date_from, date_to, self._mt5.COPY_TICKS_ALL)
         if raw is None:
             return []
-        return [_tick_row(row, self.server_time_rule) for row in raw]
+        return [_tick_row(row, self.server_time_rule) for row in self._convertible(raw, name, "tick")]
 
     def history_orders_get(self, date_from_utc: int, date_to_utc: int) -> list[HistoricalOrder]:
         date_from = self._server_dt(date_from_utc)

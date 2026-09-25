@@ -2185,3 +2185,35 @@ test, and a live test. Full suite (Windows): 1481 passed, 9 skipped (8 opt-in
 live MT5, 1 symlink privilege), 0 failed; fingerprint-affected modules re-run
 after the last edit: 115 passed. Live (`ASN_LIVE_MT5=1`): 8 passed, including
 `test_configured_server_time_rule_matches_live_quotes`.
+
+## Session: Windows validation, checkpoint W3 -- real-data conversion, order_check, read-only ops (2026-09-25)
+
+Winter half of the server clock verified from the broker's own history before
+converting: the last M15 bar of each FX week was Friday 23:45 server time in
+all 212 GBPJPY weeks (140 US-DST, 72 winter); a fixed UTC+3 clock would give
+Saturday 00:45 in winter.
+
+First real conversion attempt hit a UNIQUE collision and rolled back cleanly
+(DB verified unchanged): 4 BTCUSD M15 bars were stamped at server 09:00/09:15
+on spring-forward Sundays (2024-03-10, 2025-03-09, 2026-03-08), an hour the
+server clock skips. Fix: `server_time.is_skipped_server_time`; migration 28
+adds `bars_unconvertible` / `ticks_unconvertible`; the conversion MOVES such
+rows there with their original values (never deletes or guesses); the gateway
+drops them with a logged warning. Tests added for all three.
+
+Real DB converted (`history convert-server-time`, own backup
+`data/backups/adaptive_scalper.pre-server-time-conversion.20260925T025015Z.sqlite3`,
+49 s): 1,504,028 bars, 2,234 broker orders, 2,222 deals, 15 jobs, 15 coverage
+rows; 10 skipped-hour bars quarantined. Check: FX week now ends 21:00 UTC (US
+DST) / 22:00 UTC (winter). `doctor: OK`, schema 28, integrity ok, clocks
+VERIFIED on all three symbols.
+
+Read-only ops: `status`/`health` TRADING_BLOCKED (kill switch UNINITIALIZED,
+correct); `strategies` = the six active, both retired listed as retired;
+`reconcile` CLEAN; `news status`: financecalendar UNAVAILABLE by design,
+forexfactory HEALTHY (cache from 2026-09-19).
+
+`order-check-probe --symbol XAUUSD --direction BUY`: retcode 0 "Done", margin
+0.86, NOT sent; 0 positions / 0 orders after. BUG_BACKLOG #5 confirmed.
+
+Full suite (Windows): 1485 passed, 9 skipped (8 opt-in live, 1 symlink), 0 failed.

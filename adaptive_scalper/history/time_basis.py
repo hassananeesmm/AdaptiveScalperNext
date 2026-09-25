@@ -19,7 +19,12 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from adaptive_scalper.gateway.server_time import server_ms_to_utc_ms, server_to_utc, validate_rule
+from adaptive_scalper.gateway.server_time import (
+    is_skipped_server_time,
+    server_ms_to_utc_ms,
+    server_to_utc,
+    validate_rule,
+)
 
 UTC = "UTC"
 SERVER_UNCONVERTED = "SERVER_UNCONVERTED"
@@ -78,16 +83,33 @@ def convert_server_time_to_utc(
     backup = _backup(conn, db_path, backup_dir, now_utc)
 
     conn.create_function("asn_s2u", 1, lambda v: None if v is None else server_to_utc(rule, v), deterministic=True)
+    conn.create_function("asn_skipped", 1, lambda v: int(is_skipped_server_time(rule, v)), deterministic=True)
     conn.create_function("asn_ms2u", 1, lambda v: None if v is None else server_ms_to_utc_ms(rule, v),
                          deterministic=True)
     counts: dict[str, int] = {}
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # Server times in the hour the clock skips at the spring DST change
+        # have no UTC instant: move them, unchanged, to the quarantine tables
+        # (schema 28) rather than guess a time or delete them.
+        reason = "server time inside the skipped spring DST hour: no UTC instant"
+        counts["bars_quarantined"] = conn.execute(
+            "INSERT INTO bars_unconvertible (original_id, canonical_symbol, resolution, server_ts, open, high, low, "
+            "close, tick_volume, spread, real_volume, rule, reason, moved_at_utc) "
+            "SELECT id, canonical_symbol, resolution, ts_utc, open, high, low, close, tick_volume, spread, "
+            "real_volume, ?, ?, ? FROM bars WHERE asn_skipped(ts_utc)", (rule, reason, now_utc)).rowcount
+        conn.execute("DELETE FROM bars WHERE asn_skipped(ts_utc)")
+        counts["ticks_quarantined"] = conn.execute(
+            "INSERT INTO ticks_unconvertible (original_id, canonical_symbol, server_ts, server_ts_msc, bid, ask, "
+            "last, volume, rule, reason, moved_at_utc) "
+            "SELECT id, canonical_symbol, ts_utc, ts_msc, bid, ask, last, volume, ?, ?, ? FROM ticks "
+            "WHERE asn_skipped(ts_utc)", (rule, reason, now_utc)).rowcount
+        conn.execute("DELETE FROM ticks WHERE asn_skipped(ts_utc)")
         # Two phases so no row transiently collides with a not-yet-shifted
         # neighbour on the UNIQUE time keys: move every key to the negative
-        # range first, then to its converted value (server_to_utc maps
-        # distinct server times to distinct UTC times, so the final keys are
-        # unique too).
+        # range first, then to its converted value (with the skipped hour
+        # removed, server_to_utc maps distinct server times to distinct UTC
+        # times, so the final keys are unique too).
         counts["bars"] = conn.execute("UPDATE bars SET ts_utc = -ts_utc - 1").rowcount
         conn.execute("UPDATE bars SET ts_utc = asn_s2u(-ts_utc - 1)")
         counts["ticks"] = conn.execute("UPDATE ticks SET ts_msc = -ts_msc - 1").rowcount

@@ -70,9 +70,10 @@ def utc_to_server(rule: str, utc_ts: int) -> int:
 
 
 def server_to_utc(rule: str, server_ts: int) -> int:
-    """Inverse of `utc_to_server`. Deterministic at the DST transitions: a
-    server time in the repeated autumn hour maps to its earlier UTC
-    instant; one in the skipped spring hour maps to UTC-2 h."""
+    """Inverse of `utc_to_server`. A server time in the repeated autumn hour
+    maps to its earlier UTC instant. A server time in the skipped spring
+    hour has no UTC instant (`is_skipped_server_time`); it maps to UTC-2 h,
+    which collides with a real later time, so callers must filter it first."""
     validate_rule(rule)
     server_ts = int(server_ts)
     if rule == RULE_UTC:
@@ -81,6 +82,19 @@ def server_to_utc(rule: str, server_ts: int) -> int:
     if offset_seconds_at_utc(rule, summer) == 3 * HOUR:
         return summer
     return server_ts - 2 * HOUR
+
+
+def is_skipped_server_time(rule: str, server_ts: int) -> bool:
+    """True for a server time inside the hour the server clock skips at the
+    spring DST change: no UTC instant produces it, so it cannot be converted
+    without guessing (observed: 4 stray BTCUSD M15 bars in 3 years). Callers
+    quarantine or drop such rows rather than invent a time for them."""
+    validate_rule(rule)
+    if rule == RULE_UTC:
+        return False
+    server_ts = int(server_ts)
+    return (offset_seconds_at_utc(rule, server_ts - 3 * HOUR) != 3 * HOUR
+            and offset_seconds_at_utc(rule, server_ts - 2 * HOUR) != 2 * HOUR)
 
 
 def server_ms_to_utc_ms(rule: str, server_ms: int) -> int:

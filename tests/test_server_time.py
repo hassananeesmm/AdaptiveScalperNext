@@ -109,3 +109,14 @@ def test_config_validates_the_rule_and_default_toml_names_the_measured_broker_cl
     with pytest.raises(Exception):
         AppConfig.model_validate({"mt5": {"server_time_rule": "UTC+3"}})
     assert load_config("config/default.toml").mt5.server_time_rule == RULE_UTC2_US_DST
+
+
+def test_exactly_the_skipped_spring_server_hour_is_flagged():
+    from adaptive_scalper.gateway.server_time import is_skipped_server_time
+
+    flags = [is_skipped_server_time(RULE_UTC2_US_DST, utc(2026, 3, 8, h, m)) for h, m in
+             [(8, 59), (9, 0), (9, 59), (10, 0)]]
+    assert flags == [False, True, True, False]
+    year = range(utc(2026, 1, 1), utc(2027, 1, 1), 60)
+    assert sum(is_skipped_server_time(RULE_UTC2_US_DST, t) for t in year) == 60
+    assert not any(is_skipped_server_time(RULE_UTC, t) for t in range(utc(2026, 3, 8, 8), utc(2026, 3, 8, 11), 60))

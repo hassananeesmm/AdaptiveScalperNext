@@ -101,3 +101,15 @@ def test_rule_utc_passes_times_through():
 def test_the_factory_requires_an_explicit_rule():
     param = inspect.signature(create_live_gateway).parameters["server_time_rule"]
     assert param.default is inspect.Parameter.empty
+
+
+def test_bars_inside_the_skipped_spring_server_hour_are_dropped():
+    # Observed: stray BTCUSD bars at server 09:00 on spring-forward Sundays,
+    # an hour the server clock skips; converted, they would duplicate 10:00.
+    spring = int(datetime(2026, 3, 8, 9, 0, tzinfo=timezone.utc).timestamp())  # server clock
+    gw = gateway()
+    rows = [{"time": spring + dt, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "tick_volume": 1,
+             "spread": 1, "real_volume": 0} for dt in (-900, 0, 3600)]
+    gw._mt5.copy_rates_from_pos = lambda *a: rows
+    times = [b.time for b in gw.copy_rates_from_pos("BTCUSD", 5, 0, 3)]
+    assert times == [spring - 900 - 2 * 3600, spring + 3600 - 3 * 3600]

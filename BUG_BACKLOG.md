@@ -61,8 +61,14 @@ delete) once fixed, with the fixing commit/date noted.
    order-check-probe --symbol XAUUSD` performs exactly that one never-sent
    check after fresh DEMO/permission/identity/quote/risk/constraint
    verification and records retcode/comment/margin/broker/build in
-   `order_check_probes` (LOCAL_MT5_HANDOFF.md steps L-M). Still
-   BLOCKED-ON-LOCAL-MT5 until the laptop records the real retcode here.
+   `order_check_probes` (LOCAL_MT5_HANDOFF.md steps L-M).
+   **2026-09-25, verified on the laptop:** `order-check-probe --symbol XAUUSD
+   --direction BUY` on ICMarketsSC-Demo (Raw Trading Ltd, build 6191):
+   `retcode 0`, comment `Done`, margin_required 0.86 USD for 0.01 lot, request
+   NOT sent (0 positions / 0 orders before and after). 0 is in
+   `DEFAULT_ORDER_CHECK_SUCCESS_RETCODES = {0, 10009}`: convention confirmed
+   for this broker, no change needed. Resolved for XAUUSD BUY; the same
+   convention is expected for the other symbols (same server).
 
 4. [SEVERITY: LOW, SUBSYSTEM: history] Tick history storage
    (`adaptive_scalper/history/store.py`) dedupes on

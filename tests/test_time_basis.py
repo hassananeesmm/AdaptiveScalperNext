@@ -108,3 +108,22 @@ def test_commands_that_use_stored_mt5_rows_refuse_an_unconverted_database(tmp_pa
     assert main(["--config", str(cfg), "kill-switch", "status"]) == 0  # never blocked by the time basis
     assert main(["--config", str(cfg), "history", "convert-server-time", "--rule", RULE_UTC2_US_DST]) == 0
     assert main(["--config", str(cfg), "history", "convert-server-time"]) == 1  # one shot
+
+
+def test_rows_in_the_skipped_spring_hour_are_quarantined_not_guessed(tmp_path, monkeypatch):
+    # The laptop's real history: stray BTCUSD M15 bars at server 09:00 on the
+    # spring-forward Sunday collide with the real 10:00 bar after conversion.
+    from datetime import datetime, timezone
+
+    db = tmp_path / "db.sqlite3"
+    conn = _legacy_db(db, monkeypatch)
+    spring = int(datetime(2026, 3, 8, 9, 0, tzinfo=timezone.utc).timestamp())  # server clock
+    for ts in (spring - 900, spring, spring + 3600):
+        conn.execute("INSERT INTO bars (canonical_symbol, resolution, ts_utc, open, high, low, close, "
+                     "tick_volume, spread, real_volume) VALUES ('BTCUSD', 'M15', ?, 2, 2, 2, 2, 1, 1, 0)", (ts,))
+    report = _convert(conn, db, tmp_path)
+    assert report["rows"]["bars_quarantined"] == 1
+    moved = conn.execute("SELECT canonical_symbol, server_ts, rule FROM bars_unconvertible").fetchall()
+    assert [tuple(r) for r in moved] == [("BTCUSD", spring, RULE_UTC2_US_DST)]
+    kept = [r[0] for r in conn.execute("SELECT ts_utc FROM bars WHERE canonical_symbol = 'BTCUSD' ORDER BY ts_utc")]
+    assert kept == [spring - 900 - 2 * 3600, spring + 3600 - 3 * 3600]
