@@ -1,4 +1,101 @@
-# Cloud QA report (2026-09-24)
+# QA report
+
+## Windows laptop QA (2026-09-25) -- current
+
+- **Machine:** Windows 11 Home 10.0.26200, `.venv` Python 3.13.15, SQLite 3.50.4,
+  MetaTrader5 5.0.6180, terminal build 6191 (IC Markets Global), account ICMarketsSC-Demo
+  (trade mode DEMO; login never recorded).
+- **Branch:** `dashboard/responsive-live-windows` (local `dashboard-review`), built on
+  `windows-validation`.
+
+| Check | Command | Result |
+|---|---|---|
+| Byte-compile | `python -m compileall -q adaptive_scalper tests` | OK |
+| Full suite | `python -m pytest -q -rs` | **1514 passed, 9 skipped, 0 failed** (skips: 8 opt-in live-MT5 tests, 1 symlink test -- non-admin Windows users cannot create symlinks) |
+| Live MT5 DEMO tests | `ASN_LIVE_MT5=1 pytest tests/test_mt5_gateway_live.py` | **8 passed** (incl. the configured server clock matches live quotes) |
+| Windows verifier | `scripts\windows_verify.ps1` | **RESULT: PASS** (`logs\windows_verify_20260925_135054.txt`) |
+| Lint | `ruff check adaptive_scalper tests --select F,E9` (0.16.9) | all checks passed |
+| Security | `bandit -r adaptive_scalper` (1.9.4) | 0 high, 7 medium, 3 low: the cloud-triaged false positives plus one new B608 in `history/time_basis.py` (table/column names from a constant tuple; values bound) |
+| Dependencies | `pip-audit -r requirements.txt` (incl. MetaTrader5) | no known vulnerabilities |
+| OKF | `okf validate` | valid |
+
+Lint/security tools ran in a throwaway venv, not the project environment.
+
+### Defects found and fixed on Windows
+
+1. The offline suite launched the live MT5 terminal (a skip guard checked a module global
+   that never exists); now blocked suite-wide, live tests opt-in. No order or order_check
+   happened (temp databases inspected).
+2. Broker server time (UTC+3 now, UTC+2 in winter) was treated as UTC everywhere
+   (BUG_BACKLOG #14): central conversion in `Mt5Gateway`, startup clock check, one-shot
+   backed-up conversion of the stored history (10 bars stamped inside the skipped spring
+   hour quarantined, not deleted).
+3. Configuration could raise every hard risk limit (up to 20 %); now refused by config and
+   by `RiskLimits` itself.
+4. A slow news HTTP fetch could stall the single-threaded scheduler (and DEMO's 1-s
+   protective cycle) for the whole httpx timeout; the fetch now runs off-thread with a
+   2-s wait. Measured on live PAPER: max scheduling lag 0.87 s.
+5. Dashboard: a full integrity check on every refresh (6.1 s -> 0.05 s), negative ages,
+   stale figures shown as current while the server was down, missing summary items,
+   sidebar overflow at 150 %, a `"LIVE"` string that failed the no-LIVE-mode audit.
+6. Windows symlink privilege test failure (split, honest skip).
+
+### MT5 / live-data verification (no order sent)
+
+- Account DEMO, terminal connected, terminal and account trading permitted (Algo Trading
+  was already on). XAUUSD 'Gold vs US Dollar', GBPJPY, BTCUSD 'Bitcoin (USD)' by exact name;
+  vol min/step 0.01, stops/freeze level 0, filling mode 2.
+- Server clock: `tick.time - UTC` = +10800 s on all symbols; winter half confirmed from 212
+  weeks of history; `doctor` and runtime startup report VERIFIED.
+- `order_check` (never sent): retcode 0 "Done" (BUG_BACKLOG #5 closed).
+- `reconcile`: CLEAN; 0 positions / 0 pending orders.
+- `scan --source mt5`: the six strategies produced real signals and FLAT on live bars.
+
+### Live PAPER (real MT5 data, simulated fills)
+
+- ~6 h on the earlier build plus runs on each new build: 0 cycle failures, bars processed
+  within seconds of close, dashboard beside it. **New entries blocked all along because the
+  kill switch is UNINITIALIZED** (operator action pending), so no live simulated trade and no
+  live restart with an open simulated position were possible.
+- Restart correctness on real broker bars (deterministic replay, June 2026 XAUUSD, real
+  costs): 5,975 restarts (102 with an open position, 96 with a pending entry) reproduce the
+  continuous run exactly: 96 trades, 0 duplicates, identical equity.
+
+### Historical research (broker history, not a forecast)
+
+OOS holdout reserved and never run: **2026-07-01 .. 2026-09-18**. Design window results
+(M5, real costs; no point-in-time news calendar exists for the past, so news blocking was not
+applied):
+
+| Symbol | Trades | Gross | Costs | Net | PF | PSR(>0) |
+|---|---|---|---|---|---|---|
+| XAUUSD 2025-06-01..2026-06-30 | 72 | +65 | 579 | -514 | 0.39 | 0.003 |
+| GBPJPY 2025-06-01..2026-06-30 | 183 | +203 | 705 | -503 | 0.70 | 0.028 |
+| BTCUSD 2025-10-01..2026-06-30 | 119 | +181 | 604 | -423 | 0.62 | 0.023 |
+
+Walk-forward (`walk-forward --folds 5`, SEQUENTIAL_FIXED_CONFIG_EVALUATION, nothing re-fit):
+**all 15 folds** lost 423-518 (each stopped by the 5 % drawdown halt). Aggregates: XAUUSD 452
+trades PF 0.46, GBPJPY 575 trades PF 0.56, BTCUSD 478 trades PF 0.47; gross P/L -99 / +244 /
++252 against costs 2,386 / 2,735 / 2,706. Path stress (trade-order permutation of the
+recorded runs: a drawdown distribution, terminal equity unchanged): p95 max drawdown
+603 / 696 / 578, probability of ruin 0 (the halt caps losses).
+
+Every run hit the 5 % drawdown halt within its first 2-4 days and was blocked for the rest
+of the window (the halt works). `microstructure_acceleration` produced most trades (68/72,
+160/183, 106/119) at negative average R. The strategies were not changed: this is evidence
+for the operator's decision, not a tuning target.
+
+### DEMO readiness
+
+All automated gates pass (tests, DEMO account, clock, symbols, order_check, reconciliation,
+risk ceilings, news, permissions, costs where evidenced). **Not started**: DEMO needs the
+operator to bootstrap the kill switch; no DEMO order has been sent, and position management
+on a real DEMO position is NOT VERIFIED. Based on the research above, expect frequent small
+losing trades until the 2 % daily-loss or 5 % drawdown halt stops new entries.
+
+---
+
+## Cloud QA report (2026-09-24) -- historical
 
 - **Runner:** Linux cloud container, Python 3.13.12, SQLite 3.45.1.
 - **MT5:** `MetaTrader5` is not installable on Linux, and the cloud **never** connected to an

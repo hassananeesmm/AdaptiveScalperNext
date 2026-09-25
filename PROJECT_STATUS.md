@@ -17,9 +17,11 @@ Status tags (completion directive Phase 11):
 - **UNVERIFIED** — no automated test exercises it.
 - **BLOCKED-ON-LOCAL-MT5** — needs the laptop's terminal; see LOCAL_MT5_HANDOFF.md.
 
-Cloud tests never verified MT5 behaviour. TESTED-LIVE-DEMO / TESTED-WINDOWS
-below refer only to what earlier LOCAL sessions recorded (WORKLOG.md), never
-to this cloud work.
+Tags used in the 2026-09-25 matrix: **IMPLEMENTED**, **TESTED** (fake gateway /
+temp SQLite), **VERIFIED ON WINDOWS** (ran on the laptop), **VERIFIED WITH LIVE MT5
+DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
+real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
+"Cloud") never verified MT5 behaviour.
 
 ## Project
 
@@ -28,46 +30,44 @@ Adaptive Scalper Next
 ## Repository
 
 `C:\AdaptiveScalperNext` on the Windows laptop; GitHub
-`hassananeesmm/AdaptiveScalperNext`. Completion work is on branch
-`claude/pensive-newton-tckoid`, PR #1 against `main` (not merged
-automatically).
+`hassananeesmm/AdaptiveScalperNext`. Branch history: `claude/pensive-newton-tckoid`
+(cloud, PR #1) -> `windows-validation` (Windows fixes W1-W4) ->
+`dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
+W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
-## Current phase
+## Current phase (2026-09-25)
 
-All cloud-completable work of the completion directive (Phases 0-14) is
-done and tested in the cloud: causal PAPER/backtest correctness, research
-validation, broker chaos + recovery, the runtime orchestrator, RAG ingestion
-+ OKF knowledge, ML training job + model walk-forward, DEMO cost evidence,
-the complete CLI, the observer-only dashboard, Windows launchers and release
-scripts, documentation and QA. What remains is Windows-local and broker-local
-(LOCAL_MT5_HANDOFF.md steps A-Y): live terminal tests, the real `order_check`
-retcode, the broker timestamp convention, real history backtests, PAPER
-burn-in, the first natural DEMO order, and packaging. **Release readiness:
-cloud release candidate; BLOCKED-ON-LOCAL-MT5.**
+Windows verification, live-data verification and the responsive dashboard are
+done on the laptop. PAPER runs against the real IC Markets DEMO terminal with the
+dashboard beside it. **New entries -- simulated and DEMO -- are blocked because the
+persistent kill switch is UNINITIALIZED: only the human operator can bootstrap
+it.** No DEMO order has been sent. DEMO readiness: every automated gate passes
+except the operator actions (kill switch, then starting DEMO); see
+docs/QA_REPORT.md "DEMO readiness".
 
-## Component status matrix (2026-09-24)
+## Component status matrix (2026-09-25, Windows laptop)
 
-| Component | IMPL | CONNECTED | TESTED-FAKE/CLOUD | TESTED-WINDOWS / LIVE-DEMO |
-|---|---|---|---|---|
-| Config, persistence (schema 26), kill switch, operator authority | yes | yes | yes | earlier local sessions (read-only) |
-| Gateway, symbol resolution/validation, DEMO gate, spec store | yes | yes | yes | read-only calls live-verified earlier; spec store BLOCKED-ON-LOCAL-MT5 |
-| History bootstrap, broker account history | yes | CLI | yes | live-verified earlier |
-| Features, regimes, strategies (6 + retired firewall) | yes | runtime/backtest/PAPER | yes | live data pipeline verified earlier |
-| Journal, news, costs, portfolio, risk, final permission, selector | yes | runtime | yes | pipeline verified earlier; no live order |
-| Execution service, close, stop modification, reconciliation, UNKNOWN, recovery | yes | DEMO runtime, CLI reconcile | yes (+38 chaos tests) | BLOCKED-ON-LOCAL-MT5 (no live order_send yet) |
-| `order_check` probe | yes | CLI `order-check-probe` | yes | BLOCKED-ON-LOCAL-MT5 (handoff L-M) |
-| Position management (expectancy, adaptive exit, re-entry, review loop) | yes | DEMO position_cycle | yes | BLOCKED-ON-LOCAL-MT5 |
-| Backtest, sequential folds, untouched OOS, path stress | yes | CLI | yes | real-history runs BLOCKED-ON-LOCAL-MT5 (need bootstrapped bars) |
-| PAPER engine + sessions | yes | PAPER runtime | yes | burn-in BLOCKED-ON-LOCAL-MT5 |
-| Research (purged CV, CPCV, PSR/DSR, PBO, ledger) | yes | CLI | yes | n/a |
-| Runtime engine (scheduler, DEMO/PAPER cycles, news monitor, advisory) | yes | `paper`/`demo` | yes (simulated broker) | BLOCKED-ON-LOCAL-MT5 |
-| RAG (store, index, ingestion) | yes | runtime task + CLI | yes | n/a |
-| OKF knowledge (loader, validator, advisor, bundle, benchmark) | yes | runtime advisory + CLI + dashboard | yes | n/a |
-| Learning (training job, model walk-forward, observer Stage 1) | yes | CLI + runtime observer | yes | n/a |
-| DEMO execution cost observations | yes | DEMO runtime + sweep + CLI | yes (simulated broker) | BLOCKED-ON-LOCAL-MT5 |
-| CLI (package, ~40 commands) | yes | yes | yes; broker commands fail cleanly without MT5 | BLOCKED-ON-LOCAL-MT5 for broker commands |
-| Dashboard (read-only, 15 panels, WebSocket) | yes | `dashboard` | yes (+ uvicorn + headless Chromium) | TESTED-WINDOWS pending |
-| Launchers, windows_verify/build_release/release_smoke_test | yes | n/a | static only (`test_launchers.py`) | not executed (Windows-only) |
+| Component | Status | Evidence |
+|---|---|---|
+| Environment (.venv 3.13.15, pinned deps, MetaTrader5 5.0.6180) | VERIFIED ON WINDOWS | `pip check` clean; `windows_verify.ps1` PASS |
+| Database (schema 28, integrity ok, backups) | VERIFIED ON WINDOWS | migrated 8 -> 28 after backup + rehearsal; data rows preserved |
+| Broker server clock -> UTC (BUG #14) | VERIFIED WITH LIVE MT5 DATA | tick.time = UTC+3 measured; winter half from 212 weeks of history; startup check VERIFIED on all symbols |
+| MT5 account / symbols / specs | VERIFIED WITH LIVE MT5 DATA | DEMO (ICMarketsSC-Demo), exact-name XAUUSD/GBPJPY/BTCUSD, specs captured |
+| `order_check` convention (BUG #5) | VERIFIED WITH LIVE MT5 DATA | retcode 0 "Done", not sent |
+| Reconciliation (read-only) | VERIFIED WITH LIVE MT5 DATA | CLEAN, 0 positions/orders |
+| Strategies (6 active, 2 retired) | VERIFIED WITH LIVE MT5 DATA | `scan --source mt5` produced real signals and FLAT |
+| Risk ceilings (0.25/0.75/2/5 %, 2, 1) | TESTED | config and `RiskLimits` refuse higher values (previously up to 20 %) |
+| Execution costs | IMPLEMENTED (evidence-based) | XAUUSD/BTCUSD from 2,222 DEMO deals; GBPJPY slippage unknown -> BLOCK_COST |
+| PAPER runtime on live data | VERIFIED WITH LIVE MT5 DATA | ~6 h + restarts, 0 cycle failures; bars processed within seconds of close; entries blocked by kill switch |
+| PAPER restart correctness | VERIFIED ON WINDOWS (real-data replay) | 5,975 restarts over June 2026 XAUUSD: identical trades/equity, 0 duplicates; live restart with an open simulated position NOT VERIFIED (needs kill switch) |
+| Scheduler (priority, lag) | VERIFIED WITH LIVE MT5 DATA | news fetch off-thread (<= 2 s wait); measured max lag 0.87 s |
+| Dashboard (17 panels, 7 views) | VERIFIED ON WINDOWS | real Chromium at 9 viewport sizes; WebSocket + polling + reconnect; 0.05 s refresh |
+| Launchers incl. PAPER+DASHBOARD, DEMO+DASHBOARD | TESTED (static audits); PAPER/DASHBOARD run via their CLI equivalents | double-click runs of the .bat files NOT VERIFIED |
+| Execution service / close / stop modification / UNKNOWN recovery | TESTED (38 chaos scenarios + runtime chaos) | NOT VERIFIED ON DEMO (no order sent) |
+| Position management on a real DEMO position | NOT VERIFIED | no DEMO position has existed |
+| RAG / OKF / learning observer | TESTED; running advisory-only in PAPER | OKF valid (21 concepts); 0 models (INSUFFICIENT_DATA path) |
+| Historical backtests on broker history | VERIFIED WITH LIVE MT5 DATA (broker history) | backtest + walk-forward (15/15 folds hit the 5 % halt, PF 0.46-0.56) + path stress + purged CV (PSR 0.003-0.028); OOS 2026-07-01..2026-09-18 reserved, never run |
+| Windows release zip | see WORKLOG / docs/RELEASE.md | |
 
 ## Completed components
 

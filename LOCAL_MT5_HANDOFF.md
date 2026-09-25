@@ -10,6 +10,15 @@ that hosts the MetaTrader 5 terminal.
 > **Nothing in this sequence may be skipped to get a trade.** Zero DEMO trades is a valid
 > outcome.
 
+> **Laptop status (2026-09-25):** steps A-O and the PAPER part of P-Q are done and recorded
+> in `docs/QA_REPORT.md` (Windows section) and `WORKLOG.md` W1-W7: environment, schema 28,
+> server-clock conversion, full + live tests, doctor/symbols/reconcile, `order_check`
+> (retcode 0), real backtests / walk-forward / path stress / purged validation (OOS
+> 2026-07-01..2026-09-18 reserved, never run), live PAPER + dashboard. **Pending operator
+> actions:** step P's kill-switch bootstrap (until then PAPER blocks every simulated entry),
+> then steps U-X (start DEMO, first natural order). Use `START PAPER + DASHBOARD.bat` /
+> `START DEMO + DASHBOARD.bat` for the combined start.
+
 - **Project root:** `C:\AdaptiveScalperNext`
 - **Canonical Python:** `C:\AdaptiveScalperNext\.venv\Scripts\python.exe`, written below as
   `%PY%`

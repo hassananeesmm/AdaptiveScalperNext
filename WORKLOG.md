@@ -2335,3 +2335,28 @@ launcher audit in `tests/test_launchers.py` plus a dedicated test.
 
 Full suite (Windows, before the launcher change): 1505 passed, 9 skipped, 0
 failed; launcher tests after: 50 passed.
+
+## Session: Windows validation W7 -- verification, research, documentation (2026-09-25)
+
+- `scripts\windows_verify.ps1`: RESULT PASS (`logs\windows_verify_20260925_135054.txt`):
+  full suite 1514 passed / 9 skipped, live MT5 DEMO tests 8 passed.
+- ruff (F, E9) clean; bandit 0 high / 7 medium (triaged false positives, one new B608 in
+  `history/time_basis.py`, constant identifiers) / 3 low; pip-audit incl. MetaTrader5: no
+  known vulnerabilities (BUG_BACKLOG #17 resolved). Tools in a throwaway venv.
+- Scheduler on live PAPER (new build, 21 min): max duration 0.94 s (news fetch, inside the
+  2 s budget), max lag 0.87 s, 0 failures.
+- PAPER restart replay on real June 2026 XAUUSD bars (script kept outside the repo; output
+  `logs\paper_restart_replay_XAUUSD.txt`): 5,975 / 855 / 121 restarts (every 1 / 7 / 50
+  bars), 102 resumed with an open position, 96 with a pending entry: identical 96 trades,
+  0 duplicates, identical equity 9,496.92, cursor on the last bar.
+- Research on broker history. OOS holdout 2026-07-01..2026-09-18 reserved BEFORE any run and
+  never touched. Backtests (design window): XAUUSD -514 (72 trades, PF 0.39), GBPJPY -503
+  (183, PF 0.70), BTCUSD -423 (119, PF 0.62); each hit the 5 % drawdown halt within 2-4 days;
+  `microstructure_acceleration` dominated. Walk-forward 5 folds each: all 15 folds -423..-518
+  (halted), PF 0.46 / 0.56 / 0.47. Purged CV PSR(SR>0) 0.003 / 0.028 / 0.023. Path stress
+  p95 max drawdown 603 / 696 / 578, ruin probability 0. Strategies NOT changed (directive:
+  no tuning on samples); reported as a DEMO-readiness concern.
+- Docs updated: PROJECT_STATUS (Windows matrix), docs/QA_REPORT (Windows section first,
+  cloud report marked historical), docs/DASHBOARD, docs/WINDOWS_DEPLOYMENT (combined
+  launchers, WAL-safe backup), docs/RELEASE, docs/SAFETY guarantee 5, LOCAL_MT5_HANDOFF
+  status, BUG_BACKLOG #17/#23, CLAUDE.md current state.

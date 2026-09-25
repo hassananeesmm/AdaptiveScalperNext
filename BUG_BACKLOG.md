@@ -150,7 +150,8 @@ delete) once fixed, with the fixing commit/date noted.
    design; revisit only with evidence (directive section 27 lists fresh
    setup fingerprints / regime transitions as alternatives).
 
-17. [SEVERITY: LOW, SUBSYSTEM: release] `pip-audit` in the cloud audits
+17. [RESOLVED 2026-09-25: `pip-audit -r requirements.txt` on the laptop, MetaTrader5
+   included -- no known vulnerabilities] [SEVERITY: LOW, SUBSYSTEM: release] `pip-audit` in the cloud audits
    every pinned requirement except `MetaTrader5` (Windows-only wheel, not
    installable there). Re-run `pip-audit -r requirements.txt` on the
    laptop as part of release QA.

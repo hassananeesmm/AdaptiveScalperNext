@@ -14,11 +14,12 @@ The first deployed release means every item below holds, verified **on the Windo
 
 ## Current state
 
-**Cloud release candidate: source complete, laptop verification pending.**
-
-Every cloud-completable item is done and tested (see `docs/QA_REPORT.md`). Release
-readiness is **BLOCKED-ON-LOCAL-MT5** until the laptop completes `LOCAL_MT5_HANDOFF.md`
-steps A–X. Nothing may be packaged before then (step Y).
+**Windows-verified source release (2026-09-25).** Windows QA, live-terminal tests, live
+PAPER and the dashboard are verified on the laptop (`docs/QA_REPORT.md`, Windows section).
+DEMO execution (handoff steps U-X) is still pending the operator's kill-switch decision, so
+"broker mutations remain DEMO-only" is enforced and tested but no DEMO order has been placed.
+The release is a source bundle; no frozen executable exists. Build results are recorded in
+`WORKLOG.md`.
 
 ## Build (Windows, after local QA)
 

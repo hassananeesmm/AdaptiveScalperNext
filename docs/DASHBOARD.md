@@ -17,7 +17,13 @@ The PAPER or DEMO runtime must run separately on the Windows laptop.
 - Fluid sizing, min-width:0, scrollable tables, large click targets,
   visible keyboard focus, and reduced-motion support accommodate Windows
   browser resizing and display scaling (100%, 125%, 150%).
-- Real browser checks for each scaling setting are still required.
+- Verified 2026-09-25 in a real Chromium (Playwright) against the live PAPER runtime,
+  every view at CSS viewports 1366x768, 1600x900, 1920x1080, 2560x1440 and the scaled
+  equivalents 1093x614 (1366@125 %), 911x512 (1366@150 %), 1280x720 (1600@125 %,
+  1920@150 %), 1536x864 (1920@125 %), 1707x960 (2560@150 %): no page-level horizontal
+  scroll, no header overlap, no sidebar overflow, tables scroll inside their containers,
+  all navigation reachable, minimum font 11 px, keyboard focus visible, light theme OK.
+  Limitation: viewport emulation, not the Windows display-scaling setting itself.
 
 ## What live means
 
@@ -28,10 +34,20 @@ The PAPER or DEMO runtime must run separately on the Windows laptop.
    quotes with UTC broker timestamps, and (DEMO mode only) broker positions.
    The account login and credentials are not persisted in the snapshot.
 2. FastAPI pushes the latest database panels over WebSocket about every
-   2 seconds, with 3-second GET polling fallback and reconnection.
+   2 seconds, with 3-second GET polling fallback and reconnection. All panels are
+   read from ONE SQLite snapshot and aged against a time taken after it (ages are
+   never negative). A refresh takes ~0.05 s on the laptop's 218 MB database; the
+   full `PRAGMA integrity_check` (~6 s there) runs in a background monitor at most
+   every 10 minutes, and the overview shows its result and age (PENDING until the
+   first check finishes).
+   If the dashboard's own data is older than 15 s or the server is unreachable,
+   the summary shows runtime/health UNKNOWN, broker figures "—", the kill switch
+   "(last known)" and a banner with the data age; the page reconnects by itself.
 3. A working browser WebSocket DOES NOT prove MT5 is connected. Broker
    telemetry older than 15 seconds, disconnected terminals, and quotes
-   older than 15 seconds are displayed as stale, not live. Closed-market
+   older than 15 seconds are displayed as stale, not live. The panel reports a quote
+   as FRESH or STALE (the browser labels FRESH "LIVE FEED"); the word LIVE is kept out
+   of the source because a safety audit forbids any LIVE execution-mode string. Closed-market
    quotes may correctly remain stale.
 4. The runtime heartbeat is independently stale after 15 seconds. Missing
    data is marked NO_DATA/UNAVAILABLE; the dashboard never fabricates
@@ -69,9 +85,15 @@ not a guarantee that the journal contains the broker's complete history.
 Risk utilization uses recorded initial/remaining exposure and should
 be confirmed against broker stops and reconciliation.
 
-The broker server-clock rule and historical time-basis conversion live
-in the windows-validation branch. The dashboard reports their verified
-status without attempting its own time conversion.
+The broker server-clock rule and historical time-basis conversion are
+done by the runtime gateway (BUG_BACKLOG #14). The dashboard reports their
+verified status without attempting its own time conversion.
+
+Top summary cards: account equity, floating P&L, DEMO booked net today,
+broker positions, dangerous UNKNOWN orders, feed freshness, account balance,
+MT5 & account (connection + trade mode), and total risk (local open + pending
+risk as % of fresh equity, against the 0.75 % ceiling). Header pills: real-money
+execution DISABLED, health, runtime mode, kill switch, dashboard feed state.
 
 ## Operating instructions
 

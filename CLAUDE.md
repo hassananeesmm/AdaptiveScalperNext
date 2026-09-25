@@ -31,10 +31,14 @@ for reference is fine; no writes, ever.
 
 `MASTER_BUILD_DIRECTIVE.md`, `PROJECT_STATUS.md`, `WORKLOG.md` and
 `BUG_BACKLOG.md` exist and are current; read them at session start. The
-system is implemented end to end (PAPER + DEMO runtime, CLI, dashboard,
-research, learning observer, RAG + OKF knowledge). Remaining work is
-Windows/MT5-local: follow `LOCAL_MT5_HANDOFF.md`. Architecture:
-`docs/ARCHITECTURE.md`; safety guarantees: `docs/SAFETY.md`.
+system is implemented end to end (PAPER + DEMO runtime, CLI, responsive
+dashboard, research, learning observer, RAG + OKF knowledge) and verified on
+the Windows laptop against the real IC Markets DEMO terminal (see
+`docs/QA_REPORT.md`, Windows section). Pending: the operator's kill-switch
+bootstrap, then DEMO execution (`LOCAL_MT5_HANDOFF.md` steps U-X). Broker
+times are server clock converted to UTC in `Mt5Gateway` (`[mt5]
+server_time_rule`). Architecture: `docs/ARCHITECTURE.md`; safety guarantees:
+`docs/SAFETY.md`; dashboard: `docs/DASHBOARD.md`.
 
 ## Development environment
 

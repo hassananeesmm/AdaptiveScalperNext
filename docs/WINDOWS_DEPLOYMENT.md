@@ -25,6 +25,11 @@ integration only works on that machine. **Never** deploy this as a cloud trading
 
 - `config/default.toml` is Git-tracked and non-secret.
 - `[risk]`: the hard defaults. Do not raise them.
+- `[risk]` values above the hard ceilings (0.25 / 0.75 / 2 / 5 %, 2 positions, 1 per
+  symbol) are refused at startup: they can be lowered, never raised.
+- `[mt5] server_time_rule`: the broker server clock (`"UTC+2/US_DST"` for IC Markets,
+  measured on the laptop). `doctor` prints `mt5 server clock vs UTC:` per symbol; the
+  runtime refuses to start if live quotes contradict the rule.
 - `[runtime]`: cadences, log directory, `paper_session_tag`, `magic`.
 - `[costs.SYMBOL]`: commission, slippage and swap evidence, plus its provenance label.
   Unknown values stay unset, which blocks DEMO entries rather than assuming zero.
@@ -34,20 +39,30 @@ integration only works on that machine. **Never** deploy this as a cloud trading
 
 | Action | How |
 |---|---|
-| Start PAPER | `START PAPER.bat` |
-| Start DEMO (after the handoff steps) | `START DEMO.bat` |
+| Start PAPER + dashboard (one click) | `START PAPER + DASHBOARD.bat`: runs `doctor` first, opens the dashboard window, runs PAPER in its own window |
+| Start verified DEMO + dashboard | `START DEMO + DASHBOARD.bat`: `doctor`, read-only `reconcile`, kill-switch status, dashboard window, DEMO |
+| Start PAPER only | `START PAPER.bat` |
+| Start DEMO only (after the handoff steps) | `START DEMO.bat` |
 | Watch | `START DASHBOARD.bat` → http://127.0.0.1:8765/ |
 | Why is nothing trading? | `python -m adaptive_scalper.cli why-no-trade` |
 | Stop new entries now | `STOP TRADING.bat`. Positions are **not** closed. |
 | Resume | `kill-switch clear --operator-id YOU --reason "..."` (explicit operator decision) |
 | Stop the runtime | Ctrl+C in its window. Stopping never closes positions; broker-side stops remain. |
+| Stop the dashboard | Close its window. The runtime is unaffected (verified). |
+
+Only one trading runtime may use the database at a time: a second `paper`/`demo` is refused
+while the first one's heartbeat is fresh. The dashboard is a separate read-only process and
+can run beside either. The laptop and the MT5 terminal must stay on while the runtime runs;
+nothing trades while the laptop is off.
 
 Logs are written to `logs\` (a JSONL machine log plus a rotating human log, with secrets
 redacted). The database is `data\adaptive_scalper.sqlite3`. `logs\` and `data\` are Git-ignored.
 
 ## Launcher checks (manual, once)
 
-The cloud checked the launchers statically: every command parses against the real CLI, the
+Windows status (2026-09-25): PAPER and the dashboard were started through their exact CLI
+equivalents and stopped with Ctrl+C / closed; the `.bat` files themselves have not been
+double-clicked by a person yet. The cloud checked the launchers statically: every command parses against the real CLI, the
 banner text is exact, and the kill-switch rules hold. On the laptop, confirm each one:
 
 - `SETUP.bat` finishes with the doctor output and the bootstrap hint. It must **not** change
@@ -63,9 +78,14 @@ banner text is exact, and the kill-switch rules hold. On the laptop, confirm eac
 
 ## Backups
 
-The database is a single SQLite file in WAL mode. To back it up:
-1. Stop the runtime.
-2. Copy `data\adaptive_scalper.sqlite3` (and any `-wal` and `-shm` files).
-3. Start the runtime again.
+The database is a single SQLite file in WAL mode. Back it up with SQLite's online backup
+API, which is safe even while the runtime writes (a plain file copy of a live WAL database
+is not):
+
+```powershell
+.\.venv\Scripts\python.exe -c "import sqlite3; s=sqlite3.connect('file:data/adaptive_scalper.sqlite3?mode=ro', uri=True); d=sqlite3.connect('data/backups/manual.sqlite3'); s.backup(d); print(d.execute('pragma integrity_check').fetchone()[0])"
+```
+
+`history convert-server-time` makes its own backup under `data\backups\` before converting.
 
 Never edit the database by hand to clear a block.
