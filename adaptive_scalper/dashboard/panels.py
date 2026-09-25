@@ -116,13 +116,46 @@ def decisions(conn: sqlite3.Connection, now: int) -> dict:
 
 
 def risk(conn: sqlite3.Connection, now: int) -> dict:
-    peak, _ = _state(conn, "peak_equity", now)
-    realized_today = conn.execute(
-        "SELECT COALESCE(SUM(profit + commission + swap + COALESCE(fee, 0)), 0) FROM deals WHERE occurred_at_utc >= ?",
-        (now - now % 86400,)).fetchone()[0]
-    return {"peak_equity": peak, "demo_realized_pnl_today_utc": realized_today,
-            "note": "limits are enforced by the risk governor from config; the dashboard cannot change them"}
+    """Observed risk from local exposure and a sampled DEMO account snapshot.
 
+    Local open/pending risk is an estimate, not proof of broker stop coverage.
+    Never suggest that a stale broker snapshot represents current equity.
+    """
+    peak, _ = _state(conn, "peak_equity", now)
+    limits, _ = _state(conn, "risk_limits", now)
+    telemetry, age = _state(conn, "live_telemetry", now)
+    fresh = bool(telemetry and age is not None and age <= 15
+                 and telemetry.get("terminal", {}).get("connected")
+                 and (telemetry.get("account") or {}).get("trade_mode") == "DEMO")
+    account = telemetry.get("account") if fresh else None
+    open_risk = conn.execute(
+        "SELECT COALESCE(SUM(MAX(0, initial_monetary_risk)), 0) FROM positions "
+        "WHERE status = 'OPEN'").fetchone()[0]
+    pending_risk = conn.execute(
+        "SELECT COALESCE(SUM(MAX(0, COALESCE(remaining_pending_monetary_risk, "
+        "requested_monetary_risk, 0))), 0) FROM orders "
+        "WHERE state IN ('SUBMITTED', 'ACCEPTED', 'PENDING', 'RESTING', "
+        "'PARTIAL', 'UNKNOWN', 'PENDING_RECONCILIATION')").fetchone()[0]
+    booked_today = conn.execute(
+        "SELECT COALESCE(SUM(profit + commission + swap + COALESCE(fee, 0)), 0) "
+        "FROM deals WHERE occurred_at_utc >= ?", (now - now % 86400,)).fetchone()[0]
+    equity = account.get("equity") if account else None
+    open_pct = round(100 * (open_risk + pending_risk) / equity, 4) if equity and equity > 0 else None
+    dd_pct = round(100 * (peak - equity) / peak, 4) if equity is not None and isinstance(peak, (float, int)) and peak > 0 else None
+    return {
+        "configured_limits": limits if limits is not None else {"status": "NO_DATA", "detail": "Runtime has not published configured limits"},
+        "broker_equity": equity, "account_currency": account.get("currency") if account else None,
+        "broker_snapshot_age_seconds": age, "broker_snapshot_fresh": fresh,
+        "local_open_initial_monetary_risk": open_risk,
+        "local_pending_remaining_monetary_risk": pending_risk,
+        "estimated_total_risk_pct_of_fresh_equity": open_pct,
+        "peak_equity": peak, "observed_drawdown_pct": dd_pct,
+        "demo_booked_net_today_utc": booked_today,
+        "demo_realized_pnl_today_utc": booked_today,
+        "note": "Open/pending risk is local initial or remaining risk; confirm broker stops by reconciliation. "
+                "Booked net is observed deals, not a broker-verified daily-loss calculation. "
+                "PAPER uses separate per-symbol equity; no simulated portfolio aggregation."
+    }
 
 def news(conn: sqlite3.Connection, now: int) -> dict:
     snapshot, age = _state(conn, "news", now)
