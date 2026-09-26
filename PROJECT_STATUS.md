@@ -58,7 +58,7 @@ ASN-014 (close orders sent with magic 0). Full suite **1,557 passed, 9 skipped**
 still run the previous code. Deployment needs migration 0029 and a controlled restart; see
 docs/STRATEGY_LAB.md "Safe deployment". Do not run the new code's CLI against the production
 database while the old runtime is live, because it migrates automatically. Live broker at 15:00 GMT+4:
-DEMO 53044952, 0 positions, 0 orders. Preflight `READY_FOR_PAPER`; the only DEMO blocker is the
+the IC Markets DEMO account, 0 positions, 0 orders. Preflight `READY_FOR_PAPER`; the only DEMO blocker is the
 stale XAUUSD quote (market closed on Saturday).
 
 ## Phase before that (2026-09-26, updated ~10:37 GMT+4 after read-only re-audit)

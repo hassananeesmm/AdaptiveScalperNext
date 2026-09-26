@@ -2446,7 +2446,7 @@ check or order send occurred.
 ## Session: Strategy Lab attribution, audit fixes, release 0.2.0 (2026-09-26, 15:00-19:40 GMT+4)
 
 - Pre-work (read-only): DEMO runtime PIDs 25208/30560 (`cli demo`, started 14:49 from `bac6145`) and
-  dashboard PIDs 30896/31324 running. MT5 DEMO 53044952 (ICMarketsSC-Demo, trade_mode 0), balance =
+  dashboard PIDs 30896/31324 running. MT5 DEMO account (ICMarketsSC-Demo, trade_mode 0), balance =
   equity 9,652.33 USD, 0 positions, 0 orders. Kill switch DISENGAGED, reconciliation CLEAN, heartbeat
   fresh, scheduler lag < 0.06 s. Preflight READY_FOR_PAPER; DEMO blocker: XAUUSD quote stale (Saturday).
   The runtime was not stopped, restarted or modified.

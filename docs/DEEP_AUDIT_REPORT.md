@@ -289,7 +289,7 @@ the kill switch. No paid LLM is required at runtime.
   transition as submitted. Not changed (runtime state-machine change requires separate review).
 
 ### Strategy Lab reconciliation (measured)
-2,272 deals for login 53044952: ledger 9,652.33 USD = independent SQL 9,652.33 USD = broker balance.
+2,272 deals for the DEMO account: ledger 9,652.33 USD = independent SQL 9,652.33 USD = broker balance.
 Attributed: 25 closed `microstructure_acceleration` trades, -55.52 USD. Unattributed: 1,101 EXTERNAL_EXPERT
 (magic 770115, -4,576.72) and 8 UNKNOWN_SOURCE (magic 0, +3,267.89). See docs/STRATEGY_LAB.md.
 
