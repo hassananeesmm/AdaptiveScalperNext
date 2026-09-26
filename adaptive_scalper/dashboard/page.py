@@ -27,7 +27,8 @@ PAGE_HTML = r"""<!doctype html>
   --accent:#125fa7;--good:#146b3b;--warn:#95600a;--bad:#b42332;
 }
 *{box-sizing:border-box} html{height:100%}body{margin:0;min-height:100%;background:var(--bg);color:var(--text)}
-button,input{font:inherit}button{cursor:pointer}
+button,input,select{font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line);
+  border-radius:9px;min-height:34px}button{cursor:pointer}select{padding:0 8px}
 button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .shell{min-height:100vh;display:grid;grid-template-columns:222px minmax(0,1fr)}
 .sidebar{background:var(--side);border-right:1px solid var(--line);padding:18px 12px;position:sticky;top:0;height:100vh;overflow-y:auto;overflow-x:hidden}
