@@ -2400,3 +2400,22 @@ initialized the live terminal (read-only) despite the script's isolation claim,
 and its nonzero result was ignored. Added the `ASN_DISABLE_MT5=1` import-boundary
 guard, made doctor failure fatal, and added a fresh-process regression. No order
 check or order send occurred.
+
+## Session: PAPER -> DEMO transition, pre-start (2026-09-25 ~17:45 UTC)
+
+- PAPER (PIDs 23564/25820, own console) stopped with its documented mechanism: a
+  CTRL_C_EVENT delivered to that console only (dashboard runs on a separate console and
+  was left running). stdout: "stopping (Ctrl+C): no positions are closed by stopping the
+  runtime"; engine state STOPPED. No paper positions/trades existed (kill switch was
+  ENGAGED by the STOP TRADING launcher at 17:38 UTC, so PAPER never entered).
+- WAL-safe online backup: `data/backups/pre_demo_20260925T214640.sqlite3` (275 MB);
+  integrity ok + 0 FK violations on live and backup; 45 tables; counts identical.
+- `doctor`: schema 28, integrity ok, DEMO, all three server clocks VERIFIED.
+- MT5 (read-only): ICMarketsSC-Demo, trade_mode DEMO, balance/equity 9707.85 USD,
+  Algo Trading + account/expert trading allowed, 0 positions, 0 orders.
+- `reconcile`: CLEAN. `order-check-probe XAUUSD BUY`: retcode 0 "Done", NOT sent.
+- `preflight`: READY_FOR_PAPER; DEMO blockers = kill switch ENGAGED (operator), no fresh
+  runtime reconciliation snapshot (only a running DEMO runtime writes it; CLI reconcile
+  CLEAN), GBPJPY slippage UNKNOWN (runtime blocks GBPJPY with BLOCK_COST; left UNKNOWN).
+- Kill switch NOT touched. DEMO NOT started: awaiting operator action.
+- Full suite on Windows: 1518 passed, 9 skipped in 132 s.
