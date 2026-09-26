@@ -2555,3 +2555,14 @@ check or order send occurred.
   the backup with one synthetic open position; 1366x768, 1920x1080, 2560x1440 and 125 %/150 % equivalents
   (1536x864, 1280x720, 1093x614, 911x512): no page overflow, no clipped headers, 0 console errors/warnings.
   Scratch dashboard stopped; production dashboard (8765) untouched.
+- Tests: full suite 1593 passed, 9 skipped (was 1587/9; +6 tests). `pip check` clean; `pip-audit` not installed
+  in the venv, so not re-run this session.
+- Release: `scripts\build_release.ps1 -Version 0.2.1 -SkipTests` at `78b577a` (suite had just passed on that
+  code), `dist\AdaptiveScalperNext-0.2.1.zip` (worktree `dist\`), 407 entries, sha256
+  e36c8424feed05630d150952b161f7fe975d6cd1ea57ebb75ccc977653f4d6c4 (verified). Zip audit: no databases, WAL,
+  logs, keys, .env or credentials; 29 migrations incl. 0029; Strategy Lab + multi-position files present. The DEMO
+  login number appears only in two historical WORKLOG lines (also in 0.2.0 and in pushed history) -- flagged for
+  the operator, not rewritten. `scripts\release_smoke_test.ps1`: PASSED (fresh venv, MT5 disabled, packaged suite
+  1593 passed / 9 skipped). 0.2.0 artifacts untouched.
+- Not done (needs operator approval): stop/restart of the DEMO runtime + dashboard onto 0.2.1. Kill switch not
+  touched.
