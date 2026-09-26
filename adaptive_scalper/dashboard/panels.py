@@ -451,7 +451,7 @@ def strategy_attribution(conn: sqlite3.Connection, now: int) -> dict:
         conn,
         "SELECT id, broker_position_id, canonical_symbol, direction, volume, entry_price, "
         "initial_monetary_risk, strategy_key, status, opened_at_utc, closed_at_utc, entry_order_id "
-        "FROM positions ORDER BY opened_at_utc DESC LIMIT 500",
+        "FROM positions ORDER BY opened_at_utc DESC LIMIT 300",
     )
     known_position_ids = {p["broker_position_id"] for p in positions_rows if p["broker_position_id"]}
     attributed = []
@@ -503,7 +503,7 @@ def strategy_performance(conn: sqlite3.Connection, now: int) -> dict:
         conn,
         "SELECT id, broker_position_id, strategy_key, canonical_symbol, direction, volume, "
         "initial_monetary_risk, entry_price, opened_at_utc, closed_at_utc FROM positions "
-        "WHERE status = 'CLOSED' ORDER BY closed_at_utc DESC LIMIT 500",
+        "WHERE status = 'CLOSED' ORDER BY closed_at_utc DESC LIMIT 300",
     )
     for p in demo:
         deals = _rows(
@@ -518,19 +518,20 @@ def strategy_performance(conn: sqlite3.Connection, now: int) -> dict:
         conn,
         "SELECT canonical_symbol, strategy_key, strategy_version, direction, entry_regime, exit_regime, "
         "entry_time_utc, exit_time_utc, realized_pnl, realized_r, gross_pnl, total_cost, cost_provenance, "
-        "origin, exit_reason FROM paper_trades ORDER BY exit_time_utc DESC LIMIT 2000",
+        "origin, exit_reason FROM paper_trades ORDER BY exit_time_utc DESC LIMIT 300",
     )
     backtest = _rows(
         conn,
         "SELECT run_id, canonical_symbol, strategy_key, strategy_version, direction, entry_regime, exit_regime, "
         "entry_time_utc, exit_time_utc, realized_pnl, realized_r, gross_pnl, total_cost, cost_provenance, "
-        "exit_reason FROM backtest_trades ORDER BY exit_time_utc DESC LIMIT 3000",
+        "exit_reason FROM backtest_trades ORDER BY exit_time_utc DESC LIMIT 300",
     )
     return {
         "demo_closed_trades": demo, "paper_trades": paper, "backtest_trades": backtest,
         "sample_sizes": {"demo": len(demo), "paper": len(paper), "backtest": len(backtest)},
         "note": "DEMO, PAPER and BACKTEST are separate evidence classes and are never pooled into one figure. "
-                "Row-level trades only; no unavailable cost or performance figure is invented.",
+                "Row-level trades only, capped at the 300 most recent per class to keep this panel cheap on "
+                "every 2s dashboard refresh; no unavailable cost or performance figure is invented.",
     }
 
 
