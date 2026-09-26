@@ -136,7 +136,7 @@ summary{cursor:pointer;font-weight:680;color:var(--text)}
 .lab-note{font-size:12px;color:var(--muted);line-height:1.5}
 .num{text-align:right;white-space:nowrap}
 .pos{color:var(--good)}.neg{color:var(--bad)}.na{color:var(--muted)}
-.linkish{background:none;border:0;color:var(--accent);padding:0;min-height:0;text-align:left;font-weight:650;text-decoration:underline}
+.linkish{background:none;border:0;color:var(--accent);padding:0;min-height:0;text-align:left;font-weight:650;text-decoration:underline;white-space:nowrap}.lab td{max-width:none}.nowrap-table td{white-space:nowrap}
 tr.clickable{cursor:pointer}tr.clickable:hover td,tr.clickable:focus td{background:var(--surface-2)}
 tr.clickable:focus{outline:2px solid var(--accent);outline-offset:-2px}
 .chart-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;min-width:0}
@@ -812,6 +812,7 @@ function gridTable(headers,rows,opts){
   headers.forEach(h=>{const th=el("th",Array.isArray(h)?h[0]:h);if(Array.isArray(h)&&h[1])th.className=h[1];
     th.scope="col";hr.appendChild(th);});
   hd.appendChild(hr);t.appendChild(hd);const b=el("tbody");rows.forEach(r=>b.appendChild(r));t.appendChild(b);
+  if(opts&&opts.nowrap)t.classList.add("nowrap-table");
   if(opts&&opts.caption){const c=el("caption",opts.caption);c.className="tiny";c.style.textAlign="left";c.style.padding="6px";t.prepend(c);}
   scroll.appendChild(t);return scroll;
 }
@@ -871,7 +872,7 @@ function barChart(items,opts){
     const v=it.value||0,y=5+i*rowH,w=Math.max(1,Math.abs(v)*scale);
     const t=sv("text",{x:L-8,y:y+14,"text-anchor":"end"});t.textContent=String(it.label).slice(0,30);svg.appendChild(t);
     svg.appendChild(sv("rect",{x:v<0?zero-w:zero,y:y+3,width:w,height:rowH-8,rx:3,fill:it.color||(v<0?"var(--neg)":"var(--pos)")}));
-    const vt=sv("text",{x:v<0?zero-w-4:zero+w+4,y:y+14,"text-anchor":v<0?"end":"start"});
+    const vt=sv("text",{x:v<0?zero+4:zero+w+4,y:y+14,"text-anchor":"start"});
     vt.setAttribute("style","fill:var(--text)");vt.textContent=it.valueLabel||(Math.round(v*100)/100);svg.appendChild(vt);
     const hit=sv("rect",{x:0,y,width:W,height:rowH,fill:"transparent"});
     hit.addEventListener("mousemove",e=>showTip(e,it.tip||(it.label+": "+(Math.round(v*100)/100))));
@@ -999,7 +1000,7 @@ function labComparison(s){
     cell(utr,signed(um.net_pnl),"num");for(let i=0;i<6;i++)cell(utr,"—","num");cell(utr,"—");}
   cell(utr,"—","num");rows.push(utr);
   box.appendChild(el("div","Winning and losing strategies · "+s.evidence+" evidence","mini-title"));
-  box.appendChild(gridTable(heads,rows));
+  box.appendChild(gridTable(heads,rows,{nowrap:true}));
   box.appendChild(el("p","Metrics use CLOSED trades only (an entry is never a completed trade). Net = gross + commission + fees + swap, "+
     "all broker-recorded for DEMO. Spread and slippage are already inside DEMO broker profit, so they are shown as evidence only. "+
     "Profit factor with no losses is undefined, never infinite. Max drawdown is on the closed-trade sequence. "+

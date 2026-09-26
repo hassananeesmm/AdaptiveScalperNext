@@ -919,8 +919,9 @@ def breakdowns(trades: list[dict]) -> dict:
 
     def group(key: str) -> list[dict]:
         g: dict = defaultdict(list)
+        missing = "UNATTRIBUTED" if key == "strategy_key" else "N/A (not recorded)"
         for t in closed:
-            g[str(t[key]) if t.get(key) is not None else "N/A"].append(t)
+            g[str(t[key]) if t.get(key) is not None else missing].append(t)
         return [{key: k, "closed_trades": len(v), "net_pnl": sum(x["realized_net_pnl"] or 0.0 for x in v),
                  "gross_pnl": (sum(x["gross_pnl"] for x in v) if all(x.get("gross_pnl") is not None for x in v)
                                else None),
