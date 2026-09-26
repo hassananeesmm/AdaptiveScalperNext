@@ -35,16 +35,28 @@ Adaptive Scalper Next
 `dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
 W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
-## Current phase (2026-09-26)
+## Current phase (2026-09-26, updated ~10:37 GMT+4 after read-only re-audit)
 
-Windows verification, live-data verification and the responsive dashboard are done on the
-laptop. A separate operator session stopped PAPER, disengaged the persistent kill switch and
-started DEMO; naturally occurring fills and closes followed. At the final audit snapshot the
-DEMO runtime was running and broker positions/orders were both empty. Preflight still reports
-`READY_FOR_PAPER`, not `READY_FOR_DEMO`, because GBPJPY cost/quote evidence is incomplete and
-the old running process retains one stale reconciliation incident. ASN-012 fixes that
-lifecycle in source; deploy it with a controlled flat restart. The audit did not change the
-kill switch or send an order.
+ASN-012 has been deployed and verified: the running DEMO process (started 08:32 UTC+4 today)
+loads the fix, and `reconcile` reports `CLEAN` (no unrepaired positions/orders, no UNKNOWN
+resolutions). The kill switch is DISENGAGED (operator `hassan`, reason recorded). `doctor`
+confirms MT5 account trade mode DEMO (ICMarketsSC-Demo), schema 28, database integrity OK,
+real-money execution DISABLED. GBPJPY is excluded from `market.symbols` pending slippage
+evidence (ASN-007) — this config change is present in the working tree but not yet committed.
+Live engine symbols are currently `{BTCUSD}` only; XAUUSD is correctly held out on a fail-closed
+stale-quote gate pending the weekend market reopen. At this audit's snapshot: zero open DEMO
+positions, zero active orders.
+
+Strategy Lab (dashboard top-level view: registry, activity, broker-verified attribution,
+DEMO/PAPER/BACKTEST performance comparison, human-review shortlist) is implemented and live on
+branch `dashboard/strategy-lab` (commits `f6d84ef`, `6e6824b`, `b29d8ab`; not yet pushed to
+origin or merged to `main`). First real comparison since the ASN-012 restart: 24 DEMO trades
+closed, all attributed to `microstructure_acceleration` on BTCUSD (11W/13L, gross -$48.33,
+net -$49.95 after costs) — the other five active strategies have produced signals
+(`momentum_continuation` 18, `pullback_continuation` 10, `statistical_reversion` 161) but zero
+executed trades in the last 30 days; `range_breakout` and `volatility_expansion` have produced
+no signals at all in that window. See `docs/STRATEGY_LAB.md` for how these figures are computed
+and what UNATTRIBUTED means.
 
 ## Component status matrix (2026-09-25, Windows laptop)
 
@@ -63,6 +75,7 @@ kill switch or send an order.
 | PAPER restart correctness | VERIFIED ON WINDOWS (real-data replay) | 5,975 restarts over June 2026 XAUUSD: identical trades/equity, 0 duplicates; live restart with an open simulated position NOT VERIFIED (needs kill switch) |
 | Scheduler (priority, lag) | VERIFIED WITH LIVE MT5 DATA | news fetch off-thread (<= 2 s wait); measured max lag 0.87 s |
 | Dashboard (17 panels, 7 views) | VERIFIED ON WINDOWS | real Chromium at 9 viewport sizes; WebSocket + polling + reconnect; 0.05 s refresh |
+| Strategy Lab (registry, activity, broker-verified attribution, DEMO/PAPER/BACKTEST performance, shortlist) | VERIFIED WITH LIVE DEMO DATA (2026-09-26) | live panels queried directly: 24 real closed DEMO trades correctly attributed to `microstructure_acceleration`, 0 UNATTRIBUTED deals; not yet merged to `main` (branch `dashboard/strategy-lab`) |
 | Launchers incl. PAPER+DASHBOARD, DEMO+DASHBOARD | TESTED (static audits); PAPER/DASHBOARD run via their CLI equivalents | double-click runs of the .bat files NOT VERIFIED |
 | Execution service / close / stop modification / UNKNOWN recovery | TESTED (38 chaos scenarios + runtime chaos) | NOT VERIFIED ON DEMO (no order sent) |
 | Position management on a real DEMO position | NOT VERIFIED | no DEMO position has existed |

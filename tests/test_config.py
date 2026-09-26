@@ -197,7 +197,11 @@ def test_news_rejects_negative_windows():
 def test_load_config_reads_the_shipped_default_toml():
     cfg = load_config("config/default.toml")
     assert cfg.mode == "PAPER"
-    assert set(cfg.market.symbols) == ALLOWED_CANONICAL_SYMBOLS
+    # config/default.toml may *narrow* market.symbols to a non-empty subset of the
+    # canonical allow-list (adaptive_scalper/config/loader.py's own documented
+    # invariant) -- it is never required to list every allowed symbol.
+    assert cfg.market.symbols
+    assert set(cfg.market.symbols) <= ALLOWED_CANONICAL_SYMBOLS
 
 
 def test_load_config_missing_file_raises_config_error():

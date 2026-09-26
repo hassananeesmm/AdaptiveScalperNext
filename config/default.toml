@@ -7,7 +7,12 @@
 mode = "PAPER"
 
 [market]
-symbols = ["XAUUSD", "GBPJPY", "BTCUSD"]
+# GBPJPY excluded (operator decision, 2026-09-26): execution-cost/slippage
+# evidence remains insufficient (ASN-007). market.symbols accepts any
+# non-empty subset of the canonical allow-list, so this narrows the
+# executable set without touching any other safety gate. Re-add once real
+# slippage evidence exists; never lower the cost-evidence standard instead.
+symbols = ["XAUUSD", "BTCUSD"]
 
 [strategies]
 retired = ["failed_breakout_fade", "support_resistance_reaction"]
