@@ -11,6 +11,17 @@ The PAPER or DEMO runtime must run separately on the Windows laptop.
   no external fonts, APIs, images or CDN.
 - Seven views: Overview, Markets, Trading, Safety & risk, Research, System,
   and All panels. Panel-name search is available across views.
+- MULTI-POSITION READINESS (Strategy Lab tab "Multi-position readiness", Safety & risk, All panels;
+  `/api/panels/multi_position`):
+  position capacity (max/open/pending/remaining slots), open and pending monetary risk, remaining
+  aggregate-risk capacity from the fresh DEMO equity, enabled / awaiting-market / excluded symbols,
+  per-symbol quote, signal, cost-evidence and news status, pairwise correlation (value or N/A, aligned
+  sample count, threshold, ALLOW/BLOCK, reason) and one status per symbol explaining why a second trade has
+  not opened: NO SIGNAL, EXISTING POSITION, MARKET CLOSED, STALE QUOTE, COST BLOCK, CORRELATION BLOCK,
+  RISK BLOCK, PORTFOLIO BLOCK, NEWS BLOCK, BROKER BLOCK, RECONCILIATION BLOCK, UNKNOWN ORDER, KILL SWITCH,
+  RE-ENTRY RULE, NOT ENABLED or ELIGIBLE — AWAITING NATURAL SIGNAL. Gate blocks are named from the
+  journal's `ENTRY_BLOCKED` decision code, not parsed from text. A free slot is shown as capacity, never
+  as a forecast. Read-only: runtime_state + SQLite, no MT5 call, no order path.
 - At 1920x1080 the layout has a left navigation and two panel columns.
   At 1366x768 metrics use two rows; below 1080 CSS pixels panels stack.
   Below 740 CSS pixels navigation becomes horizontal and scrollable.

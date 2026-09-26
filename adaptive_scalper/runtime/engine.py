@@ -25,6 +25,8 @@ Scheduled tasks (priority, cadence from `[runtime]`):
     3 rag_ingest      ~60s  journal/paper/incident rows -> typed RAG memories
                             (the trading cycles never write RAG themselves)
     3 rag_rebuild     ~10m  rebuild the derived TF-IDF index
+    3 symbol_admission ~60s  admit a symbol excluded at startup only for a closed
+                            market once its quote is live again (full re-validation)
     3 cost_evidence_sweep ~60s  DEMO: complete execution cost observations
                             for closed positions (evidence only)
     4 heartbeat       ~1s   engine state for the observer-only dashboard
@@ -51,7 +53,12 @@ from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.server_time import INCONCLUSIVE, MISMATCH, VERIFIED, classify_quote_clock
 from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
-from adaptive_scalper.gateway.symbol_validation import validate_resolved_symbol
+from adaptive_scalper.gateway.symbol_validation import (
+    INVALID_QUOTE,
+    NO_QUOTE,
+    STALE_QUOTE,
+    validate_resolved_symbol,
+)
 from adaptive_scalper.gateway.types import TradeMode
 from adaptive_scalper.history.time_basis import TimeBasisError
 from adaptive_scalper.history.time_basis import require_utc as require_utc_time_basis
@@ -66,7 +73,7 @@ from adaptive_scalper.runtime.demo import DemoRuntime
 from adaptive_scalper.runtime.news_monitor import NewsMonitor, default_live_providers
 from adaptive_scalper.runtime.paper import PaperRuntime
 from adaptive_scalper.runtime.scheduler import Scheduler
-from adaptive_scalper.runtime.state import put_state, record_event
+from adaptive_scalper.runtime.state import get_state, put_state, record_event
 from adaptive_scalper.strategies import build_active_registry
 
 logger = logging.getLogger(__name__)
@@ -79,6 +86,10 @@ NEWS_FETCH_BUDGET_SECONDS = 2.0
 NEWS_FETCH_OVERDUE_SECONDS = 60
 ENGINE_STOPPED = "STOPPED"
 RAG_INGEST_SECONDS = 60.0
+SYMBOL_ADMISSION_SECONDS = 60.0
+# Startup validation failures that only mean "no live quote right now"
+# (market closed): identity and contract checks already passed.
+MARKET_CLOSED_REASONS = frozenset({NO_QUOTE, INVALID_QUOTE, STALE_QUOTE})
 
 
 class RuntimeStartupError(RuntimeError):
@@ -118,6 +129,10 @@ class RuntimeEngine:
         )
         self.scheduler = Scheduler(monotonic=monotonic, on_error=self._task_failed)
         self.symbols: dict[str, str] = {}
+        # Identity-validated symbols whose only startup failure was the quote
+        # (market closed): re-checked on a cadence and admitted once live.
+        self.awaiting_market: dict[str, str] = {}
+        self.excluded: dict[str, str] = {}
         self.demo: DemoRuntime | None = None
         self.paper: PaperRuntime | None = None
         self.started_at: int | None = None
@@ -201,6 +216,8 @@ class RuntimeEngine:
             validation = validate_resolved_symbol(self.gateway, canonical, result.broker_symbol, now=self.clock())
             if not validation.valid:
                 excluded[canonical] = f"{validation.reason}: {validation.detail}"
+                if validation.reason in MARKET_CLOSED_REASONS:
+                    self.awaiting_market[canonical] = result.broker_symbol
                 continue
             self.symbols[canonical] = result.broker_symbol
             spec = self.gateway.symbol_info(result.broker_symbol)
@@ -250,6 +267,7 @@ class RuntimeEngine:
         self.scheduler.add("news_poll", 1.0, 2, self._poll_news)
         self.scheduler.add("rag_ingest", RAG_INGEST_SECONDS, 3, self._ingest_rag)
         self.scheduler.add("rag_rebuild", 600, 3, self._rebuild_rag)
+        self.scheduler.add("symbol_admission", SYMBOL_ADMISSION_SECONDS, 3, self.admit_reopened_symbols)
         self.scheduler.add("heartbeat", self.config.runtime.heartbeat_seconds, 4, self.heartbeat)
         # news/rag already ran during startup: don't repeat them on the first tick
         for task in self.scheduler.tasks:
@@ -264,11 +282,65 @@ class RuntimeEngine:
             "recovery": recovery, "news": self.news.health(now).value,
             "server_clock": server_clock["verdict"],
         }
+        self.excluded = {c: why for c, why in excluded.items() if c not in self.awaiting_market}
+        self._publish_symbol_admission(now, excluded)
         put_state(self.conn, "risk_limits", self.config.risk.model_dump(), now_utc=now)
         put_state(self.conn, "startup", summary, now_utc=now)
         record_event(self.conn, "INFO", "engine", "ENGINE_STARTED", f"{self.mode} runtime started", now_utc=now)
         self.heartbeat()
         return summary
+
+    def admit_reopened_symbols(self) -> list[str]:
+        """Re-validate symbols excluded at startup only for a closed market.
+
+        The same `validate_resolved_symbol` as startup (identity, contract,
+        live quote) must pass in full, and the new quote must not contradict
+        the server clock rule; then the symbol joins the shared `symbols`
+        map the DEMO/PAPER cycles iterate. Every entry gate still applies to
+        it. Symbols excluded for identity/spec reasons are never retried."""
+        if not self.awaiting_market:
+            return []
+        now = self.now()
+        admitted = []
+        for canonical, broker_symbol in list(self.awaiting_market.items()):
+            validation = validate_resolved_symbol(self.gateway, canonical, broker_symbol, now=self.clock())
+            if not validation.valid:
+                if validation.reason not in MARKET_CLOSED_REASONS:
+                    del self.awaiting_market[canonical]
+                    self.excluded[canonical] = f"{validation.reason}: {validation.detail}"
+                    record_event(self.conn, "WARNING", "symbols", "SYMBOL_EXCLUDED",
+                                 self.excluded[canonical], canonical_symbol=canonical,
+                                 dedup_key=f"symbol_excluded:{canonical}", now_utc=now)
+                continue
+            tick = self.gateway.symbol_info_tick(broker_symbol)
+            if tick is not None and tick.time and classify_quote_clock(tick.time, self.clock())[0] == MISMATCH:
+                record_event(self.conn, "ERROR", "symbols", "SYMBOL_ADMISSION_CLOCK_MISMATCH",
+                             f"{canonical} quote time {tick.time} is in the future under server_time_rule="
+                             f"{self.config.mt5.server_time_rule!r}; not admitted", canonical_symbol=canonical,
+                             dedup_key=f"symbol_admission_clock:{canonical}", now_utc=now)
+                continue
+            del self.awaiting_market[canonical]
+            self.symbols[canonical] = broker_symbol
+            spec = self.gateway.symbol_info(broker_symbol)
+            if spec is not None:
+                save_symbol_spec(self.conn, canonical, spec, now_utc=now)
+            from adaptive_scalper.runtime.state import clear_event
+            clear_event(self.conn, f"symbol_excluded:{canonical}", now_utc=now)
+            record_event(self.conn, "INFO", "symbols", "SYMBOL_ADMITTED",
+                         f"market open, quote valid: {validation.detail}", canonical_symbol=canonical,
+                         dedup_key=f"symbol_admitted:{canonical}:{now}", now_utc=now)
+            admitted.append(canonical)
+        self._publish_symbol_admission(now)
+        return admitted
+
+    def _publish_symbol_admission(self, now: int, awaiting_reasons: dict[str, str] | None = None) -> None:
+        previous = get_state(self.conn, "symbol_admission", {}) or {}
+        reasons = {**previous.get("awaiting_market", {}), **(awaiting_reasons or {})}
+        put_state(self.conn, "symbol_admission", {
+            "at": now, "active": sorted(self.symbols),
+            "awaiting_market": {c: reasons.get(c, "market closed at startup") for c in sorted(self.awaiting_market)},
+            "excluded": dict(sorted(self.excluded.items())),
+        }, now_utc=now)
 
     def _publish_telemetry(self) -> None:
         """Best-effort, sampled broker truth for the read-only dashboard.

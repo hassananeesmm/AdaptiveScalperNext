@@ -2477,3 +2477,33 @@ check or order send occurred.
   1 open DEMO position (BTCUSD SELL 0.52, magic 240924, broker SL/TP set, initial risk 24.17 USD =
   0.25 %), locally tracked with a runtime entry chain (`microstructure_acceleration`). Reconciliation
   CLEAN, 0 unresolved incidents. Production database still at schema 28 (migration 0029 not applied).
+
+## Session: Multiple simultaneous trades — root cause and fix (2026-09-26, 20:31-21:15 GMT+4)
+
+- Pre-work (read-only): DEMO runtime PIDs 25288/10512 (`cli demo`) and dashboard 14524/27832 started
+  20:30:54 GMT+4 from the main checkout at `7f604ab` (release 0.2.0); migration 0029 applied 16:30:49Z,
+  production schema 29. Kill switch DISENGAGED, reconciliation CLEAN, heartbeat fresh, 0 task failures.
+  Running config: symbols XAUUSD+BTCUSD (GBPJPY excluded, ASN-007), 0.25 % / 0.75 % / 2 positions / 1 per
+  symbol, M5. Runtime not stopped, restarted or modified; all development in worktree
+  `.worktrees/multi-position`, branch `fix/multi-position-readiness`, temporary databases only.
+- Evidence (production DB, read-only): 31 runtime DEMO positions since 2026-09-25 18:14 UTC. Broker deals
+  prove two simultaneous positions already occurred: XAUUSD SELL (deal 1580733584, 19:25:00 -> SL 19:30:56)
+  overlapped BTCUSD SELL (deal 1580738053, in 19:30:00) by 56 s. XAUUSD decisions end 2026-09-25 20:55 UTC
+  (Friday close); every position since is BTCUSD. Last 24 h: 0 correlation, aggregate-risk, portfolio or
+  max-position blocks; 34 final-permission blocks, all re-entry rules (confidence, same-direction
+  improvement, 60 s cooldown); global blocks = kill switch (operator restarts), MT5 disconnects, 4 transient
+  reconciliation. Each runtime started on Saturday (04:32, 10:49, 16:30 UTC) logged SYMBOL_EXCLUDED XAUUSD
+  `stale_quote` and kept only BTCUSD.
+- Root cause of single-position behaviour: expected -- XAUUSD market closed for the weekend, GBPJPY disabled,
+  BTCUSD max one position. Defect found (ASN-016): the startup exclusion is permanent for the process, so the
+  running runtime would never trade XAUUSD after Monday's open. Latent defect (ASN-017): working orders on a
+  symbol without a position were not counted in max_open_positions. Both reproduced with failing tests, fixed.
+- Added diagnostics: `describe_correlation_pairs`, runtime state `multi_position_readiness` and
+  `symbol_admission`, dashboard panel MULTI-POSITION READINESS (Strategy Lab / Safety / All).
+- Tests: `tests/test_multi_position.py`, 28 tests (two-symbol fills, same-symbol block, third position,
+  fresh risk/margin per submission, high/missing/low correlation, per-instrument cost block, rejected order
+  isolation, interleaved attribution, closed-at-startup re-admission DEMO+PAPER, identity never re-admitted,
+  resting/partial counting, §6 risk scenarios, margin, panel). Full suite 1585 passed, 9 skipped.
+- Live check (~21:15 GMT+4): runtime RUNNING DEMO, broker 0 positions / 0 orders, balance = equity 9,661.62,
+  reconciliation CLEAN, 0 unresolved incidents. Live two-symbol verification PENDING: XAUUSD market closed
+  (Saturday). Deployment of the fix requires a controlled flat restart with operator approval.

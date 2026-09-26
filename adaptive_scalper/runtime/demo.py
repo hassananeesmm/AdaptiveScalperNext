@@ -61,7 +61,11 @@ from adaptive_scalper.gateway.symbol_validation import (
 )
 from adaptive_scalper.gateway.types import SymbolSpec, Tick
 from adaptive_scalper.journal.events import append_event
-from adaptive_scalper.portfolio.correlation import CorrelationResult, compute_correlation_matrix
+from adaptive_scalper.portfolio.correlation import (
+    CorrelationResult,
+    compute_correlation_matrix,
+    describe_correlation_pairs,
+)
 from adaptive_scalper.portfolio.exposure import PositionExposure, portfolio_risk_limits_from_risk_limits
 from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
 from adaptive_scalper.position_management.manager import PositionReviewInput, review_position_once
@@ -367,16 +371,15 @@ class DemoRuntime:
             # Keep bar-close analysis fresh for position reviews anyway.
             for canonical in self.symbols:
                 self.analyze(canonical, now)
+            self._refresh_correlation()
             put_state(self.conn, "why_no_trade", snapshot, now_utc=now)
+            self._publish_readiness(now)
             return snapshot
         from adaptive_scalper.runtime.state import clear_event
         clear_event(self.conn, "entry:global_block", now_utc=now)
 
         analyses = {c: self.analyze(c, now) for c in self.symbols}
-        self.correlation = compute_correlation_matrix(
-            {c: r for c, r in self.returns.items() if c in self.symbols},
-            min_sample_size=self.config.runtime.correlation_min_samples,
-        )
+        self._refresh_correlation()
         for canonical, analysis in analyses.items():
             try:
                 snapshot["symbols"][canonical] = self._decide(canonical, analysis, now)
@@ -386,7 +389,42 @@ class DemoRuntime:
                 record_event(self.conn, "ERROR", "entry", "ENTRY_DECISION_FAILED", f"{type(exc).__name__}: {exc}",
                              canonical_symbol=canonical, dedup_key=f"entry_failed:{canonical}", now_utc=now)
         put_state(self.conn, "why_no_trade", snapshot, now_utc=now)
+        self._publish_readiness(now)
         return snapshot
+
+    def _refresh_correlation(self) -> None:
+        self.correlation = compute_correlation_matrix(
+            {c: r for c, r in self.returns.items() if c in self.symbols},
+            min_sample_size=self.config.runtime.correlation_min_samples,
+        )
+
+    def _publish_readiness(self, now: int) -> None:
+        """Observer-only diagnostics for the dashboard's multi-position
+        readiness view. Local computation over state this cycle already
+        holds (no extra broker call); nothing here feeds a decision. A
+        failure is logged and never interrupts the entry cycle."""
+        try:
+            open_positions, pending = self._exposures()
+            busy = sorted({p.canonical_symbol for p in open_positions + pending})
+            cost_evidence = {}
+            for canonical in self.symbols:
+                costs = self.config.cost_for(canonical)
+                unknown = [name for name, value in (("commission", costs.commission_per_lot_round_trip),
+                                                    ("slippage", costs.slippage_price)) if value is None]
+                cost_evidence[canonical] = {"eligible": not unknown, "unknown_components": unknown,
+                                            "provenance": costs.provenance}
+            news = {}
+            for canonical in self.symbols:
+                result = self.news.block_for(canonical, now)
+                news[canonical] = {"decision": result.decision, "reason": result.reason}
+            put_state(self.conn, "multi_position_readiness", {
+                "at": now, "open_or_pending_symbols": busy,
+                "correlation": describe_correlation_pairs(list(self.symbols), self.correlation, busy),
+                "correlation_min_samples": self.config.runtime.correlation_min_samples,
+                "cost_evidence": cost_evidence, "news": news,
+            }, now_utc=now)
+        except Exception as exc:
+            logger.warning("multi-position readiness snapshot failed: %s", exc)
 
     def _record(self, canonical, bar_time, stage, decision, reason, **kwargs) -> dict:
         record_entry_decision(self.conn, mode=MODE, stage=stage, decision=decision, reason=reason,
@@ -505,6 +543,12 @@ class DemoRuntime:
         account = self.gateway.account_info()
         open_positions, pending = self._exposures()
         same_symbol = [p for p in open_positions if p.canonical_symbol == canonical]
+        # A working order on a symbol with no open position is a position the
+        # broker can open at any moment, so it takes a max_open_positions slot.
+        # A PARTIAL order's remainder belongs to its own open position: counted once.
+        open_symbols = {p.canonical_symbol for p in open_positions}
+        pending_only = [o for o in get_active_orders(self.conn)
+                        if o.state.value in _OPEN_EXPOSURE_ORDER_STATES and o.canonical_symbol not in open_symbols]
         reentry = self._reentry_check(canonical, signal, now)
         permission = FinalPermissionInput(
             mode=MODE, signal=signal, kill_switch_state=get_kill_switch_state(self.conn),
@@ -524,7 +568,8 @@ class DemoRuntime:
                 proposed_symbol=canonical, proposed_monetary_risk=proposed_risk, equity=account.equity,
                 current_total_open_risk=sum(p.monetary_risk for p in open_positions),
                 current_total_pending_risk=sum(p.monetary_risk for p in pending),
-                current_positions_count=len(open_positions), current_positions_for_symbol=len(same_symbol),
+                current_positions_count=len(open_positions) + len(pending_only),
+                current_positions_for_symbol=len(same_symbol),
                 daily_realized_pnl=self._daily_realized_pnl(now), peak_equity=self._peak_equity(account.equity, now),
             ),
             risk_limits=self.risk_limits, open_positions=open_positions, pending_positions=pending,

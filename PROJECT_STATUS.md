@@ -35,6 +35,20 @@ Adaptive Scalper Next
 `dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
 W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
+## Current phase (2026-09-26 night, branch `fix/multi-position-readiness`)
+
+**Supersedes the deployment note below:** release 0.2.0 (`7f604ab`) IS deployed -- the DEMO runtime and
+dashboard were restarted 20:30:54 GMT+4 and migration 0029 is applied (schema 29).
+
+Multiple simultaneous positions: the entry cycle, correlation gate, risk governor and attribution already
+supported two symbols (broker deals prove a 56 s XAUUSD+BTCUSD overlap on 2026-09-25). Since Friday's close
+the bot is single-symbol because XAUUSD's market is closed and GBPJPY is disabled -- expected. Fixed on this
+branch (TESTED-FAKE, not deployed): ASN-016 a symbol closed at startup was never re-admitted (the running
+process will NOT trade XAUUSD after Monday's open until restarted with this fix); ASN-017 working orders on
+another symbol now take a max_open_positions slot. New dashboard panel MULTI-POSITION READINESS. Full suite
+1585 passed, 9 skipped. Live two-symbol DEMO verification: PENDING (market closed). Deployment: controlled
+flat restart, operator approval required.
+
 ## Current phase (2026-09-26 evening, branch `feature/strategy-lab-attribution`, release 0.2.0)
 
 **This section supersedes the Strategy Lab paragraph below.** Strategy Lab has been rebuilt on a

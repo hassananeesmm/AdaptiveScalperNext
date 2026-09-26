@@ -127,3 +127,29 @@ def evaluate_correlation_gate(
                 f"{other} (n={result.sample_size}), exceeding threshold {high_correlation_threshold}"
             )
     return ALLOW, "no high-correlation or unresolved-correlation conflict with open/pending positions"
+
+
+def describe_correlation_pairs(
+    symbols: list[str],
+    correlation_matrix: dict[tuple[str, str], CorrelationResult],
+    open_or_pending_symbols: list[str],
+    high_correlation_threshold: float = 0.7,
+) -> list[dict]:
+    """Diagnostics only (never a decision input): for every symbol pair, the
+    measured correlation (None = N/A), the aligned sample count, and what
+    `evaluate_correlation_gate` would decide for a proposal on one symbol
+    while the other is open. `evaluated_now` says whether that hypothetical
+    is live (the other symbol really is open or pending)."""
+    rows = []
+    ordered = sorted(symbols)
+    for i, a in enumerate(ordered):
+        for b in ordered[i + 1:]:
+            result = correlation_matrix.get((a, b), CorrelationResult(None, 0))
+            decision, reason = evaluate_correlation_gate(
+                a, [b], correlation_matrix, high_correlation_threshold)
+            rows.append({
+                "pair": [a, b], "correlation": result.correlation, "sample_size": result.sample_size,
+                "threshold": high_correlation_threshold, "decision": decision, "reason": reason,
+                "evaluated_now": a in open_or_pending_symbols or b in open_or_pending_symbols,
+            })
+    return rows

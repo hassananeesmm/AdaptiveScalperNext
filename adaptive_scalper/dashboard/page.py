@@ -222,7 +222,7 @@ const GROUPS = [
   {id:"trading",label:"Trading",desc:"Positions, broker orders, simulated results and decision journal.",
    panels:["positions","orders","decisions","performance","costs"]},
   {id:"safety",label:"Safety & risk",desc:"Kill switch, active incidents, risk exposure and news health.",
-   panels:["overview","risk","orders","events","news"]},
+   panels:["overview","multi_position","risk","orders","events","news"]},
   {id:"research",label:"Research",desc:"Historical evaluations, observed outcomes, models and knowledge.",
    panels:["performance","research","learning","memory","knowledge","history"]},
   {id:"system",label:"System",desc:"Component status, runtime events, data freshness and broker status.",
@@ -234,10 +234,10 @@ const GROUPS = [
   {id:"all",label:"All panels",desc:"Every implemented dashboard panel.",
    panels:["overview","market","performance","components","symbols","positions","orders","decisions",
            "risk","news","events","costs","research","learning","memory","knowledge","history",
-           "strategy_registry","strategy_activity","strategy_performance","strategy_attribution"]}
+           "strategy_registry","strategy_activity","strategy_performance","strategy_attribution","multi_position"]}
 ];
 const WIDE = new Set(["market","positions","orders","performance","decisions","events","history",
-  "strategy_registry","strategy_activity","strategy_performance","strategy_attribution"]);
+  "strategy_registry","strategy_activity","strategy_performance","strategy_attribution","multi_position"]);
 const FRIENDLY = {
   overview:"System overview",market:"Live market & account",performance:"Observed performance",
   components:"Components",symbols:"Symbol resolution",positions:"Positions",orders:"Orders & reconciliation",
@@ -245,7 +245,8 @@ const FRIENDLY = {
   costs:"Execution costs",research:"Research history",learning:"Model observer",
   memory:"RAG memory",knowledge:"Knowledge bundle",history:"Historical coverage",
   strategy_registry:"Strategy overview",strategy_activity:"Live strategy activity",
-  strategy_performance:"Performance comparison",strategy_attribution:"Broker-verified attribution"
+  strategy_performance:"Performance comparison",strategy_attribution:"Broker-verified attribution",
+  multi_position:"MULTI-POSITION READINESS"
 };
 const el = (tag, text, cls) => {
   const n=document.createElement(tag);
@@ -617,6 +618,30 @@ function stratPerformancePanel(panel){
     "change, tests and an operator-approved deployment.","safeguard"));
   return wrap;
 }
+function multiPositionPanel(p){
+  const wrap=el("div");
+  wrap.appendChild(el("p",p.headline,"safeguard"));
+  const rc=p.risk_capacity||{};
+  wrap.appendChild(table([{
+    max_positions:p.max_open_positions,open_positions:p.open_positions,pending_orders:p.pending_orders,
+    remaining_slots:p.remaining_position_slots,open_risk:money(p.open_monetary_risk),
+    pending_risk:money(p.pending_monetary_risk),
+    remaining_aggregate_risk:rc.status?rc.status+": "+rc.detail:money(rc.remaining_aggregate_risk),
+    enabled_symbols:(p.enabled_symbols||[]).join(", ")||"None"}]));
+  wrap.appendChild(el("div","Why no second trade — per symbol","mini-title"));
+  wrap.appendChild(table(Object.entries(p.symbols||{}).map(([symbol,v])=>({symbol,status:v.status,detail:v.detail,
+    quote:v.quote_status,signal:v.signal_status,cost_eligible:v.cost_eligible,news:v.news,
+    last_decision_utc:v.last_decision?v.last_decision.decided_at_utc:null}))));
+  wrap.appendChild(el("div","Pairwise correlation (aligned M5 returns)","mini-title"));
+  const corr=(p.correlation||[]).map(c=>({pair:c.pair.join(" / "),
+    correlation:c.correlation===null?"N/A":Number(c.correlation).toFixed(3),sample_size:c.sample_size,
+    threshold:c.threshold,decision_if_other_open:c.decision,live_now:c.evaluated_now,reason:c.reason}));
+  wrap.appendChild(corr.length?table(corr):el("p",p.readiness_age_seconds===null?
+    "The running runtime does not publish correlation diagnostics yet (older build).":
+    "Fewer than two enabled symbols: no pair to correlate.","empty"));
+  wrap.appendChild(el("p",p.guarantee,"safeguard"));
+  return wrap;
+}
 function panelBody(name,raw){
   const p=raw||{};
   if(p.status==="UNAVAILABLE"||p.status==="NO_DATA")
@@ -627,6 +652,7 @@ function panelBody(name,raw){
   if(name==="strategy_activity")return stratActivityPanel(p);
   if(name==="strategy_attribution")return stratAttributionPanel(p);
   if(name==="strategy_performance")return stratPerformancePanel(p);
+  if(name==="multi_position")return multiPositionPanel(p);
   const copy=Object.assign({},p);delete copy.status;return render(copy,0);
 }
 let current="overview",data=null,feedState="CONNECTING",pollHandle=null,polling=false,ws=null,retry=null;
@@ -738,7 +764,8 @@ const LAB={evidence:"DEMO",sub:"comparison",filters:{},run_id:"",session_key:"",
   shortlist:(()=>{try{return JSON.parse(localStorage.getItem("asn-lab-shortlist")||"[]");}catch(e){return [];}})(),
   lastFetch:0,seq:0};
 const LAB_SUBS=[["comparison","Comparison"],["detail","Strategy detail"],["compare","Compare (max 3)"],
-  ["trades","All trades"],["unattributed","Unattributed"],["reconciliation","Reconciliation"],["shortlist","Review shortlist"]];
+  ["trades","All trades"],["unattributed","Unattributed"],["reconciliation","Reconciliation"],["shortlist","Review shortlist"],
+  ["readiness","Multi-position readiness"]];
 const LAB_FILTERS=[["strategy","Strategy"],["symbol","Symbol"],["version","Version"],["regime","Regime"],
   ["direction","Direction"],["session","Session"],["exit_reason","Exit reason"],["cost_provenance","Cost provenance"],
   ["source_class","Source"]];
@@ -1282,7 +1309,13 @@ function labRender(){
   const y=window.scrollY;const frag=el("div",null,"lab");
   frag.appendChild(labControls());
   const s=LAB.summary;
-  if(!s){frag.appendChild(el("p",LAB.error?("Strategy Lab unavailable: "+LAB.error):"Loading Strategy Lab evidence…",LAB.error?"error":"empty"));}
+  if(LAB.sub==="readiness"){
+    const mp=data&&data.panels?data.panels.multi_position:null;
+    frag.appendChild(!mp?el("p","Waiting for the dashboard feed…","empty"):
+      (mp.status==="NO_DATA"||mp.status==="UNAVAILABLE")?el("p",fmt(mp.status)+": "+fmt(mp.detail),"empty"):
+      multiPositionPanel(mp));
+  }
+  else if(!s){frag.appendChild(el("p",LAB.error?("Strategy Lab unavailable: "+LAB.error):"Loading Strategy Lab evidence…",LAB.error?"error":"empty"));}
   else if(LAB.sub==="comparison")frag.appendChild(labComparison(s));
   else if(LAB.sub==="detail")frag.appendChild(labDetail());
   else if(LAB.sub==="compare")frag.appendChild(labCompare());
@@ -1290,7 +1323,7 @@ function labRender(){
   else if(LAB.sub==="unattributed")frag.appendChild(labTrades(true));
   else if(LAB.sub==="reconciliation")frag.appendChild(labReconciliation());
   else if(LAB.sub==="shortlist")frag.appendChild(labShortlist());
-  if(s&&!["trades","unattributed","detail"].includes(LAB.sub))frag.appendChild(labLifecycle());
+  if(s&&!["trades","unattributed","detail","readiness"].includes(LAB.sub))frag.appendChild(labLifecycle());
   frag.appendChild(el("div","Strategy Lab is review-only. It reads the local database; it cannot place, modify or close orders, "+
     "change risk, touch the kill switch, or activate, disable or promote any strategy.","footer"));
   root.replaceChildren(frag);window.scrollTo(0,y);

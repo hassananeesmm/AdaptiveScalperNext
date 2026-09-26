@@ -188,6 +188,19 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~ASN-016 [HIGH, runtime/symbols] A symbol whose market was closed at startup (quote stale / missing)
+  was excluded from `RuntimeEngine.symbols` for the whole life of the process and never re-admitted,
+  so a runtime started at the weekend could only ever trade BTCUSD, even after XAUUSD reopened.~~
+  Fixed 2026-09-26 (branch `fix/multi-position-readiness`): symbols that fail startup validation only on
+  the quote (`no_quote`/`invalid_quote`/`stale_quote`; identity and contract already passed) are held in
+  `awaiting_market` and re-validated every 60 s by the `symbol_admission` task; full re-validation plus a
+  server-clock check before admission; identity/spec failures stay excluded. `SYMBOL_ADMITTED` event,
+  `symbol_admission` runtime state. Deploys with the next controlled restart.
+- ~~ASN-017 [MEDIUM, risk] `max_open_positions` counted open positions only: a working (resting/partial/
+  UNKNOWN) order on a symbol with no open position was included in pending RISK but not in the position
+  COUNT, so with three enabled symbols a third exposure was possible.~~ Fixed 2026-09-26: such an order
+  takes a position slot; a PARTIAL order's remainder on its own position's symbol is counted once.
+  No effect with today's two enabled symbols (max 1 per symbol).
 - ~~ASN-013 [MEDIUM, dashboard evidence] Strategy Lab registry counted legacy non-runtime journal chains as
   runtime signals.~~ Fixed 2026-09-26: runtime `entry:` chains only; excluded count reported.
 - ~~ASN-014 [LOW, broker evidence] Adaptive-exit close requests were sent with magic 0.~~ Fixed in source
