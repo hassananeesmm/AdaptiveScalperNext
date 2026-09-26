@@ -293,6 +293,24 @@ def test_run_reconciliation_does_not_duplicate_incident_across_repeated_cycles(d
     assert incidents[0]["last_seen_at_utc"] == 6000
 
 
+def test_run_reconciliation_resolves_position_incident_after_finding_disappears(db):
+    gw = FakeGateway()
+    gw.inject_open_position(
+        PositionSnapshot("pos-orphan", "XAUUSDm", "BUY", 0.05, 2000.0, 1990.0, 2010.0, 0.0, 0, "")
+    )
+    run_reconciliation(db, gw, "recon-present", now_utc=5000)
+    assert len(get_unresolved_incidents(db)) == 1
+
+    gw.remove_open_position("pos-orphan")
+    report = run_reconciliation(db, gw, "recon-gone", now_utc=5100)
+
+    assert report.status == CLEAN
+    assert get_unresolved_incidents(db) == []
+    resolved = db.execute("SELECT resolved_at_utc, resolution FROM execution_incidents").fetchone()
+    assert resolved["resolved_at_utc"] == 5100
+    assert "latest broker reconciliation snapshot" in resolved["resolution"]
+
+
 def test_run_reconciliation_recovers_from_real_closing_deal(db):
     # broker_position_id must be numeric-string, matching a real MT5
     # ticket, since HistoricalDeal.position_id is compared against it.
@@ -540,6 +558,32 @@ def test_run_reconciliation_blocks_on_orphan_broker_order(db):
     assert any(f.finding_type == ORPHAN_BROKER_ORDER for f in report.order_findings)
     incidents = get_unresolved_incidents(db)
     assert len(incidents) == 1
+
+
+def test_run_reconciliation_resolves_order_incident_after_pending_order_disappears(db):
+    gw = FakeGateway()
+    gw.inject_pending_order(_pending())
+    run_reconciliation(db, gw, "recon-order-present", now_utc=5000)
+    assert len(get_unresolved_incidents(db)) == 1
+
+    gw.remove_pending_order("500")
+    report = run_reconciliation(db, gw, "recon-order-gone", now_utc=5100)
+
+    assert report.status == CLEAN
+    assert get_unresolved_incidents(db) == []
+
+
+def test_reconciliation_does_not_auto_resolve_unknown_or_unscoped_incidents(db):
+    record_incident(db, "UNKNOWN_OUTCOME", "still needs explicit recovery", now_utc=4900)
+    record_incident(
+        db, "RECONCILIATION_MISMATCH", "manual unscoped incident", dedup_key="manual:incident", now_utc=4900,
+    )
+
+    report = run_reconciliation(db, FakeGateway(), "recon-clean", now_utc=5000)
+
+    assert report.status == CLEAN
+    unresolved = get_unresolved_incidents(db)
+    assert {row["dedup_key"] for row in unresolved} == {None, "manual:incident"}
 
 
 def test_run_reconciliation_recovers_missing_local_order_as_cancelled(db):

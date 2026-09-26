@@ -393,6 +393,43 @@ def resolve_incident(conn: sqlite3.Connection, incident_id: int, resolution: str
     )
 
 
+_RECONCILIATION_INCIDENT_PREFIXES = (
+    f"{ORPHAN_BROKER_POSITION}:position:",
+    f"{MISSING_LOCAL_POSITION}:position:",
+    f"{RECONCILIATION_MISMATCH}:position:",
+    f"{ORPHAN_BROKER_ORDER}:order:",
+    f"{MISSING_LOCAL_ORDER}:order:",
+    f"{PENDING_MISMATCH}:order:",
+)
+
+
+def _resolve_absent_reconciliation_incidents(
+    conn: sqlite3.Connection, active_dedup_keys: set[str], *, now_utc: int
+) -> None:
+    """Close stable reconciliation incidents no longer present in broker truth.
+
+    UNKNOWN outcomes and one-off incidents are intentionally excluded.  Only
+    rows created by ``run_reconciliation`` with one of its stable namespaces
+    are eligible, and a still-observed key remains open.  Without this
+    lifecycle step, a transient/manual pending order leaves an incident open
+    forever even after later broker snapshots are clean.
+    """
+    unresolved = conn.execute(
+        "SELECT id, dedup_key FROM execution_incidents "
+        "WHERE resolved_at_utc IS NULL AND dedup_key IS NOT NULL"
+    ).fetchall()
+    for row in unresolved:
+        key = row["dedup_key"]
+        if key in active_dedup_keys or not key.startswith(_RECONCILIATION_INCIDENT_PREFIXES):
+            continue
+        resolve_incident(
+            conn,
+            row["id"],
+            "resolved automatically: finding absent from latest broker reconciliation snapshot",
+            now_utc=now_utc,
+        )
+
+
 def has_dangerous_unresolved_unknown(conn: sqlite3.Connection) -> bool:
     """Directive section 30: "A dangerous unresolved UNKNOWN may block
     new entries." Any unresolved `UNKNOWN_OUTCOME` incident counts —
@@ -671,6 +708,13 @@ def run_reconciliation(
             f"[{f.finding_type}] {f.detail}", order_id=order_id,
             dedup_key=f"{f.finding_type}:order:{f.broker_position_id}", now_utc=now,
         )
+
+    active_incident_keys = {
+        f"{f.finding_type}:position:{f.broker_position_id}" for f in blocking_findings
+    } | {
+        f"{f.finding_type}:order:{f.broker_position_id}" for f in blocking_order_findings
+    }
+    _resolve_absent_reconciliation_incidents(conn, active_incident_keys, now_utc=now)
 
     if blocking_findings or blocking_order_findings:
         status = BLOCKING_MISMATCH

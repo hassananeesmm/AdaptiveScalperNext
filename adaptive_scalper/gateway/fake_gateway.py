@@ -285,6 +285,10 @@ class FakeGateway:
     def inject_pending_order(self, order: PendingOrderSnapshot) -> None:
         self._pending_orders[order.broker_order_id] = order
 
+    def remove_pending_order(self, broker_order_id: str) -> None:
+        """Simulate a broker-side cancellation/fill of a resting order."""
+        self._pending_orders.pop(broker_order_id, None)
+
     def remove_open_position(self, broker_position_id: str) -> None:
         """Simulate the broker closing a position outside this module's
         knowledge (SL/TP/manual) — for reconciliation tests."""
