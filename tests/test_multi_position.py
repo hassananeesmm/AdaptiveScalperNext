@@ -260,6 +260,35 @@ def test_a_rejected_order_on_one_symbol_leaves_the_other_symbol_intact(tmp_path)
     assert _open_symbols(conn) == ["BTCUSD"]
 
 
+def test_an_unresolved_unknown_order_on_one_symbol_blocks_new_entries_everywhere(tmp_path):
+    """Directive section 30 policy is global: while an UNKNOWN outcome on
+    XAUUSD is unresolved, duplicate exposure is unproven, so a BTCUSD
+    proposal must not reach the broker either."""
+    from adaptive_scalper.gateway.retcodes import TIMEOUT
+
+    engine, conn, gateway, clock, stub = _start(tmp_path)
+
+    def time_out_gold(gw, default, request):
+        if request.symbol == "XAUUSD":
+            return OrderSendResult(retcode=TIMEOUT, comment="timeout", broker_order_id=None, broker_deal_id=None,
+                                   broker_position_id=None, volume_filled=0.0, price_filled=None, raw={})
+        return default(request)
+
+    gateway.on("order_send", time_out_gold)
+    stub.fire = {"XAUUSD": "BUY"}
+    step(engine, clock, seconds=STEP, tick=4)
+    unresolved = conn.execute("SELECT COUNT(*) FROM execution_incidents WHERE incident_type = 'UNKNOWN_OUTCOME' "
+                              "AND resolved_at_utc IS NULL").fetchone()[0]
+    assert unresolved == 1
+    sent_before = conn.execute("SELECT COUNT(*) FROM orders WHERE canonical_symbol = 'BTCUSD'").fetchone()[0]
+    stub.fire = {"BTCUSD": "SELL"}
+    step(engine, clock, seconds=STEP, tick=4)
+    assert "BTCUSD" not in _broker_symbols(gateway)
+    assert conn.execute("SELECT COUNT(*) FROM orders WHERE canonical_symbol = 'BTCUSD' AND broker_order_id IS NOT NULL"
+                        ).fetchone()[0] == sent_before == 0
+    assert get_state(conn, "why_no_trade")["global_block"]["decision"] == "BLOCK_UNKNOWN_ORDER"
+
+
 # ---------------------------------------------------------------------------
 # attribution across interleaved executions
 # ---------------------------------------------------------------------------
@@ -283,6 +312,53 @@ def test_interleaved_positions_keep_their_own_strategy_chain_and_broker_ids(tmp_
         assert r["chain_key"] == r["ctx_chain"] and r["canonical_symbol"] in r["chain_key"]
         assert r["chain_key"].endswith(r["strategy_key"])
     assert rows[0]["broker_position_id"] != rows[1]["broker_position_id"]
+
+
+def test_interleaved_exits_keep_each_exit_deal_with_its_own_position_and_strategy(tmp_path):
+    """XAUUSD (strategy A) opens, then BTCUSD (strategy B); B's setup lapses
+    first, so BTCUSD exits while XAUUSD is still open, then XAUUSD exits.
+    Every exit deal must land on its own position and Strategy Lab must
+    attribute each completed trade to its own strategy."""
+    from adaptive_scalper.dashboard import strategy_lab as sl
+
+    engine, conn, gateway, clock, stub = _start(tmp_path)
+    other = StubStrategy("multi_position_stub_b")
+    engine.demo.registry = StubRegistry(stub, other)
+    stub.fire = {"XAUUSD": "BUY"}
+    step(engine, clock, seconds=STEP, tick=4)
+    other.fire = {"BTCUSD": "SELL"}
+    step(engine, clock, seconds=STEP, tick=4)
+    assert _broker_symbols(gateway) == ["BTCUSD", "XAUUSD"]
+    ids = {r["canonical_symbol"]: r["broker_position_id"]
+           for r in conn.execute("SELECT canonical_symbol, broker_position_id FROM positions")}
+
+    other.fire = {}  # BTCUSD's thesis lapses; XAUUSD's still holds until its own max holding time
+    for _ in range(4):
+        step(engine, clock, seconds=STEP, tick=4)
+        if not _broker_symbols(gateway):
+            break
+    assert _broker_symbols(gateway) == [] and _open_symbols(conn) == []
+
+    exits = conn.execute(
+        "SELECT d.broker_position_id, p.canonical_symbol, d.occurred_at_utc FROM deals d "
+        "JOIN positions p ON p.broker_position_id = d.broker_position_id WHERE d.entry_type = 'OUT' "
+        "ORDER BY d.occurred_at_utc, d.id").fetchall()
+    assert [(r["canonical_symbol"], r["broker_position_id"]) for r in exits] == [
+        ("BTCUSD", ids["BTCUSD"]), ("XAUUSD", ids["XAUUSD"])]
+    assert exits[0]["occurred_at_utc"] < exits[1]["occurred_at_utc"]  # BTCUSD exited while XAUUSD was open
+    closed = conn.execute(
+        "SELECT canonical_symbol, strategy_key, broker_position_id FROM journal_events "
+        "WHERE event_type = 'POSITION_CLOSED' ORDER BY id").fetchall()
+    assert [tuple(r) for r in closed] == [("BTCUSD", "multi_position_stub_b", ids["BTCUSD"]),
+                                          ("XAUUSD", "multi_position_stub", ids["XAUUSD"])]
+
+    sl.reset_cache()
+    ledger = sl.build_demo_ledger(conn)
+    by_id = {t["trade_id"]: t for t in ledger["trades"]}
+    for symbol, strategy in (("XAUUSD", "multi_position_stub"), ("BTCUSD", "multi_position_stub_b")):
+        t = by_id[ids[symbol]]
+        assert t["status"] == "CLOSED" and t["source_class"] == sl.ATTRIBUTED, t
+        assert t["strategy_key"] == strategy and t["exit_deal_count"] == 1 and t["entry_deal_count"] == 1
 
 
 # ---------------------------------------------------------------------------

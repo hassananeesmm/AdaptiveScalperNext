@@ -186,6 +186,14 @@ delete) once fixed, with the fixing commit/date noted.
    executed; LOCAL_MT5_HANDOFF.md step G / docs/WINDOWS_DEPLOYMENT.md list
    the one-time manual checks.
 
+26. [SEVERITY: LOW, SUBSYSTEM: CLI/diagnostics] `why-no-trade` lists every uncleared BLOCKED
+   `runtime_events` row regardless of mode. A PAPER run that stopped while blocked left
+   `paper:global_block` ("BLOCK_KILL_SWITCH: kill switch ENGAGED", last seen 2026-09-25 18:26 UTC) open
+   forever, so the DEMO operator sees a kill-switch block while the switch is DISENGAGED. Diagnostics only:
+   entry decisions and the MULTI-POSITION READINESS panel use the current cycle's `global_block`, not this
+   row. Fix by clearing a mode's `*:global_block` on runtime shutdown/startup, or by scoping the CLI list to
+   the running mode's key.
+
 ## Fixed
 
 - ~~ASN-016 [HIGH, runtime/symbols] A symbol whose market was closed at startup (quote stale / missing)

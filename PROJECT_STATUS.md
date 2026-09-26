@@ -45,8 +45,9 @@ supported two symbols (broker deals prove a 56 s XAUUSD+BTCUSD overlap on 2026-0
 the bot is single-symbol because XAUUSD's market is closed and GBPJPY is disabled -- expected. Fixed on this
 branch (TESTED-FAKE, not deployed): ASN-016 a symbol closed at startup was never re-admitted (the running
 process will NOT trade XAUUSD after Monday's open until restarted with this fix); ASN-017 working orders on
-another symbol now take a max_open_positions slot. New dashboard panel MULTI-POSITION READINESS. Full suite
-1585 passed, 9 skipped. Live two-symbol DEMO verification: PENDING (market closed). Deployment: controlled
+another symbol now take a max_open_positions slot. New dashboard panel MULTI-POSITION READINESS. Re-verified
+2026-09-27 01:30 GMT+4: same diagnosis on 24 h of fresh evidence; added interleaved-exit attribution and
+cross-symbol UNKNOWN-block tests (no new defect). Full suite 1587 passed, 9 skipped. Live two-symbol DEMO verification: PENDING (market closed). Deployment: controlled
 flat restart, operator approval required.
 
 ## Current phase (2026-09-26 evening, branch `feature/strategy-lab-attribution`, release 0.2.0)

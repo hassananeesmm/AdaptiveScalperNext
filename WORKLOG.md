@@ -2507,3 +2507,21 @@ check or order send occurred.
 - Live check (~21:15 GMT+4): runtime RUNNING DEMO, broker 0 positions / 0 orders, balance = equity 9,661.62,
   reconciliation CLEAN, 0 unresolved incidents. Live two-symbol verification PENDING: XAUUSD market closed
   (Saturday). Deployment of the fix requires a controlled flat restart with operator approval.
+
+## Session: Multiple simultaneous trades — re-verification (2026-09-27, 01:25-01:50 GMT+4)
+
+- Pre-work (read-only): DEMO runtime PIDs 25288/10512 and dashboard 14524/27832 still running from the main
+  checkout at `7f604ab` (0.2.0), schema 29. Kill switch DISENGAGED, reconciliation CLEAN, heartbeat fresh,
+  broker/local 0 open positions, 0 working orders, 0 unresolved incidents, balance = equity 9,622.52.
+  Startup excluded XAUUSD (`stale_quote`, market closed); running symbols = BTCUSD only. Runtime untouched.
+- Fresh 24 h evidence (to 21:29 UTC 2026-09-26): 36 BTCUSD fills, 0 XAUUSD/GBPJPY decisions (no market / not
+  enabled), 0 correlation, aggregate-risk, portfolio or max-position blocks ever recorded in DEMO. Diagnosis
+  unchanged: single-position behaviour is expected; ASN-016/017 fixes remain the only defects.
+- Checked: ~40 `PROPOSED` orders (final-permission blocks, never sent) have no broker id and are excluded from
+  slot counting, exposure and the same-symbol check -- not a blocker.
+- Found (diagnostics only, not fixed): backlog #26, a stale `paper:global_block` event makes `why-no-trade`
+  report "kill switch ENGAGED" while DISENGAGED.
+- Tests added: interleaved exits across XAUUSD/BTCUSD keep each exit deal, POSITION_CLOSED event and Strategy
+  Lab attribution on their own position/strategy; an unresolved UNKNOWN on XAUUSD blocks a BTCUSD entry
+  (global policy, directive §30). Both passed first time (no defect). Readiness panel rendered against a
+  scratch copy of the live DB. Full suite 1587 passed, 9 skipped.
