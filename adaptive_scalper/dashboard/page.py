@@ -192,17 +192,25 @@ const GROUPS = [
    panels:["performance","research","learning","memory","knowledge","history"]},
   {id:"system",label:"System",desc:"Component status, runtime events, data freshness and broker status.",
    panels:["overview","components","market","events","history"]},
+  {id:"strategy_lab",label:"Strategy Lab",desc:"Strategy registry, live evaluations, DEMO/PAPER/BACKTEST "+
+   "performance comparison and broker-verified trade attribution. Review-only: no strategy activation, "+
+   "auto-promotion or risk change is exposed here.",
+   panels:["strategy_registry","strategy_activity","strategy_performance","strategy_attribution"]},
   {id:"all",label:"All panels",desc:"Every implemented dashboard panel.",
    panels:["overview","market","performance","components","symbols","positions","orders","decisions",
-           "risk","news","events","costs","research","learning","memory","knowledge","history"]}
+           "risk","news","events","costs","research","learning","memory","knowledge","history",
+           "strategy_registry","strategy_activity","strategy_performance","strategy_attribution"]}
 ];
-const WIDE = new Set(["market","positions","orders","performance","decisions","events","history"]);
+const WIDE = new Set(["market","positions","orders","performance","decisions","events","history",
+  "strategy_registry","strategy_activity","strategy_performance","strategy_attribution"]);
 const FRIENDLY = {
   overview:"System overview",market:"Live market & account",performance:"Observed performance",
   components:"Components",symbols:"Symbol resolution",positions:"Positions",orders:"Orders & reconciliation",
   decisions:"Decisions & reasons",risk:"Risk evidence",news:"Economic news",events:"Incidents & events",
   costs:"Execution costs",research:"Research history",learning:"Model observer",
-  memory:"RAG memory",knowledge:"Knowledge bundle",history:"Historical coverage"
+  memory:"RAG memory",knowledge:"Knowledge bundle",history:"Historical coverage",
+  strategy_registry:"Strategy overview",strategy_activity:"Live strategy activity",
+  strategy_performance:"Performance comparison",strategy_attribution:"Broker-verified attribution"
 };
 const el = (tag, text, cls) => {
   const n=document.createElement(tag);
@@ -326,12 +334,264 @@ function performancePanel(panel){
   wrap.appendChild(el("div","Research outcomes and simulated fills are not evidence of a validated trading edge.","safeguard"));
   return wrap;
 }
+function round2(n){return Math.round((n+Number.EPSILON)*100)/100;}
+function csv(rows){
+  if(!rows.length)return "";
+  const cols=Array.from(new Set(rows.flatMap(r=>Object.keys(r))));
+  const esc=v=>{const s=v===null||v===undefined?"":String(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+  return [cols.join(","),...rows.map(r=>cols.map(c=>esc(r[c])).join(","))].join("\n");
+}
+function downloadText(filename,text,mime){
+  const blob=new Blob([text],{type:mime||"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=filename;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function stratRegistryPanel(panel){
+  const wrap=el("div");
+  wrap.appendChild(el("p","Source-verified from the live strategy registry ("+
+    fmt(panel.window_days)+"-day evidence window). A PROPOSED strategy has not been executed.","tiny"));
+  const wkey="counts_last_"+panel.window_days+"d";
+  const summary=(panel.strategies||[]).map(s=>({
+    strategy_key:s.strategy_key,status:s.registration_status,stage:s.lifecycle_stage,version:s.version,
+    signals:(s[wkey]||{}).signals_created??0,rejected:(s[wkey]||{}).signals_rejected??0,
+    selected:(s[wkey]||{}).proposals_selected??0,allowed:(s[wkey]||{}).entries_allowed??0,
+    blocked:(s[wkey]||{}).entries_blocked??0,
+    last_signal:s.last_genuine_signal?time(s.last_genuine_signal.event_timestamp_utc):"—",
+    last_position:s.last_position?(s.last_position.status+" "+s.last_position.canonical_symbol+" "+s.last_position.direction):"—"
+  }));
+  wrap.appendChild(table(summary));
+  wrap.appendChild(el("div","Per-strategy detail (source-verified entry conditions, regimes, stop/target logic and default parameters)","mini-title"));
+  (panel.strategies||[]).forEach(s=>{
+    const d=el("details");
+    d.appendChild(el("summary",s.strategy_key+" — v"+fmt(s.version)+" · "+s.registration_status+" · "+s.lifecycle_stage));
+    const body=el("div",null,"nested");
+    if(s.source_description)body.appendChild(el("p",s.source_description));
+    if(s.default_parameters){
+      body.appendChild(el("div","Default parameters (stop/target/confidence/duration logic lives here)","mini-title"));
+      body.appendChild(render(s.default_parameters,1));
+    }
+    body.appendChild(el("div","Latest recorded evidence","mini-title"));
+    body.appendChild(render({
+      last_genuine_signal:s.last_genuine_signal,last_selection:s.last_selection,
+      last_entry_allowed:s.last_entry_allowed,last_entry_blocked:s.last_entry_blocked,
+      last_position:s.last_position
+    },1));
+    d.appendChild(body);wrap.appendChild(d);
+  });
+  return wrap;
+}
+function stratActivityPanel(panel){
+  const wrap=el("div");const rows=panel.recent_evaluations||[];
+  wrap.appendChild(el("p","Latest "+rows.length+" recorded entry decisions, real database evidence only ("+
+    "entry_decisions). The reason shown is the complete recorded explanation.","tiny"));
+  const flat=rows.map(r=>({
+    decided_at_utc:r.decided_at_utc,mode:r.mode,symbol:r.canonical_symbol,bar_time_utc:r.bar_time_utc,
+    strategy_key:r.strategy_key,direction:r.direction,stage:r.stage,decision:r.decision,reason:r.reason
+  }));
+  wrap.appendChild(table(flat));
+  return wrap;
+}
+function stratAttributionPanel(panel){
+  const wrap=el("div");const rows=panel.attributed_positions||[];
+  wrap.appendChild(el("p",fmt(rows.length)+" broker-verified DEMO position(s), each deal summed exactly once. "+
+    "Partial fills and multiple closing deals are accounted for, never guessed.","tiny"));
+  wrap.appendChild(table(rows.map(r=>({
+    broker_position_id:r.broker_position_id,symbol:r.canonical_symbol,strategy_key:r.strategy_key,
+    direction:r.direction,volume:r.volume,status:r.status,deal_count:r.deal_count,
+    partial_fill_or_multi_close:r.partial_fill_or_multi_close,gross_pnl:money(r.gross_pnl),
+    costs:money(r.costs),net_pnl:money(r.net_pnl),opened_at_utc:r.opened_at_utc,closed_at_utc:r.closed_at_utc
+  }))));
+  wrap.appendChild(el("div","Trade drilldown (broker order/deal references, prices, timestamps, costs)","mini-title"));
+  rows.forEach(r=>{
+    const d=el("details");
+    d.appendChild(el("summary",fmt(r.canonical_symbol)+" "+fmt(r.direction)+" · position "+fmt(r.broker_position_id)+
+      " · "+fmt(r.strategy_key)));
+    const body=el("div",null,"nested");body.appendChild(table(r.deals||[]));
+    d.appendChild(body);wrap.appendChild(d);
+  });
+  const un=panel.unattributed_deals||[];
+  wrap.appendChild(el("div","UNATTRIBUTED broker deals ("+fmt(un.length)+") — no matching local position; never guessed onto a strategy","mini-title"));
+  wrap.appendChild(table(un));
+  return wrap;
+}
+const STRAT_PERF_STATE={tab:"demo",filters:{strategy:"",symbol:"",direction:"",regime:"",version:"",provenance:""},
+  from:"",to:"",shortlist:(()=>{try{return JSON.parse(localStorage.getItem("asn-strategy-shortlist")||"[]");}
+  catch(e){return [];}})()};
+function normTrade(tab,t){
+  if(tab==="demo")return{strategy_key:t.strategy_key,symbol:t.canonical_symbol,direction:t.direction,
+    regime:null,version:null,provenance:null,net:t.net_pnl,gross:t.gross_pnl,cost:-(t.costs||0),
+    entry_time:t.opened_at_utc,exit_time:t.closed_at_utc,realized_r:null,exit_reason:null,raw:t};
+  return{strategy_key:t.strategy_key,symbol:t.canonical_symbol,direction:t.direction,
+    regime:t.exit_regime||t.entry_regime,version:t.strategy_version,provenance:t.cost_provenance,
+    net:t.realized_pnl,gross:t.gross_pnl,cost:t.total_cost,entry_time:t.entry_time_utc,exit_time:t.exit_time_utc,
+    realized_r:t.realized_r,exit_reason:t.exit_reason,raw:t};
+}
+function aggregateTrades(rows){
+  const groups={};rows.forEach(r=>{(groups[r.strategy_key||"UNKNOWN"]=groups[r.strategy_key||"UNKNOWN"]||[]).push(r);});
+  return Object.entries(groups).map(([key,trs])=>{
+    const sorted=trs.slice().sort((a,b)=>(a.exit_time||0)-(b.exit_time||0));
+    const net=sorted.map(t=>t.net||0);
+    const wins=net.filter(x=>x>1e-9).length,losses=net.filter(x=>x<-1e-9).length;
+    const grossProfit=net.filter(x=>x>0).reduce((a,b)=>a+b,0);
+    const grossLoss=Math.abs(net.filter(x=>x<0).reduce((a,b)=>a+b,0));
+    let running=0,peak=0,maxDD=0;net.forEach(x=>{running+=x;peak=Math.max(peak,running);maxDD=Math.max(maxDD,peak-running);});
+    const rVals=sorted.map(t=>t.realized_r).filter(x=>typeof x==="number");
+    const holds=sorted.map(t=>(typeof t.entry_time==="number"&&typeof t.exit_time==="number")?t.exit_time-t.entry_time:null)
+      .filter(x=>x!==null);
+    return{strategy_key:key,sample_size:sorted.length,wins,losses,breakeven:sorted.length-wins-losses,
+      gross_pnl:round2(sorted.reduce((a,t)=>a+(t.gross||0),0)),cost:round2(sorted.reduce((a,t)=>a+(t.cost||0),0)),
+      net_pnl:round2(net.reduce((a,b)=>a+b,0)),
+      win_rate:sorted.length?round2(100*wins/sorted.length):null,
+      profit_factor:grossLoss>0?round2(grossProfit/grossLoss):(grossProfit>0?Infinity:null),
+      avg_r:rVals.length?round2(rVals.reduce((a,b)=>a+b,0)/rVals.length):null,
+      total_r:rVals.length?round2(rVals.reduce((a,b)=>a+b,0)):null,
+      avg_holding_seconds:holds.length?Math.round(holds.reduce((a,b)=>a+b,0)/holds.length):null,
+      max_drawdown:sorted.length?round2(maxDD):null,trades:sorted};
+  }).sort((a,b)=>b.sample_size-a.sample_size);
+}
+function stratPerformancePanel(panel){
+  const wrap=el("div");const S=STRAT_PERF_STATE;
+  const tabsRow=el("div",null,"toolbar");
+  ["demo","paper","backtest"].forEach(t=>{
+    const b=el("button",t.toUpperCase());b.type="button";b.className="secondary-button";
+    if(S.tab===t)b.style.borderColor="var(--accent)";
+    b.addEventListener("click",()=>{S.tab=t;lastContent["strategy_performance"]=null;paint(data);});
+    tabsRow.appendChild(b);
+  });
+  wrap.appendChild(tabsRow);
+  const allRows=(panel[S.tab+(S.tab==="demo"?"_closed_trades":"_trades")]||[]).map(t=>normTrade(S.tab,t));
+  wrap.appendChild(el("p","Evidence source: "+S.tab.toUpperCase()+" · "+allRows.length+
+    " row(s) shipped for this tab. DEMO, PAPER and BACKTEST are never pooled.","tiny"));
+  const distinct=(f)=>Array.from(new Set(allRows.map(f).filter(v=>v!==null&&v!==undefined&&v!==""))).sort();
+  const filterRow=el("div",null,"toolbar");
+  const makeSelect=(label,key,options)=>{
+    const s=el("select");const allOpt=el("option","All "+label);allOpt.value="";s.appendChild(allOpt);
+    options.forEach(o=>{const opt=el("option",String(o));opt.value=String(o);s.appendChild(opt);});
+    s.value=S.filters[key]||"";
+    s.addEventListener("change",()=>{S.filters[key]=s.value;lastContent["strategy_performance"]=null;paint(data);});
+    filterRow.appendChild(s);return s;
+  };
+  makeSelect("strategies","strategy",distinct(r=>r.strategy_key));
+  makeSelect("symbols","symbol",distinct(r=>r.symbol));
+  makeSelect("directions","direction",distinct(r=>r.direction));
+  makeSelect("regimes","regime",distinct(r=>r.regime));
+  makeSelect("versions","version",distinct(r=>r.version));
+  makeSelect("provenance","provenance",distinct(r=>r.provenance));
+  const fromInput=el("input");fromInput.type="date";fromInput.value=S.from;
+  fromInput.addEventListener("change",()=>{S.from=fromInput.value;lastContent["strategy_performance"]=null;paint(data);});
+  const toInput=el("input");toInput.type="date";toInput.value=S.to;
+  toInput.addEventListener("change",()=>{S.to=toInput.value;lastContent["strategy_performance"]=null;paint(data);});
+  filterRow.appendChild(fromInput);filterRow.appendChild(toInput);
+  wrap.appendChild(filterRow);
+  const fromTs=S.from?Date.parse(S.from)/1000:null,toTs=S.to?Date.parse(S.to)/1000+86400:null;
+  const filtered=allRows.filter(r=>
+    (!S.filters.strategy||r.strategy_key===S.filters.strategy)&&
+    (!S.filters.symbol||r.symbol===S.filters.symbol)&&
+    (!S.filters.direction||r.direction===S.filters.direction)&&
+    (!S.filters.regime||r.regime===S.filters.regime)&&
+    (!S.filters.version||String(r.version)===S.filters.version)&&
+    (!S.filters.provenance||r.provenance===S.filters.provenance)&&
+    (fromTs===null||(r.exit_time||0)>=fromTs)&&(toTs===null||(r.exit_time||0)<toTs)
+  );
+  const agg=aggregateTrades(filtered);
+  if(!agg.length){wrap.appendChild(el("p","No trades match the current filters for this tab.","empty"));return wrap;}
+  const table1=el("div",null,"table-scroll");const t1=el("table");
+  const head=el("thead");const hr=el("tr");
+  ["Compare","Strategy","N","Wins","Losses","BE","Win rate","Profit factor","Gross P&L","Costs","Net P&L",
+    "Avg R","Total R","Avg hold","Max DD"].forEach(h=>hr.appendChild(el("th",h)));
+  head.appendChild(hr);t1.appendChild(head);const body=el("tbody");
+  agg.forEach(a=>{
+    const tr=el("tr");
+    const cb=document.createElement("input");cb.type="checkbox";
+    const shortlistKey=S.tab+":"+a.strategy_key;
+    cb.checked=S.shortlist.includes(shortlistKey);
+    cb.addEventListener("change",()=>{
+      if(cb.checked){
+        if(S.shortlist.length>=3){cb.checked=false;return;}
+        S.shortlist.push(shortlistKey);
+      }else{S.shortlist=S.shortlist.filter(k=>k!==shortlistKey);}
+      try{localStorage.setItem("asn-strategy-shortlist",JSON.stringify(S.shortlist));}catch(e){}
+      lastContent["strategy_performance"]=null;paint(data);
+    });
+    const cbTd=el("td");cbTd.appendChild(cb);tr.appendChild(cbTd);
+    [a.strategy_key,a.sample_size,a.wins,a.losses,a.breakeven,
+      a.win_rate===null?"—":a.win_rate+"%",a.profit_factor===null?"—":fmt(a.profit_factor),
+      money(a.gross_pnl),money(a.cost),money(a.net_pnl),
+      a.avg_r===null?"—":fmt(a.avg_r),a.total_r===null?"—":fmt(a.total_r),
+      a.avg_holding_seconds===null?"—":Math.round(a.avg_holding_seconds/60)+" min",
+      a.max_drawdown===null?"—":money(a.max_drawdown)
+    ].forEach(v=>tr.appendChild(el("td",String(v))));
+    body.appendChild(tr);
+  });
+  t1.appendChild(body);table1.appendChild(t1);wrap.appendChild(table1);
+  wrap.appendChild(el("p","Sample size (N) is shown for every row. Max drawdown is computed only from the "+
+    "currently filtered, chronologically-ordered trade sequence for that strategy.","safeguard"));
+  wrap.appendChild(el("div","Per-strategy cumulative realized net P&L","mini-title"));
+  agg.slice(0,6).forEach(a=>{
+    wrap.appendChild(el("p",a.strategy_key,"tiny"));
+    const chart=el("div",null,"bars");let running=0;const maxAbs=Math.max(0.01,...a.trades.map(t=>{running+=(t.net||0);return Math.abs(running);}));
+    running=0;
+    a.trades.forEach((t,i)=>{
+      running+=(t.net||0);
+      const col=el("div",null,"bar-col");col.title="Trade "+(i+1)+": cumulative "+money(round2(running));
+      const bar=el("div",null,"bar"+(running<0?" negative":""));
+      bar.style.height=String(Math.max(2,Math.round(Math.abs(running)/maxAbs*75)))+"px";
+      col.appendChild(bar);chart.appendChild(col);
+    });
+    wrap.appendChild(chart);
+  });
+  wrap.appendChild(el("div","Gross P&L vs execution costs (filtered set, per strategy)","mini-title"));
+  wrap.appendChild(table(agg.map(a=>({strategy_key:a.strategy_key,gross_pnl:money(a.gross_pnl),
+    costs:money(a.cost),net_pnl:money(a.net_pnl)}))));
+  const bySymbol={},byRegime={};
+  filtered.forEach(r=>{
+    bySymbol[r.symbol]=(bySymbol[r.symbol]||0)+(r.net||0);
+    const rg=r.regime||"UNKNOWN";byRegime[rg]=(byRegime[rg]||0)+(r.net||0);
+  });
+  wrap.appendChild(el("div","Results by symbol (filtered set)","mini-title"));
+  wrap.appendChild(table(Object.entries(bySymbol).map(([symbol,net])=>({symbol,net_pnl:money(round2(net))}))));
+  wrap.appendChild(el("div","Results by regime (filtered set)","mini-title"));
+  wrap.appendChild(table(Object.entries(byRegime).map(([regime,net])=>({regime,net_pnl:money(round2(net))}))));
+  const byDay={};filtered.forEach(r=>{if(!r.exit_time)return;const day=new Date(r.exit_time*1000).toISOString().slice(0,10);
+    byDay[day]=(byDay[day]||0)+1;});
+  wrap.appendChild(el("div","Trade frequency over time (filtered set)","mini-title"));
+  wrap.appendChild(table(Object.entries(byDay).sort().map(([day,n])=>({day,trade_count:n}))));
+  if(S.shortlist.length){
+    wrap.appendChild(el("div","Human strategy review — shortlist (up to 3, review-only, no auto-activation)","mini-title"));
+    const shortlisted=S.shortlist.map(k=>{
+      const [tab,key]=k.split(":");
+      const a2=tab===S.tab?agg.find(x=>x.strategy_key===key):null;
+      return a2?{...a2,tab}:{strategy_key:key,tab,sample_size:"—",note:"switch to the "+tab.toUpperCase()+" tab to see this strategy's current figures"};
+    });
+    wrap.appendChild(table(shortlisted.map(a=>({tab:a.tab,strategy_key:a.strategy_key,sample_size:a.sample_size,
+      win_rate:a.win_rate!==undefined?a.win_rate:"—",net_pnl:a.net_pnl!==undefined?money(a.net_pnl):"—",
+      profit_factor:a.profit_factor!==undefined?fmt(a.profit_factor):"—"}))));
+    const exportBtn=el("button","Export shortlist (JSON)");exportBtn.type="button";exportBtn.className="secondary-button";
+    exportBtn.addEventListener("click",()=>downloadText("strategy-shortlist-"+S.tab+".json",JSON.stringify(shortlisted,null,2)));
+    const exportCsv=el("button","Export shortlist (CSV)");exportCsv.type="button";exportCsv.className="secondary-button";
+    exportCsv.addEventListener("click",()=>downloadText("strategy-shortlist-"+S.tab+".csv",
+      csv(shortlisted.map(a=>({tab:a.tab,strategy_key:a.strategy_key,sample_size:a.sample_size,
+        win_rate:a.win_rate,net_pnl:a.net_pnl,profit_factor:a.profit_factor}))),"text/csv"));
+    const btnRow=el("div",null,"toolbar");btnRow.appendChild(exportBtn);btnRow.appendChild(exportCsv);
+    wrap.appendChild(btnRow);
+  }else{
+    wrap.appendChild(el("p","Check up to 3 \"Compare\" boxes above to build a review-only shortlist you can export.","empty"));
+  }
+  wrap.appendChild(el("div","Backtest results are historical evaluations, never current DEMO results. This "+
+    "view cannot activate, promote or reconfigure a strategy — any change requires a reviewed code/config "+
+    "change, tests and an operator-approved deployment.","safeguard"));
+  return wrap;
+}
 function panelBody(name,raw){
   const p=raw||{};
   if(p.status==="UNAVAILABLE"||p.status==="NO_DATA")
     return el("p",fmt(p.status)+": "+fmt(p.detail),p.status==="UNAVAILABLE"?"error":"empty");
   if(name==="market")return marketPanel(p);
   if(name==="performance")return performancePanel(p);
+  if(name==="strategy_registry")return stratRegistryPanel(p);
+  if(name==="strategy_activity")return stratActivityPanel(p);
+  if(name==="strategy_attribution")return stratAttributionPanel(p);
+  if(name==="strategy_performance")return stratPerformancePanel(p);
   const copy=Object.assign({},p);delete copy.status;return render(copy,0);
 }
 let current="overview",data=null,feedState="CONNECTING",pollHandle=null,polling=false,ws=null,retry=null;

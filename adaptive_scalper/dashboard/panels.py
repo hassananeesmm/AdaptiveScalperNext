@@ -289,11 +289,258 @@ def performance(conn: sqlite3.Connection, now: int) -> dict:
     }
 
 
+_STRATEGY_FUNNEL_EVENT_TYPES = (
+    "SIGNAL_CREATED", "SIGNAL_REJECTED", "PROPOSAL_CREATED", "ENTRY_ALLOWED", "ENTRY_BLOCKED",
+)
+# Strategy Lab lookback for funnel counts and "last genuine X" evidence -- bounded so a
+# strategy that stopped firing months ago does not force an unbounded historical scan.
+_STRATEGY_LAB_WINDOW_SECONDS = 30 * 86400
+
+
+def _strategy_source_metadata() -> dict[str, dict]:
+    """Introspects the LIVE strategy classes directly (never a hand-copied
+    description that could drift from the code): module docstring, class
+    name, and the strategy's own constructor defaults, which is where every
+    active strategy's stop/target ATR multiples, confidence floor, etc.
+    actually live (see e.g. `MicrostructureAccelerationStrategy.__init__`)."""
+    import inspect
+
+    from adaptive_scalper.strategies import build_active_registry
+
+    metadata: dict[str, dict] = {}
+    for strategy in build_active_registry().all_active():
+        cls = type(strategy)
+        module = inspect.getmodule(cls)
+        doc = " ".join((module.__doc__ or "").split()) if module else ""
+        sig = inspect.signature(cls.__init__)
+        defaults = {
+            name: param.default for name, param in sig.parameters.items()
+            if name != "self" and param.default is not inspect.Parameter.empty
+        }
+        metadata[strategy.key] = {
+            "version": strategy.version,
+            "class_name": cls.__name__,
+            "source_module": module.__name__ if module else None,
+            "source_description": doc,
+            "default_parameters": defaults,
+        }
+    return metadata
+
+
+def _latest_journal_event(conn: sqlite3.Connection, event_type: str, strategy_key: str) -> dict | None:
+    row = conn.execute(
+        "SELECT event_timestamp_utc, canonical_symbol, payload_json FROM journal_events "
+        "WHERE event_type = ? AND strategy_key = ? ORDER BY event_timestamp_utc DESC LIMIT 1",
+        (event_type, strategy_key),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "event_timestamp_utc": row["event_timestamp_utc"], "canonical_symbol": row["canonical_symbol"],
+        "payload": json.loads(row["payload_json"]) if row["payload_json"] else None,
+    }
+
+
+def _latest_position_for_strategy(conn: sqlite3.Connection, strategy_key: str) -> dict | None:
+    row = conn.execute(
+        "SELECT broker_position_id, canonical_symbol, direction, volume, entry_price, status, "
+        "opened_at_utc, closed_at_utc FROM positions WHERE strategy_key = ? "
+        "ORDER BY opened_at_utc DESC LIMIT 1",
+        (strategy_key,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def strategy_registry(conn: sqlite3.Connection, now: int) -> dict:
+    """Strategy Lab: the actual registered/retired strategy set (directive
+    sections 8, 90, 121), source-verified entry logic and parameters, and
+    real evidence of what each one has genuinely done. A strategy is never
+    labelled executed merely because it proposed -- SIGNAL/PROPOSAL/ALLOWED
+    counts, the latest broker-verified position, and its current lifecycle
+    stage are reported as separate, independently-evidenced fields."""
+    source = _strategy_source_metadata()
+    window_start = now - _STRATEGY_LAB_WINDOW_SECONDS
+    placeholders = ",".join("?" * len(_STRATEGY_FUNNEL_EVENT_TYPES))
+    funnel_rows = conn.execute(
+        f"SELECT strategy_key, event_type, COUNT(*) AS n FROM journal_events "  # nosec B608 - placeholders only
+        f"WHERE event_type IN ({placeholders}) AND event_timestamp_utc >= ? AND strategy_key IS NOT NULL "
+        f"GROUP BY strategy_key, event_type",
+        (*_STRATEGY_FUNNEL_EVENT_TYPES, window_start),
+    ).fetchall()
+    funnel: dict[str, dict[str, int]] = {}
+    for row in funnel_rows:
+        funnel.setdefault(row["strategy_key"], {})[row["event_type"]] = row["n"]
+
+    all_keys = sorted(set(source) | set(RETIRED_STRATEGY_KEYS) | set(funnel))
+    strategies = []
+    for key in all_keys:
+        retired = key in RETIRED_STRATEGY_KEYS
+        meta = source.get(key)
+        counts = funnel.get(key, {})
+        last_position = _latest_position_for_strategy(conn, key)
+        last_signal = _latest_journal_event(conn, "SIGNAL_CREATED", key)
+        last_proposal = _latest_journal_event(conn, "PROPOSAL_CREATED", key)
+        last_allowed = _latest_journal_event(conn, "ENTRY_ALLOWED", key)
+        last_blocked = _latest_journal_event(conn, "ENTRY_BLOCKED", key)
+        if retired:
+            lifecycle = "RETIRED"
+        elif last_position is not None and last_position["status"] == "OPEN":
+            lifecycle = "FILLED"
+        elif last_position is not None and last_position["status"] == "CLOSED":
+            lifecycle = "CLOSED"
+        elif counts.get("ENTRY_ALLOWED"):
+            lifecycle = "SUBMITTED"
+        elif counts.get("PROPOSAL_CREATED"):
+            lifecycle = "SELECTED"
+        elif counts.get("SIGNAL_CREATED"):
+            lifecycle = "PROPOSED"
+        else:
+            lifecycle = "REGISTERED"
+        strategies.append({
+            "strategy_key": key,
+            "registration_status": "RETIRED_PERMANENTLY" if retired else ("REGISTERED" if meta else "UNKNOWN"),
+            "lifecycle_stage": lifecycle,
+            "version": meta["version"] if meta else None,
+            "source_module": meta["source_module"] if meta else None,
+            "source_description": meta["source_description"] if meta else (
+                "Permanently retired (directive section 8): no source module remains registered."
+                if retired else None
+            ),
+            "default_parameters": meta["default_parameters"] if meta else None,
+            f"counts_last_{_STRATEGY_LAB_WINDOW_SECONDS // 86400}d": {
+                "signals_created": counts.get("SIGNAL_CREATED", 0),
+                "signals_rejected": counts.get("SIGNAL_REJECTED", 0),
+                "proposals_selected": counts.get("PROPOSAL_CREATED", 0),
+                "entries_allowed": counts.get("ENTRY_ALLOWED", 0),
+                "entries_blocked": counts.get("ENTRY_BLOCKED", 0),
+            },
+            "last_genuine_signal": last_signal,
+            "last_selection": last_proposal,
+            "last_entry_allowed": last_allowed,
+            "last_entry_blocked": last_blocked,
+            "last_position": last_position,
+        })
+    return {"window_days": _STRATEGY_LAB_WINDOW_SECONDS // 86400, "strategies": strategies}
+
+
+def strategy_activity(conn: sqlite3.Connection, now: int) -> dict:
+    """Strategy Lab: the latest genuine per-symbol strategy evaluations,
+    real database evidence only (`entry_decisions`, written once per real
+    decision by the runtime). `reason` and `detail_json` are the complete
+    recorded explanation -- never truncated or re-derived."""
+    rows = _rows(
+        conn,
+        "SELECT id, decided_at_utc, mode, canonical_symbol, bar_time_utc, strategy_key, direction, stage, "
+        "decision, reason, chain_key, detail_json FROM entry_decisions ORDER BY id DESC LIMIT 200",
+    )
+    for row in rows:
+        row["detail"] = json.loads(row.pop("detail_json")) if row.get("detail_json") else None
+    return {"recent_evaluations": rows}
+
+
+def strategy_attribution(conn: sqlite3.Connection, now: int) -> dict:
+    """Strategy Lab: broker-verified DEMO trade attribution (directive
+    section 31: broker is authoritative). Every closing/entry deal for a
+    locally-tracked position is summed exactly once (never double-counted);
+    a position with more than two deals genuinely had a partial fill or
+    multiple closing deals, reported as such rather than guessed at. Any
+    broker deal whose `broker_position_id` does not match a locally-tracked
+    position is reported as UNATTRIBUTED rather than assigned a guessed
+    strategy."""
+    positions_rows = _rows(
+        conn,
+        "SELECT id, broker_position_id, canonical_symbol, direction, volume, entry_price, "
+        "initial_monetary_risk, strategy_key, status, opened_at_utc, closed_at_utc, entry_order_id "
+        "FROM positions ORDER BY opened_at_utc DESC LIMIT 500",
+    )
+    known_position_ids = {p["broker_position_id"] for p in positions_rows if p["broker_position_id"]}
+    attributed = []
+    for p in positions_rows:
+        deals = _rows(
+            conn,
+            "SELECT broker_deal_id, price, volume, commission, swap, profit, fee, entry_type, deal_type, "
+            "occurred_at_utc, comment FROM deals WHERE broker_position_id = ? ORDER BY occurred_at_utc",
+            (p["broker_position_id"],),
+        )
+        gross_pnl = round(sum(d["profit"] or 0.0 for d in deals), 2)
+        costs = round(sum((d["commission"] or 0.0) + (d["swap"] or 0.0) + (d["fee"] or 0.0) for d in deals), 2)
+        entry_deals = [d for d in deals if d["entry_type"] == "IN"]
+        closing_deals = [d for d in deals if d["entry_type"] in ("OUT", "INOUT", "OUT_BY")]
+        attributed.append({
+            **p, "deal_count": len(deals), "entry_deal_count": len(entry_deals),
+            "closing_deal_count": len(closing_deals),
+            "partial_fill_or_multi_close": len(entry_deals) > 1 or len(closing_deals) > 1,
+            "gross_pnl": gross_pnl, "costs": costs, "net_pnl": round(gross_pnl + costs, 2),
+            "deals": deals,
+        })
+    unattributed_clause = (
+        "WHERE broker_position_id IS NULL" if not known_position_ids else
+        "WHERE broker_position_id IS NULL OR broker_position_id NOT IN (" +
+        ",".join("?" * len(known_position_ids)) + ")"
+    )
+    unattributed = _rows(
+        conn,
+        "SELECT broker_deal_id, broker_position_id, price, volume, commission, swap, profit, fee, "  # nosec B608 - placeholders only
+        f"entry_type, deal_type, occurred_at_utc, comment FROM deals {unattributed_clause} "
+        "ORDER BY occurred_at_utc DESC LIMIT 200",
+        tuple(known_position_ids),
+    )
+    return {
+        "attributed_positions": attributed, "unattributed_deals": unattributed,
+        "note": "UNATTRIBUTED means a broker deal with no matching locally-tracked position -- "
+                "never guessed onto a strategy.",
+    }
+
+
+def strategy_performance(conn: sqlite3.Connection, now: int) -> dict:
+    """Strategy Lab: separate DEMO / PAPER / BACKTEST row-level trade
+    evidence (never pooled -- each is a distinct evidence class with its
+    own currency of truth). The UI aggregates and filters client-side by
+    strategy/symbol/date/regime/direction/version/provenance; every metric
+    it derives carries its own sample size from the row count actually
+    shipped here."""
+    demo = _rows(
+        conn,
+        "SELECT id, broker_position_id, strategy_key, canonical_symbol, direction, volume, "
+        "initial_monetary_risk, entry_price, opened_at_utc, closed_at_utc FROM positions "
+        "WHERE status = 'CLOSED' ORDER BY closed_at_utc DESC LIMIT 500",
+    )
+    for p in demo:
+        deals = _rows(
+            conn, "SELECT profit, commission, swap, fee FROM deals WHERE broker_position_id = ?",
+            (p["broker_position_id"],),
+        )
+        p["gross_pnl"] = round(sum(d["profit"] or 0.0 for d in deals), 2)
+        p["costs"] = round(sum((d["commission"] or 0.0) + (d["swap"] or 0.0) + (d["fee"] or 0.0) for d in deals), 2)
+        p["net_pnl"] = round(p["gross_pnl"] + p["costs"], 2)
+        p["deal_count"] = len(deals)
+    paper = _rows(
+        conn,
+        "SELECT canonical_symbol, strategy_key, strategy_version, direction, entry_regime, exit_regime, "
+        "entry_time_utc, exit_time_utc, realized_pnl, realized_r, gross_pnl, total_cost, cost_provenance, "
+        "origin, exit_reason FROM paper_trades ORDER BY exit_time_utc DESC LIMIT 2000",
+    )
+    backtest = _rows(
+        conn,
+        "SELECT run_id, canonical_symbol, strategy_key, strategy_version, direction, entry_regime, exit_regime, "
+        "entry_time_utc, exit_time_utc, realized_pnl, realized_r, gross_pnl, total_cost, cost_provenance, "
+        "exit_reason FROM backtest_trades ORDER BY exit_time_utc DESC LIMIT 3000",
+    )
+    return {
+        "demo_closed_trades": demo, "paper_trades": paper, "backtest_trades": backtest,
+        "sample_sizes": {"demo": len(demo), "paper": len(paper), "backtest": len(backtest)},
+        "note": "DEMO, PAPER and BACKTEST are separate evidence classes and are never pooled into one figure. "
+                "Row-level trades only; no unavailable cost or performance figure is invented.",
+    }
+
+
 PANELS: dict[str, Callable[[sqlite3.Connection, int], dict]] = {
     "overview": overview, "components": components, "symbols": symbols, "positions": positions, "orders": orders,
     "decisions": decisions, "risk": risk, "news": news, "events": events, "research": research,
     "learning": learning, "memory": memory, "knowledge": knowledge, "costs": costs, "history": history,
     "market": market, "performance": performance,
+    "strategy_registry": strategy_registry, "strategy_activity": strategy_activity,
+    "strategy_attribution": strategy_attribution, "strategy_performance": strategy_performance,
 }
 
 
