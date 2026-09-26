@@ -329,8 +329,9 @@ def _strategy_source_metadata() -> dict[str, dict]:
 
 def _latest_journal_event(conn: sqlite3.Connection, event_type: str, strategy_key: str) -> dict | None:
     row = conn.execute(
-        "SELECT event_timestamp_utc, canonical_symbol, payload_json FROM journal_events "
-        "WHERE event_type = ? AND strategy_key = ? ORDER BY event_timestamp_utc DESC LIMIT 1",
+        "SELECT j.event_timestamp_utc, j.canonical_symbol, j.payload_json FROM journal_events j "
+        "JOIN decision_chains d ON d.id = j.chain_id WHERE j.event_type = ? AND j.strategy_key = ? "
+        "AND d.chain_key LIKE 'entry:%' ORDER BY j.event_timestamp_utc DESC LIMIT 1",
         (event_type, strategy_key),
     ).fetchone()
     if row is None:
@@ -362,9 +363,10 @@ def strategy_registry(conn: sqlite3.Connection, now: int) -> dict:
     window_start = now - _STRATEGY_LAB_WINDOW_SECONDS
     placeholders = ",".join("?" * len(_STRATEGY_FUNNEL_EVENT_TYPES))
     funnel_rows = conn.execute(
-        f"SELECT strategy_key, event_type, COUNT(*) AS n FROM journal_events "  # nosec B608 - placeholders only
-        f"WHERE event_type IN ({placeholders}) AND event_timestamp_utc >= ? AND strategy_key IS NOT NULL "
-        f"GROUP BY strategy_key, event_type",
+        f"SELECT j.strategy_key, j.event_type, COUNT(*) AS n FROM journal_events j "  # nosec B608 - placeholders only
+        f"JOIN decision_chains d ON d.id = j.chain_id "
+        f"WHERE j.event_type IN ({placeholders}) AND j.event_timestamp_utc >= ? AND j.strategy_key IS NOT NULL "
+        f"AND d.chain_key LIKE 'entry:%' GROUP BY j.strategy_key, j.event_type",
         (*_STRATEGY_FUNNEL_EVENT_TYPES, window_start),
     ).fetchall()
     funnel: dict[str, dict[str, int]] = {}
@@ -420,7 +422,16 @@ def strategy_registry(conn: sqlite3.Connection, now: int) -> dict:
             "last_entry_blocked": last_blocked,
             "last_position": last_position,
         })
-    return {"window_days": _STRATEGY_LAB_WINDOW_SECONDS // 86400, "strategies": strategies}
+    non_runtime = conn.execute(
+        "SELECT COUNT(*) FROM journal_events j JOIN decision_chains d ON d.id = j.chain_id "
+        "WHERE j.event_type = 'SIGNAL_CREATED' AND j.event_timestamp_utc >= ? AND d.chain_key NOT LIKE 'entry:%'",
+        (window_start,),
+    ).fetchone()[0]
+    return {
+        "window_days": _STRATEGY_LAB_WINDOW_SECONDS // 86400, "strategies": strategies,
+        "counting_basis": "DEMO runtime entry chains (entry:...) only",
+        "non_runtime_signal_events_excluded": non_runtime,
+    }
 
 
 def strategy_activity(conn: sqlite3.Connection, now: int) -> dict:

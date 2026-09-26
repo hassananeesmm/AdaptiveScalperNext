@@ -173,6 +173,16 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
     return applied_now
 
 
+def quick_check(conn: sqlite3.Connection) -> str:
+    """SQLite's `PRAGMA quick_check`: page/record structure without the
+    O(N log N) index cross-verification of `integrity_check` (ASN-008:
+    about 0.7 s instead of 10 s on the live 275 MB database). Returns 'ok'
+    or a diagnostic. Used for interactive status output; startup, doctor
+    and preflight keep the full check."""
+    row = conn.execute("PRAGMA quick_check").fetchone()
+    return row[0] if row else "unknown"
+
+
 def integrity_check(conn: sqlite3.Connection) -> str:
     """Run SQLite's built-in integrity check. Returns 'ok' or a diagnostic."""
     row = conn.execute("PRAGMA integrity_check").fetchone()

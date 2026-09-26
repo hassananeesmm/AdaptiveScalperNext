@@ -63,14 +63,14 @@ def import_deals(
         INSERT OR IGNORE INTO broker_account_deals
             (login, server, ticket, order_ticket, time_utc, type, entry, magic,
              position_id, volume, price, commission, swap, profit, fee, symbol,
-             comment, external_id, origin, strategy_attribution)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             comment, external_id, origin, strategy_attribution, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 account.login, account.server, d.ticket, d.order, d.time, d.type, d.entry,
                 d.magic, d.position_id, d.volume, d.price, d.commission, d.swap, d.profit,
-                d.fee, d.symbol, d.comment, d.external_id, ORIGIN, UNKNOWN_STRATEGY,
+                d.fee, d.symbol, d.comment, d.external_id, ORIGIN, UNKNOWN_STRATEGY, d.reason,
             )
             for d in deals
         ],

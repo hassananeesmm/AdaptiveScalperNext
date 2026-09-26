@@ -51,7 +51,7 @@ def _run_engine(args: argparse.Namespace, mode: str) -> int:
     for line in BANNERS[mode]:
         print(f"*** {line} ***")
     try:
-        gateway = create_live_gateway(cfg.mt5.server_time_rule)
+        gateway = create_live_gateway(cfg.mt5.server_time_rule, cfg.mt5.terminal_path)
     except Mt5NotAvailableError as exc:
         raise CliError(f"MetaTrader5 unavailable: {exc}") from exc
     engine = RuntimeEngine(cfg, conn, gateway)

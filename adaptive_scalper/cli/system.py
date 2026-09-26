@@ -16,7 +16,7 @@ from adaptive_scalper.costs.observations import summarize_observations
 from adaptive_scalper.dashboard.health import compute_health
 from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
-from adaptive_scalper.persistence.database import integrity_check
+from adaptive_scalper.persistence.database import integrity_check, quick_check
 from adaptive_scalper.preflight import run_preflight
 from adaptive_scalper.runtime.state import decision_counts, get_state_with_age, recent_events
 from adaptive_scalper.strategies import build_active_registry
@@ -83,14 +83,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _status_integrity(conn, args: argparse.Namespace) -> tuple[str, str]:
+    """ASN-008: interactive status uses the fast structural quick_check by
+    default; `--full-integrity` runs the full (slow) integrity_check."""
+    if getattr(args, "full_integrity", False):
+        return integrity_check(conn), "integrity_check"
+    return quick_check(conn), "quick_check"
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     cfg, conn = open_db(args.config)
     ks = kill_switch.get_state(conn)
-    report = compute_health(conn)
+    integrity, kind = _status_integrity(conn, args)
+    report = compute_health(conn, integrity=integrity)
     engine, age = get_state_with_age(conn, "engine")
     conn.close()
     print_json({
-        "mode": cfg.mode, "symbols": cfg.market.symbols, "health": report.state.value,
+        # `mode` is the CONFIGURED default; `runtime_mode` is what the running engine reports.
+        "mode": cfg.mode, "runtime_mode": (engine or {}).get("mode"), "symbols": cfg.market.symbols,
+        "health": report.state.value, "database_integrity": report.database_integrity,
+        "database_integrity_check": kind,
         "kill_switch_status": ks.status.value, "kill_switch_reason": ks.reason,
         "engine": None if engine is None else {**engine, "heartbeat_age_seconds": age},
         "real_money_execution": "DISABLED",
@@ -100,12 +112,14 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_health(args: argparse.Namespace) -> int:
     _, conn = open_db(args.config)
-    report = compute_health(conn)
+    integrity, kind = _status_integrity(conn, args)
+    report = compute_health(conn, integrity=integrity)
     components, age = get_state_with_age(conn, "components")
     conn.close()
     print_json({
         "state": report.state.value, "reasons": list(report.reasons),
-        "database_integrity": report.database_integrity, "kill_switch_status": report.kill_switch_status,
+        "database_integrity": report.database_integrity, "database_integrity_check": kind,
+        "kill_switch_status": report.kill_switch_status,
         "kill_switch_blocks_new_entries": report.kill_switch_blocks_new_entries,
         "runtime_components": components, "runtime_components_age_seconds": age,
     })
@@ -204,8 +218,12 @@ def register(sub) -> None:
     preflight.add_argument("--dashboard-url", default="http://127.0.0.1:8765")
     preflight.set_defaults(func=cmd_preflight)
     sub.add_parser("doctor", help="verify config, database, kill switch and MT5 reachability").set_defaults(func=cmd_doctor)
-    sub.add_parser("status", help="mode, symbols, health, kill switch, engine heartbeat").set_defaults(func=cmd_status)
-    sub.add_parser("health", help="health report (exit 1 unless HEALTHY)").set_defaults(func=cmd_health)
+    for name, func, help_text in (("status", cmd_status, "mode, symbols, health, kill switch, engine heartbeat"),
+                                  ("health", cmd_health, "health report (exit 1 unless HEALTHY)")):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("--full-integrity", action="store_true",
+                       help="run the full (slow) PRAGMA integrity_check instead of quick_check")
+        p.set_defaults(func=func)
     sub.add_parser("symbols", help="resolve canonical symbols on the broker and capture their specs").set_defaults(
         func=cmd_symbols)
     sub.add_parser("strategies", help="active strategies, retired strategies, executable symbols").set_defaults(

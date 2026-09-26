@@ -100,9 +100,9 @@ def test_retired_strategies_are_never_shown_as_registered_even_with_evidence(tmp
 def test_lifecycle_distinguishes_proposed_from_actually_executed(tmp_path):
     conn = _database(tmp_path)
     now = 1_700_000_000
-    append_event(conn, "chain:proposed-only", "SIGNAL_CREATED", now - 500, "XAUUSD",
+    append_event(conn, "entry:XAUUSD:1699999500:range_breakout", "SIGNAL_CREATED", now - 500, "XAUUSD",
                  {"direction": "BUY", "raw_confidence": 0.4}, strategy_key="range_breakout")
-    append_event(conn, "chain:proposed-only", "PROPOSAL_CREATED", now - 500, "XAUUSD",
+    append_event(conn, "entry:XAUUSD:1699999500:range_breakout", "PROPOSAL_CREATED", now - 500, "XAUUSD",
                  {"direction": "BUY"}, strategy_key="range_breakout")
     conn.commit()
     registry = compute_panel(conn, "strategy_registry", now=now)

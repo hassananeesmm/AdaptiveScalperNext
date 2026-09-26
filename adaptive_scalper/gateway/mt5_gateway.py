@@ -192,6 +192,7 @@ def _historical_deal(raw, rule: str) -> HistoricalDeal:
         symbol=raw.symbol,
         comment=raw.comment,
         external_id=raw.external_id,
+        reason=getattr(raw, "reason", None),
     )
 
 
@@ -358,8 +359,9 @@ class Mt5Gateway:
     logic lives here — only calling the SDK and converting its output to
     our internal types."""
 
-    def __init__(self, server_time_rule: str = RULE_UTC) -> None:
+    def __init__(self, server_time_rule: str = RULE_UTC, terminal_path: str | None = None) -> None:
         self._mt5 = None
+        self.terminal_path = terminal_path
         # Every MT5 time is the broker's server clock; convert at this
         # boundary so everything past the gateway is real UTC (server_time.py).
         self.server_time_rule = validate_rule(server_time_rule)
@@ -379,7 +381,12 @@ class Mt5Gateway:
 
     def initialize(self) -> bool:
         self._mt5 = _import_mt5()
-        return bool(self._mt5.initialize())
+        if not self.terminal_path:
+            return bool(self._mt5.initialize())
+        if not self._mt5.initialize(path=self.terminal_path):
+            logger.error("MT5 initialize(path=%r) failed: %s", self.terminal_path, self._mt5.last_error())
+            return False
+        return verify_terminal_identity(self._mt5, self.terminal_path)
 
     def shutdown(self) -> None:
         if self._mt5 is not None:
@@ -481,3 +488,19 @@ class Mt5Gateway:
 
     def last_error(self) -> tuple[int, str]:
         return tuple(self._mt5.last_error())
+
+
+def verify_terminal_identity(mt5, terminal_path: str) -> bool:
+    """ASN-010 identity assertion: the attached terminal must report the
+    install folder of the configured terminal64.exe; otherwise shut down
+    and fail closed (the caller treats False as "MT5 unavailable")."""
+    import ntpath
+
+    info = mt5.terminal_info()
+    expected = ntpath.normcase(ntpath.normpath(ntpath.dirname(terminal_path)))
+    actual = ntpath.normcase(ntpath.normpath(getattr(info, "path", "") or "")) if info is not None else ""
+    if actual != expected:
+        logger.error("attached MT5 terminal %r is not the configured %r; refusing it", actual, expected)
+        mt5.shutdown()
+        return False
+    return True

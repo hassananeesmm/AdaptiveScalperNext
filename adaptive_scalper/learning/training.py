@@ -28,7 +28,7 @@ it.
 from __future__ import annotations
 
 import hashlib
-import io
+import json
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -126,10 +126,7 @@ def train_entry_outcome_model(
     brier = brier_score_loss(y_val, proba)
     auc = roc_auc_score(y_val, proba) if len(set(y_val)) > 1 else None
 
-    buf = io.BytesIO()
-    import joblib
-    joblib.dump(model, buf)
-    artifact_bytes = buf.getvalue()
+    artifact_bytes = serialize_logistic_model(model)
     checksum = hashlib.sha256(artifact_bytes).hexdigest()
 
     return EntryModelTrainingResult(
@@ -153,6 +150,48 @@ def _safe_filename_component(value: str) -> str:
     return _UNSAFE_FILENAME_CHARS.sub("_", value)
 
 
+ARTIFACT_FORMAT = "asn-logistic-regression-json-v1"
+
+
+def serialize_logistic_model(model) -> bytes:
+    """ASN-009: model artifacts are plain JSON parameters (classes,
+    coefficients, intercept) -- never pickle -- so loading an artifact can
+    never execute code. Deterministic (sorted keys) so the checksum is
+    stable for identical training."""
+    payload = {
+        "format": ARTIFACT_FORMAT,
+        "classes": [int(c) if float(c).is_integer() else float(c) for c in model.classes_],
+        "coef": [[float(v) for v in row] for row in model.coef_],
+        "intercept": [float(v) for v in model.intercept_],
+        "n_features_in": int(model.n_features_in_),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def deserialize_logistic_model(data: bytes):
+    """Rebuild a predict_proba-capable LogisticRegression from JSON
+    parameters. Anything that is not this exact JSON format -- including
+    every legacy pickle/joblib artifact -- is refused, never unpickled."""
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("model artifact is not the JSON parameter format; legacy pickle artifacts are "
+                         "refused (ASN-009) -- retrain to regenerate it") from exc
+    if not isinstance(payload, dict) or payload.get("format") != ARTIFACT_FORMAT:
+        raise ValueError(f"unsupported model artifact format {payload.get('format') if isinstance(payload, dict) else None!r}")
+    model = LogisticRegression()
+    model.classes_ = np.array(payload["classes"])
+    model.coef_ = np.array(payload["coef"], dtype=float)
+    model.intercept_ = np.array(payload["intercept"], dtype=float)
+    model.n_features_in_ = int(payload["n_features_in"])
+    if model.coef_.shape != (1, model.n_features_in_) or model.intercept_.shape != (1,) or len(model.classes_) != 2:
+        raise ValueError("model artifact parameters have an unexpected shape")
+    return model
+
+
 def save_model_artifact(artifact_bytes: bytes, path: str) -> str:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -161,22 +200,18 @@ def save_model_artifact(artifact_bytes: bytes, path: str) -> str:
 
 
 def load_model_artifact(path: str, *, expected_checksum: str | None = None) -> object:
-    """`joblib.load()` deserializes via pickle, which can execute
-    arbitrary code for an attacker-controlled file -- safe HERE only
-    because this loads exclusively from `artifact_dir`, a path this same
-    process (or a prior run of this same codebase) wrote via
-    `save_model_artifact()`, never an externally-supplied or
-    user-uploaded file. `expected_checksum` (from the model registry, set
-    at training time) is checked BEFORE deserializing, so even a locally
-    corrupted/tampered artifact is rejected before `joblib.load()` ever
-    runs on it."""
+    """ASN-009: artifacts are JSON parameters, rebuilt without pickle, so a
+    replaced file can at worst produce wrong advisory scores (and the ML
+    observer has no execution authority) -- it can never execute code.
+    `expected_checksum` (from the model registry) is still verified first
+    to detect accidental corruption. Legacy joblib/pickle files are
+    refused, never loaded."""
     data = Path(path).read_bytes()
     if expected_checksum is not None:
         actual = hashlib.sha256(data).hexdigest()
         if actual != expected_checksum:
             raise ValueError(f"artifact at {path!r} checksum {actual} does not match expected {expected_checksum}")
-    import joblib
-    return joblib.load(io.BytesIO(data))
+    return deserialize_logistic_model(data)
 
 
 def register_entry_model(
@@ -192,7 +227,7 @@ def register_entry_model(
 ) -> ModelRecord:
     """Registers a NEW version for `model_key` — `INSUFFICIENT_DATA` if
     `result.trained` is False, otherwise `BASELINE` (never `CURRENT`; see
-    module docstring). `artifact_dir/<model_key>_v<version>.joblib` is
+    module docstring). `artifact_dir/<model_key>_v<version>.json` is
     only written when a real model was trained."""
     metrics = {
         "reason": result.reason,
@@ -214,7 +249,7 @@ def register_entry_model(
     next_version = get_latest_version(conn, model_key) + 1
     artifact_path = save_model_artifact(
         result.artifact_bytes,
-        str(Path(artifact_dir) / f"{_safe_filename_component(model_key)}_v{next_version}.joblib"),
+        str(Path(artifact_dir) / f"{_safe_filename_component(model_key)}_v{next_version}.json"),
     )
     return register_model(
         conn, model_key, strategy_key=strategy_key, initial_state=ModelLifecycleState.BASELINE,

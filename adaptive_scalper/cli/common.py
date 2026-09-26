@@ -49,7 +49,7 @@ def open_gateway(cfg: AppConfig, *, require_demo: bool = True):
     non-DEMO account (REAL-MONEY EXECUTION IS DISABLED) before doing
     anything else; the caller must `shutdown()`."""
     try:
-        gw = create_live_gateway(cfg.mt5.server_time_rule)
+        gw = create_live_gateway(cfg.mt5.server_time_rule, cfg.mt5.terminal_path)
         initialized = gw.initialize()
     except Mt5NotAvailableError as exc:
         raise CliError(f"MetaTrader5 unavailable: {exc}") from exc

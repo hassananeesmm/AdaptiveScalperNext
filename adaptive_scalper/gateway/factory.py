@@ -15,7 +15,9 @@ from __future__ import annotations
 from adaptive_scalper.gateway.synchronized_gateway import SynchronizedGateway
 
 
-def create_live_gateway(server_time_rule: str) -> SynchronizedGateway:
+def create_live_gateway(server_time_rule: str, terminal_path: str | None = None) -> SynchronizedGateway:
+    """`terminal_path` (`[mt5] terminal_path`, ASN-010): pin the exact MT5
+    terminal on a computer with several installations."""
     from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway  # raises Mt5NotAvailableError off Windows
 
-    return SynchronizedGateway(Mt5Gateway(server_time_rule))
+    return SynchronizedGateway(Mt5Gateway(server_time_rule, terminal_path=terminal_path))

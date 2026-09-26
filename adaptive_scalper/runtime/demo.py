@@ -345,6 +345,7 @@ class DemoRuntime:
             strategy_setup_still_valid=setup_valid, current_net_edge_price=net_edge, min_required_edge_price=0.0,
             holding_seconds=max(0, now - local.opened_at_utc), strategy_key=context["strategy_key"],
             current_price_at_review=price,
+            close_magic=self.config.runtime.magic, close_comment="ASN exit",
         )
         review_position_once(self.conn, self.gateway, inp, params=self.exit_params, now_utc=now,
                              clock=self.clock)

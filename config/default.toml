@@ -43,6 +43,9 @@ path = "data/adaptive_scalper.sqlite3"
 # rule against a live quote and refuses to start if a quote proves it wrong.
 # Use "UTC" for a broker whose server clock is UTC.
 server_time_rule = "UTC+2/US_DST"
+# ASN-010: pin the terminal on a computer with several MT5 installations (the
+# gateway refuses a terminal whose install folder differs). Example:
+# terminal_path = 'C:\Program Files\MetaTrader 5 IC Markets Global\terminal64.exe'   # TOML literal string (single quotes)
 
 [runtime]
 # Directive section 16 cadences. Position reviews always run at least as

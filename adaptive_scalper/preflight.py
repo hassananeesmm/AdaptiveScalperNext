@@ -158,7 +158,7 @@ def run_preflight(
 
     gateway = None
     try:
-        gateway = create_live_gateway(cfg.mt5.server_time_rule)
+        gateway = create_live_gateway(cfg.mt5.server_time_rule, cfg.mt5.terminal_path)
         if not gateway.initialize():
             raise RuntimeError("MT5 initialize returned false")
         terminal = gateway.terminal_info()

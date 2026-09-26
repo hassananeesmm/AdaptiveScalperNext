@@ -198,6 +198,9 @@ class HistoricalDeal:
     symbol: str
     comment: str
     external_id: str
+    # MT5 ENUM_DEAL_REASON (CLIENT/MOBILE/WEB/EXPERT/SL/TP/SO/...), raw code.
+    # None when the source did not provide it -- never guessed.
+    reason: int | None = None
 
 
 class OrderAction(str, Enum):

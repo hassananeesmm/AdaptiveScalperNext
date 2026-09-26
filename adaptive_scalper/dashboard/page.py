@@ -123,6 +123,38 @@ summary{cursor:pointer;font-weight:680;color:var(--text)}
 .footer{color:var(--muted);font-size:12px;border-top:1px solid var(--line);margin-top:26px;
   padding-top:13px;line-height:1.6}
 .hidden{display:none!important}
+/* ---- Strategy Lab ---- */
+:root{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--pos:#3987e5;--neg:#e66767}
+:root[data-theme="light"]{--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--pos:#2a78d6;--neg:#e34948}
+.lab{display:grid;gap:14px;min-width:0}
+.lab-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;min-width:0}
+.lab-bar label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted);min-width:0}
+.lab-bar select,.lab-bar input{min-width:0;max-width:220px;padding:0 8px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;flex-wrap:wrap;max-width:100%}
+.seg button{border:0;border-radius:0;background:var(--surface);padding:7px 13px;font-weight:650;color:var(--muted)}
+.seg button[aria-selected="true"]{background:var(--surface-2);color:var(--text);box-shadow:inset 0 -3px var(--accent)}
+.lab-note{font-size:12px;color:var(--muted);line-height:1.5}
+.num{text-align:right;white-space:nowrap}
+.pos{color:var(--good)}.neg{color:var(--bad)}.na{color:var(--muted)}
+.linkish{background:none;border:0;color:var(--accent);padding:0;min-height:0;text-align:left;font-weight:650;text-decoration:underline}
+tr.clickable{cursor:pointer}tr.clickable:hover td,tr.clickable:focus td{background:var(--surface-2)}
+tr.clickable:focus{outline:2px solid var(--accent);outline-offset:-2px}
+.chart-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;min-width:0}
+.chart-card h4{margin:0 0 6px;font-size:13px}
+.chart-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.chart svg{width:100%;height:auto;display:block}
+.chart .axis{stroke:var(--line);stroke-width:1}.chart text{fill:var(--muted);font-size:10px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;margin-top:6px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.swatch{width:12px;height:3px;border-radius:2px;display:inline-block}
+.tip{position:fixed;z-index:50;pointer-events:none;background:var(--surface-2);border:1px solid var(--line);
+  border-radius:8px;padding:6px 9px;font-size:12px;color:var(--text);box-shadow:0 4px 14px rgba(0,0,0,.3);display:none}
+pre.src{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;
+  font-size:12px;max-height:360px;white-space:pre}
+.pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700}
+.badge.ok{color:var(--good)}.badge.bad{color:var(--bad)}
+@media(max-width:1080px){.chart-grid{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:1400px){.kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1080px){.shell{grid-template-columns:180px minmax(0,1fr)}
   .sidebar{padding:12px 7px}.panel-grid{grid-template-columns:minmax(0,1fr)}
@@ -168,12 +200,14 @@ summary{cursor:pointer;font-weight:680;color:var(--text)}
       </div>
       <div id="alert" class="warning-banner" role="alert"></div>
       <div class="kpis" id="kpis" aria-label="Key monitoring figures"></div>
-      <div class="toolbar">
+      <div class="toolbar" id="panel-toolbar">
         <h2 id="section-title">Live overview</h2>
         <input class="search" type="search" id="search" placeholder="Find a panel…" aria-label="Find a panel">
         <span class="tiny" id="data-age">No data</span>
       </div>
       <main class="panel-grid" id="panels" aria-live="off"></main>
+      <section class="lab hidden" id="lab" aria-label="Strategy Lab"></section>
+      <div class="tip" id="tip" role="tooltip"></div><svg id="svg-ns" class="hidden" aria-hidden="true"></svg>
       <div class="footer">Live means the local runtime reported fresh data. A browser connection alone does not prove MT5 is connected. Account values and positions are snapshots, not a direct connection to the broker. No trading or kill-switch controls are exposed here.</div>
     </div>
   </div>
@@ -193,9 +227,9 @@ const GROUPS = [
    panels:["performance","research","learning","memory","knowledge","history"]},
   {id:"system",label:"System",desc:"Component status, runtime events, data freshness and broker status.",
    panels:["overview","components","market","events","history"]},
-  {id:"strategy_lab",label:"Strategy Lab",desc:"Strategy registry, live evaluations, DEMO/PAPER/BACKTEST "+
-   "performance comparison and broker-verified trade attribution. Review-only: no strategy activation, "+
-   "auto-promotion or risk change is exposed here.",
+  {id:"strategy_lab",label:"Strategy Lab",desc:"Which strategy generated, submitted, filled and closed every trade; "+
+   "winning and losing strategies with recorded costs; DEMO, PAPER and BACKTEST kept separate; every trade traceable. "+
+   "Review-only: no strategy activation, auto-promotion or risk change is exposed here.",
    panels:["strategy_registry","strategy_activity","strategy_performance","strategy_attribution"]},
   {id:"all",label:"All panels",desc:"Every implemented dashboard panel.",
    panels:["overview","market","performance","components","symbols","positions","orders","decisions",
@@ -599,7 +633,8 @@ let current="overview",data=null,feedState="CONNECTING",pollHandle=null,polling=
 const nav=document.getElementById("nav"),cards={},lastContent={};
 GROUPS.forEach(g=>{
   const b=el("button",g.label);b.type="button";b.dataset.view=g.id;
-  b.addEventListener("click",()=>{current=g.id;document.getElementById("search").value="";showView();});
+  b.addEventListener("click",()=>{current=g.id;document.getElementById("search").value="";showView();
+    if(g.id==="strategy_lab"){labRender();labLoad(true);}});
   nav.appendChild(b);
 });
 const root=document.getElementById("panels");
@@ -696,8 +731,576 @@ function paintSummary(){
     " · Broker telemetry "+(mk.age_seconds===undefined?"unavailable":fmt(mk.age_seconds)+"s old");
   document.getElementById("clock").textContent="Your local time: "+new Date().toLocaleString();
 }
+/* ================= Strategy Lab (on-demand, read-only) ================= */
+const LAB={evidence:"DEMO",sub:"comparison",filters:{},run_id:"",session_key:"",page:1,q:"",
+  summary:null,loading:false,error:null,detailKey:"",detail:null,trade:null,trades:null,
+  compare:(()=>{try{return JSON.parse(localStorage.getItem("asn-lab-compare")||"[]");}catch(e){return [];}})(),
+  shortlist:(()=>{try{return JSON.parse(localStorage.getItem("asn-lab-shortlist")||"[]");}catch(e){return [];}})(),
+  lastFetch:0,seq:0};
+const LAB_SUBS=[["comparison","Comparison"],["detail","Strategy detail"],["compare","Compare (max 3)"],
+  ["trades","All trades"],["unattributed","Unattributed"],["reconciliation","Reconciliation"],["shortlist","Review shortlist"]];
+const LAB_FILTERS=[["strategy","Strategy"],["symbol","Symbol"],["version","Version"],["regime","Regime"],
+  ["direction","Direction"],["session","Session"],["exit_reason","Exit reason"],["cost_provenance","Cost provenance"],
+  ["source_class","Source"]];
+const labRoot=()=>document.getElementById("lab");
+function labSave(key,val){try{localStorage.setItem(key,JSON.stringify(val));}catch(e){}}
+function labColor(key){
+  const keys=(LAB.summary&&LAB.summary.active_strategy_keys)||[];
+  const i=keys.indexOf(key);return i>=0&&i<6?"var(--s"+(i+1)+")":"var(--muted)";
+}
+function labQuery(extra){
+  const p=new URLSearchParams();p.set("evidence",LAB.evidence);
+  Object.entries(LAB.filters).forEach(([k,v])=>{if(v)p.set(k,v);});
+  if(LAB.evidence==="BACKTEST"&&LAB.run_id)p.set("run_id",LAB.run_id);
+  if(LAB.evidence==="PAPER"&&LAB.session_key)p.set("session_key",LAB.session_key);
+  Object.entries(extra||{}).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=="")p.set(k,v);});
+  return p.toString();
+}
+async function labGet(url){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
+  try{const r=await fetch(url,{cache:"no-store",signal:controller.signal});
+    if(!r.ok)throw Error("HTTP "+r.status+" "+(await r.text()).slice(0,200));return await r.json();}
+  finally{clearTimeout(timer);}
+}
+async function labLoad(force){
+  if(current!=="strategy_lab")return;
+  const seq=++LAB.seq;LAB.loading=true;if(force)labRender();
+  try{
+    const s=await labGet("/api/strategy-lab/summary?"+labQuery());
+    if(seq!==LAB.seq)return;
+    if(s.status==="UNAVAILABLE")throw Error(s.detail);
+    LAB.summary=s;LAB.error=null;LAB.lastFetch=Date.now();
+    if(LAB.evidence==="BACKTEST"&&!LAB.run_id&&s.run_id)LAB.run_id=s.run_id;
+    if(LAB.sub==="trades"||LAB.sub==="unattributed")await labLoadTrades(seq);
+    if(LAB.sub==="detail"&&LAB.detailKey)await labLoadDetail(seq);
+  }catch(err){if(seq===LAB.seq)LAB.error=String(err);}
+  finally{if(seq===LAB.seq){LAB.loading=false;labRender();}}
+}
+async function labLoadTrades(seq){
+  const extra={page:LAB.page,page_size:50,q:LAB.q};
+  if(LAB.sub==="unattributed")extra.strategy="UNATTRIBUTED";
+  const t=await labGet("/api/strategy-lab/trades?"+labQuery(extra));
+  if(seq===LAB.seq)LAB.trades=t;
+}
+async function labLoadDetail(seq){
+  const d=await labGet("/api/strategy-lab/strategy/"+encodeURIComponent(LAB.detailKey));
+  if(seq===LAB.seq)LAB.detail=d;
+}
+async function labOpenTrade(evidence,id){
+  LAB.trade={loading:true,id};labRender();
+  try{LAB.trade=await labGet("/api/strategy-lab/trade/"+evidence+"/"+encodeURIComponent(id));}
+  catch(err){LAB.trade={error:String(err),id};}
+  labRender();
+  const d=document.getElementById("lab-lifecycle");if(d)d.scrollIntoView({block:"start"});
+}
+/* ---------- formatting ---------- */
+function mcur(){return (LAB.summary&&LAB.summary.currency)||"(currency not recorded)";}
+function signed(n,cur){
+  const span=el("span");
+  if(typeof n!=="number"||!Number.isFinite(n)){span.textContent="N/A";span.className="na";return span;}
+  const v=Math.round(n*100)/100;
+  span.textContent=(v>0?"+":v<0?"−":"")+money(Math.abs(v))+" "+(cur||mcur());
+  span.className=v>0?"pos":v<0?"neg":"";return span;
+}
+const pct=(x)=>typeof x==="number"?(x*100).toFixed(1)+" %":"N/A";
+const num=(x,d)=>typeof x==="number"&&Number.isFinite(x)?x.toFixed(d===undefined?2:d):"N/A";
+const dur=(s)=>typeof s!=="number"?"N/A":s<120?Math.round(s)+" s":s<7200?Math.round(s/60)+" min":(s/3600).toFixed(1)+" h";
+function cell(tr,content,cls){const td=el("td");if(content instanceof Node)td.appendChild(content);else td.textContent=content;
+  if(cls)td.className=cls;tr.appendChild(td);return td;}
+function gridTable(headers,rows,opts){
+  const scroll=el("div",null,"table-scroll");const t=el("table");const hd=el("thead");const hr=el("tr");
+  headers.forEach(h=>{const th=el("th",Array.isArray(h)?h[0]:h);if(Array.isArray(h)&&h[1])th.className=h[1];
+    th.scope="col";hr.appendChild(th);});
+  hd.appendChild(hr);t.appendChild(hd);const b=el("tbody");rows.forEach(r=>b.appendChild(r));t.appendChild(b);
+  if(opts&&opts.caption){const c=el("caption",opts.caption);c.className="tiny";c.style.textAlign="left";c.style.padding="6px";t.prepend(c);}
+  scroll.appendChild(t);return scroll;
+}
+/* ---------- charts (inline SVG, hover tooltip, legend + direct labels + table view) ---------- */
+const SVGNS=document.getElementById("svg-ns").namespaceURI; /* read from an inline <svg>: no URL literal */
+function sv(tag,attrs){const n=document.createElementNS(SVGNS,tag);Object.entries(attrs||{}).forEach(([k,v])=>n.setAttribute(k,v));return n;}
+const tipEl=()=>document.getElementById("tip");
+function showTip(evt,text){const t=tipEl();t.textContent=text;t.style.display="block";
+  const x=Math.min(window.innerWidth-260,evt.clientX+14),y=Math.min(window.innerHeight-60,evt.clientY+14);
+  t.style.left=x+"px";t.style.top=y+"px";}
+function hideTip(){tipEl().style.display="none";}
+function lineChart(series,opts){
+  /* series: [{key,label,color,points:[{x,y,tip}]}] -- one shared y scale, never a second axis */
+  const W=640,H=230,L=58,R=118,T=12,B=26;const wrap=el("div",null,"chart");
+  const pts=series.flatMap(s=>s.points);
+  if(!pts.length){wrap.appendChild(el("p","No closed trades in the current selection.","empty"));return wrap;}
+  let x0=Math.min(...pts.map(p=>p.x)),x1=Math.max(...pts.map(p=>p.x));if(x1===x0){x0-=3600;x1+=3600;}
+  let y0=Math.min(0,...pts.map(p=>p.y)),y1=Math.max(0,...pts.map(p=>p.y));if(y1===y0){y1+=1;}
+  const X=v=>L+(v-x0)/(x1-x0)*(W-L-R),Y=v=>T+(y1-v)/(y1-y0)*(H-T-B);
+  const svg=sv("svg",{viewBox:"0 0 "+W+" "+H,role:"img","aria-label":opts.aria||"line chart"});
+  [y0,(y0+y1)/2,y1].forEach(v=>{svg.appendChild(sv("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),class:"axis","stroke-dasharray":"2 4"}));
+    const t=sv("text",{x:L-6,y:Y(v)+3,"text-anchor":"end"});t.textContent=Math.round(v*100)/100;svg.appendChild(t);});
+  svg.appendChild(sv("line",{x1:L,x2:W-R,y1:Y(0),y2:Y(0),class:"axis"}));
+  [x0,x1].forEach((v,i)=>{const t=sv("text",{x:X(v),y:H-8,"text-anchor":i?"end":"start"});
+    t.textContent=new Date(v*1000).toISOString().slice(0,10);svg.appendChild(t);});
+  series.forEach(s=>{
+    if(!s.points.length)return;
+    const d=s.points.map((p,i)=>(i?"L":"M")+X(p.x).toFixed(1)+" "+Y(p.y).toFixed(1)).join(" ");
+    svg.appendChild(sv("path",{d,fill:"none",stroke:s.color,"stroke-width":2,"stroke-linejoin":"round"}));
+    s.points.forEach(p=>{
+      svg.appendChild(sv("circle",{cx:X(p.x),cy:Y(p.y),r:s.points.length>60?2:3.5,fill:s.color,stroke:"var(--surface)","stroke-width":1.5}));
+      const hit=sv("circle",{cx:X(p.x),cy:Y(p.y),r:9,fill:"transparent"});
+      hit.addEventListener("mousemove",e=>showTip(e,s.label+" · "+p.tip));hit.addEventListener("mouseleave",hideTip);
+      svg.appendChild(hit);
+    });
+    const last=s.points[s.points.length-1];
+    const lab=sv("text",{x:X(last.x)+6,y:Y(last.y)+3});lab.textContent=s.label.slice(0,18);
+    lab.setAttribute("style","fill:var(--text)");svg.appendChild(lab);
+  });
+  wrap.appendChild(svg);
+  if(series.length>1){const lg=el("div",null,"legend");series.forEach(s=>{const it=el("span");const sw=el("span",null,"swatch");
+    sw.style.background=s.color;it.appendChild(sw);it.appendChild(document.createTextNode(s.label+" ("+s.points.length+" closed)"));lg.appendChild(it);});
+    wrap.appendChild(lg);}
+  return wrap;
+}
+function barChart(items,opts){
+  /* items: [{label,value,tip,color}] diverging around zero: positive = --pos, negative = --neg */
+  const wrap=el("div",null,"chart");
+  if(!items.length){wrap.appendChild(el("p","No data in the current selection.","empty"));return wrap;}
+  const W=640,rowH=22,L=190,R=96,H=items.length*rowH+10;
+  const maxAbs=Math.max(1e-9,...items.map(i=>Math.abs(i.value||0)));
+  const hasNeg=items.some(i=>(i.value||0)<0),zero=hasNeg?L+(W-L-R)/2:L;
+  const scale=(W-L-R)/(hasNeg?2:1)/maxAbs;
+  const svg=sv("svg",{viewBox:"0 0 "+W+" "+H,role:"img","aria-label":opts.aria||"bar chart"});
+  svg.appendChild(sv("line",{x1:zero,x2:zero,y1:0,y2:H,class:"axis"}));
+  items.forEach((it,i)=>{
+    const v=it.value||0,y=5+i*rowH,w=Math.max(1,Math.abs(v)*scale);
+    const t=sv("text",{x:L-8,y:y+14,"text-anchor":"end"});t.textContent=String(it.label).slice(0,30);svg.appendChild(t);
+    svg.appendChild(sv("rect",{x:v<0?zero-w:zero,y:y+3,width:w,height:rowH-8,rx:3,fill:it.color||(v<0?"var(--neg)":"var(--pos)")}));
+    const vt=sv("text",{x:v<0?zero-w-4:zero+w+4,y:y+14,"text-anchor":v<0?"end":"start"});
+    vt.setAttribute("style","fill:var(--text)");vt.textContent=it.valueLabel||(Math.round(v*100)/100);svg.appendChild(vt);
+    const hit=sv("rect",{x:0,y,width:W,height:rowH,fill:"transparent"});
+    hit.addEventListener("mousemove",e=>showTip(e,it.tip||(it.label+": "+(Math.round(v*100)/100))));
+    hit.addEventListener("mouseleave",hideTip);svg.appendChild(hit);
+  });
+  wrap.appendChild(svg);return wrap;
+}
+function chartCard(title,chart,tableNode,note){
+  const c=el("div",null,"chart-card");c.appendChild(el("h4",title));c.appendChild(chart);
+  if(note)c.appendChild(el("p",note,"lab-note"));
+  if(tableNode){const d=el("details");d.appendChild(el("summary","Table view"));d.appendChild(tableNode);c.appendChild(d);}
+  return c;
+}
+/* ---------- controls ---------- */
+function labControls(){
+  const box=el("div",null,"lab");
+  const top=el("div",null,"lab-bar");
+  const seg=el("div",null,"seg");seg.setAttribute("role","tablist");seg.setAttribute("aria-label","Evidence source");
+  ["DEMO","PAPER","BACKTEST"].forEach(ev=>{const b=el("button",ev);b.type="button";b.setAttribute("role","tab");
+    b.setAttribute("aria-selected",String(LAB.evidence===ev));
+    b.addEventListener("click",()=>{if(LAB.evidence===ev)return;LAB.evidence=ev;LAB.filters={};LAB.page=1;LAB.trade=null;
+      LAB.trades=null;LAB.summary=null;labLoad(true);});seg.appendChild(b);});
+  top.appendChild(seg);
+  const s=LAB.summary;
+  if(LAB.evidence==="BACKTEST"&&s&&s.runs){
+    const lab=el("label","Research run");const sel=el("select");sel.setAttribute("aria-label","Backtest run");
+    s.runs.forEach(r=>{const o=el("option",r.run_id+" · "+r.canonical_symbol+" · "+fmt(r.trade_count)+" trades · "+fmt(r.cost_provenance));
+      o.value=r.run_id;sel.appendChild(o);});
+    sel.value=LAB.run_id||s.run_id||"";sel.addEventListener("change",()=>{LAB.run_id=sel.value;LAB.page=1;labLoad(true);});
+    lab.appendChild(sel);top.appendChild(lab);
+  }
+  if(LAB.evidence==="PAPER"&&s&&s.sessions&&s.sessions.length){
+    const lab=el("label","PAPER session");const sel=el("select");const all=el("option","All sessions (per-trade statistics only)");
+    all.value="";sel.appendChild(all);
+    s.sessions.forEach(x=>{const o=el("option",x.session_key+" · "+x.symbol+" · "+x.trades);o.value=x.session_key;sel.appendChild(o);});
+    sel.value=LAB.session_key;sel.addEventListener("change",()=>{LAB.session_key=sel.value;labLoad(true);});
+    lab.appendChild(sel);top.appendChild(lab);
+  }
+  const status=el("span",null,"lab-note");status.setAttribute("role","status");
+  if(LAB.loading)status.textContent="Loading…";
+  else if(LAB.error)status.textContent="Error: "+LAB.error;
+  else if(s){const fr=s.freshness||{};status.textContent="Computed "+time(fr.computed_at_utc||s.generated_at_utc)+
+    (fr.cache?" · "+(fr.cache==="HIT"?"cached (database unchanged)":"freshly computed"):"")+" · "+fmt(s.filtered_trade_records)+
+    " of "+fmt(s.total_trade_records)+" trade records match · currency "+mcur();}
+  top.appendChild(status);
+  const rb=el("button","Reload");rb.type="button";rb.className="secondary-button";rb.addEventListener("click",()=>labLoad(true));
+  top.appendChild(rb);box.appendChild(top);
+  const fbar=el("div",null,"lab-bar");fbar.setAttribute("aria-label","Strategy Lab filters");
+  const dateInput=(key,label)=>{const l=el("label",label);const i=el("input");i.type="date";i.value=LAB.filters[key]||"";
+    i.addEventListener("change",()=>{LAB.filters[key]=i.value;LAB.page=1;labLoad(true);});l.appendChild(i);fbar.appendChild(l);};
+  dateInput("date_from","From (UTC)");dateInput("date_to","To (UTC, inclusive)");
+  const opts=(s&&s.filter_options)||{};
+  LAB_FILTERS.forEach(([key,label])=>{
+    const l=el("label",label);const sel=el("select");const a=el("option","All");a.value="";sel.appendChild(a);
+    let values=(opts[key]||[]).slice();
+    if(key==="strategy"){values=Array.from(new Set([...(s?s.active_strategy_keys:[]),...values]));values.push("UNATTRIBUTED");}
+    values.forEach(v=>{const o=el("option",v);o.value=v;sel.appendChild(o);});
+    sel.value=LAB.filters[key]||"";sel.addEventListener("change",()=>{LAB.filters[key]=sel.value;LAB.page=1;labLoad(true);});
+    l.appendChild(sel);fbar.appendChild(l);
+  });
+  const reset=el("button","Clear filters");reset.type="button";reset.className="secondary-button";
+  reset.addEventListener("click",()=>{LAB.filters={};LAB.page=1;labLoad(true);});fbar.appendChild(reset);
+  box.appendChild(fbar);
+  const sub=el("div",null,"seg");sub.setAttribute("role","tablist");sub.setAttribute("aria-label","Strategy Lab sections");
+  LAB_SUBS.forEach(([id,label])=>{const b=el("button",label);b.type="button";b.setAttribute("role","tab");
+    b.setAttribute("aria-selected",String(LAB.sub===id));
+    b.addEventListener("click",()=>{LAB.sub=id;LAB.page=1;LAB.trades=null;LAB.trade=null;
+      if(id==="detail"&&!LAB.detailKey&&s)LAB.detailKey=s.active_strategy_keys[0];labLoad(true);});sub.appendChild(b);});
+  box.appendChild(sub);
+  if(s&&s.evidence_note)box.appendChild(el("div",s.evidence_note,"safeguard"));
+  return box;
+}
+/* ---------- sections ---------- */
+function labComparison(s){
+  const box=el("div",null,"lab");
+  const heads=["Compare","Shortlist","Strategy","Version","Status",["Signals","num"],["Selected","num"],["Submitted","num"],
+    ["Filled","num"],["Closed","num"],["W / L / BE","num"],["Win rate","num"],["Gross P&L","num"],["Commission","num"],
+    ["Fees","num"],["Swap","num"],["Net P&L","num"],["Profit factor","num"],["Avg R (n)","num"],["Expectancy","num"],
+    ["Avg hold","num"],["Max DD (closed)","num"],["Spread / slippage evidence","num"],"Last executed",["Open","num"]];
+  const rows=s.strategies.map(r=>{
+    const tr=el("tr");const f=r.funnel||{};
+    const cb=el("input");cb.type="checkbox";cb.checked=LAB.compare.includes(r.strategy_key);
+    cb.setAttribute("aria-label","Compare "+r.strategy_key);
+    cb.addEventListener("change",()=>{if(cb.checked){if(LAB.compare.length>=3){cb.checked=false;
+      window.alert("Compare holds at most 3 strategies. Untick one first.");return;}
+      LAB.compare.push(r.strategy_key);}else LAB.compare=LAB.compare.filter(k=>k!==r.strategy_key);labSave("asn-lab-compare",LAB.compare);});
+    cell(tr,cb);
+    const sl=el("input");sl.type="checkbox";sl.checked=LAB.shortlist.includes(r.strategy_key);
+    sl.setAttribute("aria-label","Shortlist "+r.strategy_key+" for research review");
+    sl.addEventListener("change",()=>{LAB.shortlist=sl.checked?Array.from(new Set([...LAB.shortlist,r.strategy_key])):
+      LAB.shortlist.filter(k=>k!==r.strategy_key);labSave("asn-lab-shortlist",LAB.shortlist);});
+    cell(tr,sl);
+    const name=el("button",r.strategy_key,"linkish");name.type="button";name.style.borderLeft="3px solid "+labColor(r.strategy_key);
+    name.style.paddingLeft="6px";name.addEventListener("click",()=>{LAB.sub="detail";LAB.detailKey=r.strategy_key;LAB.detail=null;labLoad(true);});
+    cell(tr,name);cell(tr,fmt(r.strategy_version)+(r.versions_in_evidence.length?" (evidence: v"+r.versions_in_evidence.join(", v")+")":""));
+    cell(tr,r.registration_status);
+    const fn=(k)=>s.evidence==="DEMO"?fmt(f[k]):"N/A";
+    cell(tr,fn("signals"),"num");cell(tr,fn("selected_proposals"),"num");cell(tr,fn("orders_submitted"),"num");
+    cell(tr,fn("orders_filled"),"num");cell(tr,fmt(r.closed_trades),"num");
+    if(!r.closed_trades){const td=cell(tr,"NO CLOSED TRADES","na");td.colSpan=14;}
+    else{
+      cell(tr,r.wins+" / "+r.losses+" / "+r.breakevens,"num");cell(tr,pct(r.win_rate),"num");
+      cell(tr,signed(r.gross_pnl),"num");cell(tr,signed(r.commission),"num");cell(tr,signed(r.fee),"num");cell(tr,signed(r.swap),"num");
+      cell(tr,signed(r.net_pnl),"num");
+      cell(tr,r.profit_factor!==null?num(r.profit_factor):(r.profit_factor_note||"N/A"),"num");
+      cell(tr,r.avg_r!==null?num(r.avg_r)+" ("+r.r_sample+")":"N/A","num");cell(tr,signed(r.expectancy_per_trade),"num");
+      cell(tr,dur(r.avg_holding_seconds),"num");
+      cell(tr,r.max_drawdown_closed_trade_basis===null?"N/A":signed(-r.max_drawdown_closed_trade_basis),"num");
+      const ev=r.spread_slippage_evidence||{};
+      cell(tr,s.evidence==="DEMO"?("spread "+num(ev.avg_entry_spread_price)+" · entry slip "+num(ev.avg_entry_slippage_price)+
+        " · exit slip "+num(ev.avg_exit_slippage_price)+" (price units, n="+ev.spread_sample+")"):
+        ("sim spread "+num(ev.simulated_spread_cost_total)+" · sim slippage "+num(ev.simulated_slippage_cost_total)),"num");
+      cell(tr,r.most_recent_executed_trade?time(r.most_recent_executed_trade.entry_time_utc):"—");
+    }
+    cell(tr,fmt(r.open_positions),"num");
+    return tr;
+  });
+  const un=s.unattributed||{};const um=un.metrics||{};
+  const utr=el("tr");cell(utr,"");cell(utr,"");const ul=el("span","UNATTRIBUTED (not a strategy)","text-warn");cell(utr,ul);
+  cell(utr,"—");cell(utr,"no durable chain");
+  for(let i=0;i<4;i++)cell(utr,"—","num");cell(utr,fmt(um.closed_trades),"num");
+  if(!um.closed_trades){const td=cell(utr,"NO CLOSED TRADES","na");td.colSpan=14;}
+  else{cell(utr,um.wins+" / "+um.losses+" / "+um.breakevens,"num");cell(utr,pct(um.win_rate),"num");
+    cell(utr,signed(um.gross_pnl),"num");cell(utr,signed(um.commission),"num");cell(utr,signed(um.fee),"num");cell(utr,signed(um.swap),"num");
+    cell(utr,signed(um.net_pnl),"num");for(let i=0;i<6;i++)cell(utr,"—","num");cell(utr,"—");}
+  cell(utr,"—","num");rows.push(utr);
+  box.appendChild(el("div","Winning and losing strategies · "+s.evidence+" evidence","mini-title"));
+  box.appendChild(gridTable(heads,rows));
+  box.appendChild(el("p","Metrics use CLOSED trades only (an entry is never a completed trade). Net = gross + commission + fees + swap, "+
+    "all broker-recorded for DEMO. Spread and slippage are already inside DEMO broker profit, so they are shown as evidence only. "+
+    "Profit factor with no losses is undefined, never infinite. Max drawdown is on the closed-trade sequence. "+
+    "Rows stay in registry order and are never ranked: small samples cannot support a ranking.","lab-note"));
+  if(s.evidence==="DEMO")box.appendChild(el("div",s.funnel_note,"safeguard"));
+  box.appendChild(el("div","Retired permanently (never executable, never shown as candidates): "+s.retired_strategies.join(", "),"safeguard"));
+  const grid=el("div",null,"chart-grid");
+  const series=s.active_strategy_keys.map(k=>({key:k,label:k,color:labColor(k),
+    points:(s.curves[k]||[]).map(p=>({x:p.t,y:p.cum_net,tip:time(p.t)+" · cumulative "+money(p.cum_net)+" "+mcur()}))})).filter(x=>x.points.length);
+  const curveTable=gridTable(["Strategy",["Closed","num"],["Final cumulative net","num"]],series.map(x=>{const tr=el("tr");cell(tr,x.label);
+    cell(tr,String(x.points.length),"num");cell(tr,signed(x.points[x.points.length-1].y),"num");return tr;}));
+  grid.appendChild(chartCard("Cumulative realized net P&L by strategy ("+mcur()+")",lineChart(series,{aria:"cumulative net P&L"}),curveTable));
+  const gc=s.strategies.filter(r=>r.closed_trades).flatMap(r=>[
+    {label:r.strategy_key+" gross",value:r.gross_pnl||0},
+    {label:r.strategy_key+" costs",value:(r.commission||0)+(r.fee||0)+(r.swap||0)}]);
+  grid.appendChild(chartCard("Gross P&L versus recorded costs ("+mcur()+")",barChart(gc,{aria:"gross versus costs"}),null,
+    "Costs = commission + fees + swap as recorded. When costs outweigh gross results, frequent trading loses money even if signals are sometimes right."));
+  const bd=s.breakdowns||{};
+  const groupChart=(title,rowsIn,key)=>{
+    const items=(rowsIn||[]).map(r=>({label:r[key]+" (n="+r.closed_trades+")",value:r.net_pnl,
+      tip:r[key]+": net "+money(r.net_pnl)+" "+mcur()+", "+r.wins+"W/"+r.losses+"L of "+r.closed_trades}));
+    const tbl=gridTable([key,["Closed","num"],["Wins","num"],["Losses","num"],["Gross","num"],["Costs","num"],["Net","num"]],
+      (rowsIn||[]).map(r=>{const tr=el("tr");cell(tr,String(r[key]));cell(tr,fmt(r.closed_trades),"num");cell(tr,fmt(r.wins),"num");
+        cell(tr,fmt(r.losses),"num");cell(tr,signed(r.gross_pnl),"num");cell(tr,signed(r.costs),"num");cell(tr,signed(r.net_pnl),"num");return tr;}));
+    return chartCard(title+" ("+mcur()+")",barChart(items,{aria:title}),tbl);
+  };
+  grid.appendChild(groupChart("Net result by strategy, incl. unattributed",bd.by_strategy,"strategy_key"));
+  grid.appendChild(groupChart("Net result by symbol",bd.by_symbol,"symbol"));
+  grid.appendChild(groupChart("Net result by regime",bd.by_regime,"regime"));
+  grid.appendChild(groupChart("Net result by direction",bd.by_direction,"direction"));
+  grid.appendChild(groupChart("Net result by session",bd.by_session,"session"));
+  grid.appendChild(groupChart("Net result by exit reason",bd.by_exit_reason,"exit_reason"));
+  const freq=(bd.by_day||[]).map(d=>({label:d.day,value:d.closed_trades,valueLabel:String(d.closed_trades),color:"var(--s1)",
+    tip:d.day+": "+d.closed_trades+" closed, net "+money(d.net_pnl)+" "+mcur()}));
+  grid.appendChild(chartCard("Trade frequency (closed trades per UTC day)",barChart(freq,{aria:"trade frequency"}),
+    gridTable(["Day",["Closed","num"],["Net","num"]],(bd.by_day||[]).map(d=>{const tr=el("tr");cell(tr,d.day);cell(tr,String(d.closed_trades),"num");
+      cell(tr,signed(d.net_pnl),"num");return tr;}))));
+  const dist=(title,arr)=>chartCard(title,barChart((arr||[]).map(b=>({label:b.bucket,value:b.count,valueLabel:String(b.count),color:"var(--s1)"})),
+    {aria:title}),gridTable(["Bucket",["Trades","num"]],(arr||[]).map(b=>{const tr=el("tr");cell(tr,b.bucket);cell(tr,String(b.count),"num");return tr;})));
+  grid.appendChild(dist("Win/loss distribution (net per closed trade, "+mcur()+")",bd.net_distribution));
+  grid.appendChild(dist("R-multiple distribution (trades with recorded initial risk)",bd.r_distribution));
+  if(s.evidence==="DEMO"){
+    const conv=s.strategies.map(r=>{const f=r.funnel||{};const tr=el("tr");cell(tr,r.strategy_key);
+      ["signals","signals_rejected","selected_proposals","entry_allowed_chains","entry_blocked_chains","orders_created","orders_submitted","orders_filled"]
+        .forEach(k=>cell(tr,fmt(f[k]),"num"));
+      cell(tr,pct(f.signal_to_order_conversion),"num");cell(tr,pct(f.order_to_fill_conversion),"num");return tr;});
+    const c=el("div",null,"chart-card");c.style.gridColumn="1/-1";c.appendChild(el("h4","Signal → order → fill conversion (DEMO runtime chains)"));
+    c.appendChild(gridTable(["Strategy",["Signals","num"],["Rejected","num"],["Selected","num"],["Allowed","num"],["Blocked","num"],
+      ["Order rows","num"],["Submitted","num"],["Filled","num"],["Signal→order","num"],["Order→fill","num"]],conv));
+    c.appendChild(el("p","Strategies that signal but never reach SUBMITTED are producing hypotheses the gates reject; "+
+      "Strategy detail → why-no-trade lists the recorded reasons.","lab-note"));
+    grid.appendChild(c);
+  }
+  box.appendChild(grid);
+  return box;
+}
+function kvTable(obj){const rows=Object.entries(obj||{}).map(([k,v])=>{const tr=el("tr");cell(tr,heading(k));
+  cell(tr,/(_utc|_at)$/.test(k)&&typeof v==="number"?time(v):(v!==null&&typeof v==="object"?JSON.stringify(v):fmt(v)));return tr;});
+  return gridTable(["Field","Value"],rows);}
+function tradesTable(list,evidence){
+  const heads=["Trade / position","Strategy","Source","Symbol","Dir","Status","Regime","Entry","Exit",["Closed / entry vol","num"],
+    ["Gross","num"],["Costs","num"],["Net (realized)","num"],["R","num"],"Exit reason"];
+  const rows=list.map(t=>{const tr=el("tr",null,"clickable");tr.tabIndex=0;
+    const open=()=>labOpenTrade(evidence||t.evidence,t.trade_id);
+    tr.addEventListener("click",open);tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});
+    cell(tr,t.trade_id+(t.run_id?" · "+t.run_id:""));
+    const sk=el("span",t.strategy_key||"UNATTRIBUTED");if(!t.strategy_key)sk.className="text-warn";cell(tr,sk);
+    cell(tr,t.source_class);cell(tr,fmt(t.symbol));cell(tr,fmt(t.direction));cell(tr,t.status);cell(tr,fmt(t.regime));
+    cell(tr,time(t.entry_time_utc));cell(tr,time(t.exit_time_utc));cell(tr,num(t.closed_volume)+" / "+num(t.entry_volume),"num");
+    cell(tr,signed(t.gross_pnl,t.currency),"num");cell(tr,signed(t.costs,t.currency),"num");cell(tr,signed(t.realized_net_pnl,t.currency),"num");
+    cell(tr,num(t.realized_r),"num");cell(tr,fmt(t.exit_reason));return tr;});
+  return gridTable(heads,rows);
+}
+function labDetail(){
+  const box=el("div",null,"lab");const s=LAB.summary;
+  const bar=el("div",null,"lab-bar");const lab=el("label","Strategy");const sel=el("select");
+  [...s.active_strategy_keys,...s.retired_strategies].forEach(k=>{const o=el("option",k+(s.retired_strategies.includes(k)?" (retired)":""));o.value=k;sel.appendChild(o);});
+  sel.value=LAB.detailKey;sel.addEventListener("change",()=>{LAB.detailKey=sel.value;LAB.detail=null;labLoad(true);});
+  lab.appendChild(sel);bar.appendChild(lab);box.appendChild(bar);
+  const d=LAB.detail;
+  if(!d||d.strategy_key!==LAB.detailKey){box.appendChild(el("p","Loading strategy detail…","empty"));return box;}
+  const src=d.source;
+  box.appendChild(el("h3",d.strategy_key+" · "+d.registration_status));
+  if(!src){box.appendChild(el("div","Permanently retired: no source module is registered and it can never be executed.","safeguard"));}
+  else{
+    box.appendChild(el("p",src.description,"lab-note"));
+    const st=el("div",null,"stat-grid");
+    st.appendChild(stat("Version","v"+src.version,src.class_name));
+    st.appendChild(stat("Eligible regimes",src.regime_gate&&src.regime_gate.eligible?src.regime_gate.eligible.join(", "):"see entry rules",
+      src.regime_gate&&src.regime_gate.rule?src.regime_gate.rule:""));
+    st.appendChild(stat("ATR stop / target",num(src.stop_atr_multiple)+" / "+num(src.target_atr_multiple)+" × ATR","price distances, not money"));
+    st.appendChild(stat("Required confidence",num(src.min_confidence),"minimum raw confidence"));
+    st.appendChild(stat("Expected duration",dur(src.expected_duration_seconds),"strategy's own estimate"));
+    box.appendChild(st);
+    box.appendChild(el("div","Current parameters (read from the registered instance)","mini-title"));box.appendChild(kvTable(src.current_parameters));
+    const dd=el("details");dd.appendChild(el("summary","Actual entry rules — evaluate() source, verbatim"));
+    dd.appendChild(el("pre",src.entry_rules_source||"source unavailable","src"));box.appendChild(dd);
+  }
+  const m=d.demo_metrics||{};
+  const st2=el("div",null,"stat-grid");
+  st2.appendChild(stat("DEMO closed trades",m.closed_trades?fmt(m.closed_trades):"NO CLOSED TRADES",""));
+  const net=stat("DEMO net realized","","");net.querySelector(".value").appendChild(signed(m.net_pnl,d.currency));st2.appendChild(net);
+  st2.appendChild(stat("Win rate",pct(m.win_rate),m.closed_trades?m.wins+"W / "+m.losses+"L / "+m.breakevens+"BE":""));
+  st2.appendChild(stat("Open positions",fmt((d.open_positions||[]).length),"broker-confirmed"));
+  box.appendChild(st2);
+  const ev=(title,obj)=>{box.appendChild(el("div",title,"mini-title"));
+    box.appendChild(obj?kvTable(Object.fromEntries(Object.entries(obj).filter(([k])=>k!=="payload"))):el("p","None recorded.","empty"));
+    if(obj&&obj.payload){const x=el("details");x.appendChild(el("summary","Recorded payload"));x.appendChild(render(obj.payload,1));box.appendChild(x);}};
+  ev("Latest genuine evaluation (entry_decisions)",d.latest_evaluation);
+  ev("Latest proposed signal (runtime chain)",d.latest_signal);
+  ev("Last selected signal",d.latest_selected);
+  box.appendChild(el("div","Latest broker-confirmed trade","mini-title"));
+  box.appendChild(d.latest_broker_confirmed_trade?tradesTable([d.latest_broker_confirmed_trade],"DEMO"):
+    el("p","None: this strategy has no broker-confirmed DEMO trade.","empty"));
+  box.appendChild(el("div","Current open positions","mini-title"));
+  box.appendChild((d.open_positions||[]).length?tradesTable(d.open_positions,"DEMO"):el("p","None.","empty"));
+  box.appendChild(el("div","Recent closed trades","mini-title"));
+  box.appendChild((d.recent_closed_trades||[]).length?tradesTable(d.recent_closed_trades,"DEMO"):el("p","NO CLOSED TRADES.","empty"));
+  box.appendChild(el("div","Why-no-trade history (latest 25 non-filled decisions)","mini-title"));
+  box.appendChild((d.why_no_trade||[]).length?gridTable(["Decided","Mode","Symbol","Stage","Decision","Reason"],d.why_no_trade.map(w=>{const tr=el("tr");
+    cell(tr,time(w.decided_at_utc));cell(tr,fmt(w.mode));cell(tr,fmt(w.symbol));cell(tr,fmt(w.stage));cell(tr,fmt(w.decision));
+    cell(tr,fmt(w.reason));return tr;})):el("p","No recorded decisions for this strategy.","empty"));
+  box.appendChild(labLifecycle());
+  return box;
+}
+function labTrades(unattributed){
+  const box=el("div",null,"lab");const t=LAB.trades;const s=LAB.summary;
+  if(unattributed&&s){
+    const u=s.unattributed||{};box.appendChild(el("div","Unattributed trade records by source ("+s.evidence+")","mini-title"));
+    box.appendChild(gridTable(["Source class",["Records","num"],["Closed","num"],["Realized net","num"],["Net of all deals","num"]],
+      Object.entries(u.by_source_class||{}).map(([k,v])=>{const tr=el("tr");cell(tr,k);cell(tr,fmt(v.trade_records),"num");cell(tr,fmt(v.closed),"num");
+        cell(tr,signed(v.realized_net_pnl),"num");cell(tr,signed(v.net_pnl_all_deals),"num");return tr;})));
+    box.appendChild(el("p","ASN_UNATTRIBUTED = this runtime's own trade whose durable chain is incomplete. EXTERNAL_EXPERT = another expert "+
+      "adviser's magic number. MANUAL = broker reason CLIENT/MOBILE/WEB. UNKNOWN_SOURCE = magic 0 with no broker reason recorded. "+
+      "None of these is ever guessed onto a strategy.","lab-note"));
+  }
+  const bar=el("div",null,"lab-bar");const l=el("label","Search (ticket, strategy, symbol, exit reason, chain, run)");
+  const inp=el("input");inp.type="search";inp.className="search";inp.value=LAB.q;
+  let timer=null;inp.addEventListener("input",()=>{clearTimeout(timer);timer=setTimeout(()=>{LAB.q=inp.value;LAB.page=1;labLoad(true);},400);});
+  l.appendChild(inp);bar.appendChild(l);box.appendChild(bar);
+  if(!t){box.appendChild(el("p","Loading trades…","empty"));return box;}
+  box.appendChild(el("p",fmt(t.total)+" matching trade record(s). Select a row (click or Enter) for its complete traceable lifecycle.","lab-note"));
+  box.appendChild(t.trades.length?tradesTable(t.trades,t.evidence):el("p","No trades match the current filters.","empty"));
+  const pg=el("div",null,"pager");
+  const mk=(label,p,dis)=>{const b=el("button",label);b.type="button";b.className="secondary-button";b.disabled=dis;
+    b.addEventListener("click",()=>{LAB.page=p;labLoad(true);});pg.appendChild(b);};
+  mk("« First",1,t.page<=1);mk("‹ Prev",t.page-1,t.page<=1);pg.appendChild(el("span","Page "+t.page+" of "+t.pages,"tiny"));
+  mk("Next ›",t.page+1,t.page>=t.pages);mk("Last »",t.pages,t.page>=t.pages);box.appendChild(pg);
+  box.appendChild(labLifecycle());
+  return box;
+}
+function labLifecycle(){
+  const box=el("div",null,"chart-card");box.id="lab-lifecycle";const x=LAB.trade;
+  if(!x){box.classList.add("hidden");return box;}
+  const head=el("div",null,"lab-bar");head.appendChild(el("h4","Trade lifecycle · "+fmt(x.id||(x.trade&&x.trade.trade_id))));
+  const close=el("button","Close");close.type="button";close.className="secondary-button";close.addEventListener("click",()=>{LAB.trade=null;labRender();});
+  head.appendChild(close);box.appendChild(head);
+  if(x.loading){box.appendChild(el("p","Loading lifecycle…","empty"));return box;}
+  if(x.error){box.appendChild(el("p",x.error,"error"));return box;}
+  const t=x.trade;
+  const st=el("div",null,"stat-grid");
+  st.appendChild(stat("Strategy",t.strategy_key||"UNATTRIBUTED",t.source_class+(t.strategy_version?" · v"+t.strategy_version:"")));
+  st.appendChild(stat("Status",t.status,fmt(t.symbol)+" "+fmt(t.direction)));
+  const n=stat("Net realized","","");n.querySelector(".value").appendChild(signed(t.realized_net_pnl,t.currency));st.appendChild(n);
+  st.appendChild(stat("Realized R",num(t.realized_r),"initial risk "+num(t.initial_monetary_risk)));
+  st.appendChild(stat("Entry / exit price",num(t.entry_price,5)+" / "+num(t.exit_price,5),"volume "+num(t.entry_volume)));
+  st.appendChild(stat("Initial SL / TP",num(t.initial_stop_loss,5)+" / "+num(t.initial_take_profit,5),"as requested"));
+  st.appendChild(stat("Exit",fmt(t.exit_reason),fmt(t.exit_reason_evidence)));
+  box.appendChild(st);
+  if(t.attribution_checks&&t.attribution_checks.length){
+    box.appendChild(el("div","Attribution evidence (every link must pass)","mini-title"));
+    box.appendChild(gridTable(["Check","Result","Detail"],t.attribution_checks.map(c=>{const tr=el("tr");cell(tr,c.check);
+      cell(tr,el("span",c.passed?"PASS":"FAIL","badge "+(c.passed?"ok":"bad")));cell(tr,fmt(c.detail));return tr;})));
+  }
+  const sec=(title,val)=>{if(val===undefined)return;const d=el("details");d.appendChild(el("summary",title));
+    const inner=el("div",null,"nested");inner.appendChild(val===null||(Array.isArray(val)&&!val.length)?el("p","None recorded.","empty"):render(val,1));
+    d.appendChild(inner);box.appendChild(d);};
+  sec("1 · Original signal (regime, features, confidence)",x.signal);
+  sec("2 · Selection decision",x.selection);
+  sec("Other strategies' signals on the same bar",x.other_signals_in_chain);
+  sec("3 · Permission checks",x.permission_checks);
+  sec("Recorded entry decisions",x.entry_decisions);
+  sec("4 · Expected and observed execution costs",x.execution_cost_evidence);
+  sec("5 · Local order",x.local_order);sec("Order state transitions",x.order_transitions);
+  sec("6 · Order journal events",x.order_events);
+  sec("7 · Broker order(s) (broker-history import)",x.broker_orders);
+  sec("8 · Broker deals (entry and exit fills)",x.broker_deals);
+  sec("9 · Position management state (initial risk, exit decision/fill R, slippage)",x.position_management_state);
+  sec("10 · Management actions (stop moves, close, reconciliation)",x.management_actions);
+  sec("Position reviews",x.position_reviews);
+  sec("Advisory evidence (ML/RAG; no authority)",x.advisory_evidence);
+  sec("11 · Accounting",x.accounting);
+  sec("Simulation record",x.simulation_record);sec("Research run provenance",x.run);
+  return box;
+}
+function labCompare(){
+  const box=el("div",null,"lab");const s=LAB.summary;
+  const keys=LAB.compare.filter(k=>s.strategies.some(r=>r.strategy_key===k)).slice(0,3);
+  if(!keys.length){box.appendChild(el("p","Tick up to three “Compare” boxes in the Comparison table.","empty"));return box;}
+  const rows=keys.map(k=>s.strategies.find(r=>r.strategy_key===k));
+  const metric=(label,fn)=>{const tr=el("tr");cell(tr,label);rows.forEach(r=>cell(tr,fn(r),"num"));return tr;};
+  const f=(r,k)=>s.evidence==="DEMO"?fmt((r.funnel||{})[k]):"N/A";
+  const trs=[
+    metric("Closed trades (sample size)",r=>r.closed_trades?String(r.closed_trades):"NO CLOSED TRADES"),
+    metric("Signals / selected / submitted / filled",r=>[f(r,"signals"),f(r,"selected_proposals"),f(r,"orders_submitted"),f(r,"orders_filled")].join(" / ")),
+    metric("Wins / losses / breakevens",r=>r.wins+" / "+r.losses+" / "+r.breakevens),metric("Win rate",r=>pct(r.win_rate)),
+    metric("Gross P&L",r=>signed(r.gross_pnl)),
+    metric("Commission + fees + swap",r=>r.closed_trades?signed((r.commission||0)+(r.fee||0)+(r.swap||0)):"N/A"),
+    metric("Net P&L",r=>signed(r.net_pnl)),metric("Profit factor",r=>r.profit_factor!==null?num(r.profit_factor):fmt(r.profit_factor_note)),
+    metric("Average R (sample)",r=>r.avg_r!==null?num(r.avg_r)+" ("+r.r_sample+")":"N/A"),
+    metric("Expectancy per trade",r=>signed(r.expectancy_per_trade)),metric("Average hold",r=>dur(r.avg_holding_seconds)),
+    metric("Max drawdown (closed-trade basis)",r=>r.max_drawdown_closed_trade_basis===null?"N/A":signed(-r.max_drawdown_closed_trade_basis)),
+  ];
+  box.appendChild(gridTable(["Metric",...rows.map(r=>[r.strategy_key,"num"])],trs,{caption:s.evidence+" evidence · identical filters for every column"}));
+  const series=keys.map(k=>({key:k,label:k,color:labColor(k),points:(s.curves[k]||[]).map(p=>({x:p.t,y:p.cum_net,
+    tip:time(p.t)+" · cumulative "+money(p.cum_net)+" "+mcur()}))}));
+  box.appendChild(chartCard("Cumulative realized net P&L, side by side ("+mcur()+")",lineChart(series,{aria:"compare cumulative net"}),
+    gridTable(["Strategy",["Closed","num"],["Final","num"]],series.map(x=>{const tr=el("tr");cell(tr,x.label);cell(tr,String(x.points.length),"num");
+      cell(tr,x.points.length?signed(x.points[x.points.length-1].y):"N/A","num");return tr;}))));
+  box.appendChild(el("p","A strategy with few closed trades has an insufficient sample: a positive figure there is not evidence of an edge.","safeguard"));
+  return box;
+}
+function labReconciliation(){
+  const box=el("div",null,"lab");const s=LAB.summary;const r=s.reconciliation;
+  if(!r){box.appendChild(el("p","Reconciliation applies to DEMO broker evidence only. PAPER and BACKTEST are simulations with no broker-deal population.","empty"));return box;}
+  const st=el("div",null,"stat-grid");
+  st.appendChild(stat("Reconciles",r.reconciles?"YES":"NO: investigate",r.reconciles?"ledger = independent SQL sum":"see discrepancies below"));
+  const a=stat("Population net (SQL)","","");a.querySelector(".value").appendChild(signed(r.population_net_sql,r.currency));st.appendChild(a);
+  const b=stat("Population net (ledger)","","");b.querySelector(".value").appendChild(signed(r.population_net_ledger,r.currency));st.appendChild(b);
+  st.appendChild(stat("Deals (SQL / ledger)",fmt(r.population_deal_count_sql)+" / "+fmt(r.population_deal_count_ledger),"account "+fmt(r.login)));
+  st.appendChild(stat("Money discrepancy",num(r.ledger_vs_sql_money_discrepancy,6),r.currency||""));
+  st.appendChild(stat("Closed-count check",r.closed_count_check.matches?"MATCHES":"MISMATCH",
+    fmt(r.closed_count_check.attributed_closed_positions)+" attributed closed vs "+fmt(r.closed_count_check.local_positions_marked_closed)+" local CLOSED rows"));
+  box.appendChild(st);
+  box.appendChild(el("p",r.population,"lab-note"));box.appendChild(el("div",r.formula,"safeguard"));
+  const rows=Object.entries(r.by_source_class).map(([k,v])=>{const tr=el("tr");cell(tr,k);cell(tr,fmt(v.positions),"num");
+    cell(tr,fmt(v.closed),"num");cell(tr,fmt(v.partially_closed),"num");cell(tr,fmt(v.open),"num");cell(tr,fmt(v.other_status),"num");
+    cell(tr,signed(v.realized,r.currency),"num");cell(tr,signed(v.open_volume_entry_costs,r.currency),"num");cell(tr,signed(v.net_all_deals,r.currency),"num");return tr;});
+  const nt=el("tr");cell(nt,"Non-trade deals (deposits, balance/credit adjustments)");cell(nt,fmt(r.non_trade_deal_count),"num");
+  for(let i=0;i<6;i++)cell(nt,"—","num");cell(nt,signed(r.non_trade_deals_net,r.currency),"num");rows.push(nt);
+  const ot=el("tr");cell(ot,"Trade deals without a position id");cell(ot,fmt(r.trade_deals_without_position_count),"num");
+  for(let i=0;i<6;i++)cell(ot,"—","num");cell(ot,signed(r.trade_deals_without_position_net,r.currency),"num");rows.push(ot);
+  const tot=el("tr");cell(tot,"TOTAL (must equal the SQL population)");for(let i=0;i<7;i++)cell(tot,"");
+  cell(tot,signed(r.population_net_ledger,r.currency),"num");rows.push(tot);
+  box.appendChild(gridTable(["Source class",["Positions","num"],["Closed","num"],["Partial","num"],["Open","num"],["Other","num"],
+    ["Realized","num"],["Entry costs on open volume","num"],["Net of all deals","num"]],rows));
+  box.appendChild(el("div","Broker-history vs runtime-record discrepancies ("+r.deal_source_discrepancies.length+")","mini-title"));
+  box.appendChild(r.deal_source_discrepancies.length?table(r.deal_source_discrepancies):el("p","None: every deal present in both sources agrees.","empty"));
+  if(r.local_positions_without_deals.length){box.appendChild(el("div","Local positions with no broker deal in the population","mini-title"));
+    box.appendChild(table(r.local_positions_without_deals));}
+  box.appendChild(el("div","Broker-history coverage","mini-title"));box.appendChild(kvTable(s.broker_history_coverage||{}));
+  return box;
+}
+function labShortlist(){
+  const box=el("div",null,"lab");const s=LAB.summary;
+  box.appendChild(el("div","Human review shortlist: this list lives only in this browser. It never changes live execution, "+
+    "never enables, disables or promotes a strategy, and never changes risk. Any strategy configuration change requires a separately "+
+    "reviewed code/config change, tests and an operator-approved controlled deployment.","safeguard"));
+  if(!LAB.shortlist.length){box.appendChild(el("p","Tick “Shortlist” boxes in the Comparison table to build a research-review list.","empty"));return box;}
+  const rows=LAB.shortlist.map(k=>{const r=s.strategies.find(x=>x.strategy_key===k);const tr=el("tr");cell(tr,k);
+    const rm=el("button","Remove");rm.type="button";rm.className="secondary-button";
+    rm.addEventListener("click",()=>{LAB.shortlist=LAB.shortlist.filter(x=>x!==k);labSave("asn-lab-shortlist",LAB.shortlist);labRender();});
+    if(!r){const td=cell(tr,"not in this evidence set","na");td.colSpan=4;cell(tr,rm);return tr;}
+    cell(tr,r.closed_trades?String(r.closed_trades):"NO CLOSED TRADES","num");cell(tr,pct(r.win_rate),"num");cell(tr,signed(r.net_pnl),"num");
+    cell(tr,r.profit_factor!==null?num(r.profit_factor):fmt(r.profit_factor_note),"num");cell(tr,rm);return tr;});
+  box.appendChild(gridTable(["Strategy",["Closed","num"],["Win rate","num"],["Net","num"],["Profit factor","num"],""],rows,
+    {caption:s.evidence+" evidence under the current filters"}));
+  const row=el("div",null,"lab-bar");
+  const a=el("a","Export comparison CSV (current evidence and filters)");a.className="secondary-button";a.style.textDecoration="none";
+  a.href="/api/strategy-lab/export.csv?"+labQuery({keys:LAB.shortlist.join(",")});a.setAttribute("download","");row.appendChild(a);
+  const j=el("button","Export shortlist JSON");j.type="button";j.className="secondary-button";
+  j.addEventListener("click",()=>downloadText("strategy-review-shortlist.json",JSON.stringify({exported_at:new Date().toISOString(),
+    evidence:s.evidence,filters:s.filters,currency:s.currency,strategies:s.strategies.filter(x=>LAB.shortlist.includes(x.strategy_key))},null,2)));
+  row.appendChild(j);box.appendChild(row);
+  return box;
+}
+function labRender(){
+  const root=labRoot();if(!root)return;
+  const y=window.scrollY;const frag=el("div",null,"lab");
+  frag.appendChild(labControls());
+  const s=LAB.summary;
+  if(!s){frag.appendChild(el("p",LAB.error?("Strategy Lab unavailable: "+LAB.error):"Loading Strategy Lab evidence…",LAB.error?"error":"empty"));}
+  else if(LAB.sub==="comparison")frag.appendChild(labComparison(s));
+  else if(LAB.sub==="detail")frag.appendChild(labDetail());
+  else if(LAB.sub==="compare")frag.appendChild(labCompare());
+  else if(LAB.sub==="trades")frag.appendChild(labTrades(false));
+  else if(LAB.sub==="unattributed")frag.appendChild(labTrades(true));
+  else if(LAB.sub==="reconciliation")frag.appendChild(labReconciliation());
+  else if(LAB.sub==="shortlist")frag.appendChild(labShortlist());
+  if(s&&!["trades","unattributed","detail"].includes(LAB.sub))frag.appendChild(labLifecycle());
+  frag.appendChild(el("div","Strategy Lab is review-only. It reads the local database; it cannot place, modify or close orders, "+
+    "change risk, touch the kill switch, or activate, disable or promote any strategy.","footer"));
+  root.replaceChildren(frag);window.scrollTo(0,y);
+}
+/* refresh while visible at most every 20 s; the server only recomputes when the database changed */
+setInterval(()=>{if(current==="strategy_lab"&&!LAB.loading&&!LAB.trade&&Date.now()-LAB.lastFetch>20000&&!document.hidden)labLoad(false);},5000);
 function showView(){
   const group=GROUPS.find(g=>g.id===current)||GROUPS[0];
+  const isLab=current==="strategy_lab";
+  ["kpis","panel-toolbar","panels"].forEach(id=>document.getElementById(id).classList.toggle("hidden",isLab));
+  labRoot().classList.toggle("hidden",!isLab);
   document.getElementById("view-title").textContent=group.label;
   document.getElementById("view-desc").textContent=group.desc;
   document.getElementById("section-title").textContent=group.label+" panels";

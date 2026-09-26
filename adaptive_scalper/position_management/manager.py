@@ -105,6 +105,12 @@ class PositionReviewInput:
     # reference, exactly like every other "honest N/A" field in this
     # codebase.
     current_price_at_review: float | None = None
+    # Identity stamped on the runtime's own CLOSE request, so the broker's
+    # closing deal carries this runtime's magic number instead of 0 (which
+    # is indistinguishable from manual activity in broker history). Pure
+    # labelling: it does not change whether, when or how a close happens.
+    close_magic: int = 0
+    close_comment: str = ""
 
 
 @dataclass(frozen=True)
@@ -362,6 +368,7 @@ def review_position_once(
     close_outcome = close_position_safely(
         gateway, broker_position_id=inp.broker_position_id, expected_direction=inp.direction,
         expected_volume=inp.volume, broker_symbol=inp.broker_symbol, clock=clock,
+        magic=inp.close_magic, comment=inp.close_comment,
         conn=conn, reconciliation_chain_key=_reconciliation_chain_key(inp.position_id),
     )
     if close_outcome.status in POST_SEND_STATUSES:

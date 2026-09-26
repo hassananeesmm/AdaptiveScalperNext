@@ -132,6 +132,11 @@ class Mt5Config(BaseModel):
     # gateway/server_time.py). "UTC" = no conversion. The runtime refuses to
     # start when a live quote proves the rule wrong.
     server_time_rule: str = "UTC"
+    # ASN-010: with several MT5 installations on one computer, an unpinned
+    # initialize() attaches to whichever terminal MetaTrader5 picks. When
+    # set, the gateway initializes THIS terminal64.exe and refuses to
+    # continue unless the attached terminal reports the same install folder.
+    terminal_path: str | None = None
 
     @field_validator("server_time_rule")
     @classmethod
@@ -139,6 +144,15 @@ class Mt5Config(BaseModel):
         from adaptive_scalper.gateway.server_time import validate_rule
 
         return validate_rule(value)
+
+    @field_validator("terminal_path")
+    @classmethod
+    def _terminal_exe(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        if not value.strip().lower().endswith("terminal64.exe"):
+            raise ValueError("terminal_path must be the full path to terminal64.exe")
+        return value.strip()
 
 
 _COST_PROVENANCES = ("UNVERIFIED_ASSUMPTION", "BROKER_SPEC_ESTIMATE", "BROKER_DEMO_CONFIRMED")
