@@ -188,6 +188,16 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~ASN-013 [MEDIUM, dashboard evidence] Strategy Lab registry counted legacy non-runtime journal chains as
+  runtime signals.~~ Fixed 2026-09-26: runtime `entry:` chains only; excluded count reported.
+- ~~ASN-014 [LOW, broker evidence] Adaptive-exit close requests were sent with magic 0.~~ Fixed in source
+  2026-09-26 (close requests carry the runtime magic); deploys with the next controlled restart.
+- ~~ASN-008 [LOW] status/health full integrity scan.~~ Fixed 2026-09-26: quick_check default, `--full-integrity`.
+- ~~ASN-009 [MEDIUM] pickle model artifacts.~~ Fixed 2026-09-26: JSON parameter artifacts; pickle refused.
+- ~~ASN-010 [LOW] implicit MT5 terminal.~~ Mechanism fixed 2026-09-26: optional `[mt5] terminal_path` +
+  identity assertion (operator to configure).
+- ASN-015 [INFO, open] Gate-blocked order rows stay in state PROPOSED (never sent, no risk reserved).
+
 - ~~#28 [MEDIUM, reconciliation] Stable reconciliation incidents were recorded and
   deduplicated while present, but never resolved after a later complete broker snapshot no
   longer contained the finding. This left preflight permanently blocked by a stale orphan

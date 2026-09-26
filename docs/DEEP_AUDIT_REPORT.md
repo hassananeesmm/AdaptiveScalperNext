@@ -163,7 +163,10 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
   separately persisted, age-labelled integrity result for fast status output.
 - Regression test: assert status uses recent evidence and labels its age, while doctor still
   performs a full check.
-- Status: **OPEN, non-safety-critical**.
+- Status: **FIXED 2026-09-26** (branch `feature/strategy-lab-attribution`). `status`/`health` default to
+  `PRAGMA quick_check` (0.72 s vs 10.38 s measured on the 275 MB copy) and label which check ran
+  (`database_integrity_check`). `--full-integrity` runs the full check; `doctor`, preflight and runtime
+  startup keep the full check.
 
 ### ASN-009 — Model artifacts use pickle-compatible deserialization
 
@@ -178,7 +181,9 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
   migrate to a non-executable model format before accepting external artifacts.
 - Regression test: checksum mismatch is already rejected; add provenance/ownership checks if
   external artifact ingestion is ever introduced.
-- Status: **OPEN RISK; no external artifact path exists today**.
+- Status: **FIXED 2026-09-26**. Artifacts are now JSON parameters (classes, coefficients, intercept;
+  format `asn-logistic-regression-json-v1`) rebuilt without pickle. Legacy joblib/pickle files are refused,
+  never loaded. The checksum is still verified first. No model was registered at fix time (0 models).
 
 ### ASN-010 — MT5 terminal selection is implicit
 
@@ -187,7 +192,10 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
 - Actual/expected: two terminals are installed and initialization does not pin a path.
 - Consequence: attachment to an unintended terminal; DEMO gate still prevents REAL mutation.
 - Proposed correction/test: optional configured terminal path plus identity assertion.
-- Status: **OPEN**.
+- Status: **FIXED (mechanism) 2026-09-26**. Optional `[mt5] terminal_path`: the gateway initializes that
+  terminal64.exe and refuses (shutdown, fail closed) a terminal whose reported install folder differs.
+  Left unset by default (machine-specific). The operator should set it to the IC Markets terminal before
+  the next controlled restart.
 
 ### ASN-011 — Release smoke test initialized the real MT5 terminal
 
@@ -255,3 +263,35 @@ the kill switch. No paid LLM is required at runtime.
   failures. Local deals recorded gross profit `-22.97` plus `-1.62` commission.
 - DEMO readiness at final preflight: **NOT READY**, despite DEMO already running.
 - REAL/CONTEST/UNKNOWN execution: blocked by design; not tested by sending orders.
+
+## Session addendum: Strategy Lab attribution (2026-09-26)
+
+### ASN-013: Strategy Lab counted legacy journal chains as runtime signals
+- Severity: **MEDIUM (misleading evidence)**. Affected: `dashboard/panels.py` `strategy_registry`.
+- The 30-day funnel counted SIGNAL_CREATED/PROPOSAL events from every journal chain, including 391
+  legacy `XAUUSD-<strategy>-<ts>-<hash>` replay chains from 2026-09-17/18 that no current code writes
+  (e.g. `statistical_reversion` "161 signals" = 31 runtime + 130 legacy).
+- **FIXED**: registry and the new Lab funnel count `entry:` runtime chains only and report the excluded
+  count. Test: `test_registry_panel_counts_runtime_chains_only`, `test_funnel_counts_runtime_chains_only...`.
+
+### ASN-014: Adaptive-exit close orders carried magic 0
+- Severity: **LOW (evidence quality)**. Affected: `position_management/manager.py`, `runtime/demo.py`.
+- `close_position_safely()` was called without magic/comment, so the runtime's own closing deals were
+  indistinguishable from manual closes in broker history (17 of 25 closing deals had magic 0).
+  Attribution was never affected (it follows the broker position id).
+- **FIXED in source**: close requests carry `runtime.magic` and comment `ASN exit`. Takes effect only after
+  a controlled runtime restart. Test: `test_close_requests_carry_the_runtime_magic...`.
+
+### ASN-015: Gate-blocked orders remain in state PROPOSED
+- Severity: **INFO**. 26 order rows were created before the re-entry gate blocked them and remain
+  `PROPOSED` (the state machine permits only PROPOSED -> SUBMITTED). They are never sent and never
+  reserve risk (no requested risk recorded). The Strategy Lab counts only orders with a SUBMITTED
+  transition as submitted. Not changed (runtime state-machine change requires separate review).
+
+### Strategy Lab reconciliation (measured)
+2,272 deals for login 53044952: ledger 9,652.33 USD = independent SQL 9,652.33 USD = broker balance.
+Attributed: 25 closed `microstructure_acceleration` trades, -55.52 USD. Unattributed: 1,101 EXTERNAL_EXPERT
+(magic 770115, -4,576.72) and 8 UNKNOWN_SOURCE (magic 0, +3,267.89). See docs/STRATEGY_LAB.md.
+
+Remaining blocks: ASN-007 (GBPJPY slippage evidence; GBPJPY excluded from executable symbols). Migration 0029
+and ASN-014 require a controlled restart to be deployed.

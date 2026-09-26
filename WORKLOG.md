@@ -2442,3 +2442,27 @@ check or order send occurred.
 - Final source preflight remained `READY_FOR_PAPER`, not `READY_FOR_DEMO`. The running process
   predates ASN-012 and GBPJPY cost/quote evidence remains incomplete. Apply the source fix by
   a controlled flat restart; do not treat a running DEMO process as readiness proof.
+
+## Session: Strategy Lab attribution, audit fixes, release 0.2.0 (2026-09-26, 15:00-19:40 GMT+4)
+
+- Pre-work (read-only): DEMO runtime PIDs 25208/30560 (`cli demo`, started 14:49 from `bac6145`) and
+  dashboard PIDs 30896/31324 running. MT5 DEMO 53044952 (ICMarketsSC-Demo, trade_mode 0), balance =
+  equity 9,652.33 USD, 0 positions, 0 orders. Kill switch DISENGAGED, reconciliation CLEAN, heartbeat
+  fresh, scheduler lag < 0.06 s. Preflight READY_FOR_PAPER; DEMO blocker: XAUUSD quote stale (Saturday).
+  The runtime was not stopped, restarted or modified.
+- Branch `feature/strategy-lab-attribution` from `bac6145`. Online backup
+  `data/backups/pre_strategy_lab_attribution_20260926T110252Z.sqlite3` (quick_check ok on source and
+  backup, 0 FK violations, schema 28).
+- Built `dashboard/strategy_lab.py` + `/api/strategy-lab/*` (GET, on demand) + Strategy Lab view.
+  Reconciliation on the backup: 2,272 deals, ledger = SQL = balance 9,652.33 USD.
+- Found and fixed ASN-013 (legacy chains inflated the funnel/registry) and ASN-014 (close magic 0).
+  Fixed ASN-008/009/010. Migration 0029 (deal reason + indexes) tested only on temporary databases;
+  the production database is still at schema 28.
+- Research (§16): walk-forward records show `microstructure_acceleration` = 91.5 % of trades, gross
+  +0.005 R/trade versus costs 0.227 R/trade (docs/RESEARCH_VALIDATION.md §8). No tuning; OOS untouched.
+- Tests: 28 new (tests/test_strategy_lab_attribution.py); full suite 1,557 passed, 9 skipped.
+  pip check clean; pip-audit: no known vulnerabilities; bandit: no new findings.
+- Browser: test dashboard on 127.0.0.1:8766 against a scratch DB copy; 8 viewports verified.
+- Incident: an inline Python edit used the Windows default encoding and truncated
+  `dashboard/page.py`. It was restored from HEAD and re-applied with explicit UTF-8 before commit.
+- Cleanup manifest: docs/CLEANUP_MANIFEST.md (nothing removed; approvals pending).

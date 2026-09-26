@@ -35,7 +35,33 @@ Adaptive Scalper Next
 `dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
 W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
-## Current phase (2026-09-26, updated ~10:37 GMT+4 after read-only re-audit)
+## Current phase (2026-09-26 evening, branch `feature/strategy-lab-attribution`, release 0.2.0)
+
+**This section supersedes the Strategy Lab paragraph below.** Strategy Lab has been rebuilt on a
+read-only evidence engine (`dashboard/strategy_lab.py`, docs/STRATEGY_LAB.md). Attribution uses the
+durable chain only: position → entry order → runtime chain → proposal → entry context → broker ticket.
+Accounting runs over the de-duplicated broker-history + runtime deal population, with an independent
+SQL reconciliation. The new Strategy Lab view has DEMO/PAPER/BACKTEST tabs, filters, detail pages,
+compare-3, paginated trades with full lifecycle, unattributed and reconciliation sections, and a
+review shortlist. Measured on the 11:02 UTC backup: 2,272 deals reconcile exactly (9,652.33 USD =
+SQL = broker balance). 25 closed DEMO trades are attributed, all `microstructure_acceleration`
+(−55.52 USD, 11W/14L). Unattributed: 1,101 EXTERNAL_EXPERT (magic 770115) and 8 UNKNOWN_SOURCE
+positions.
+
+Fixed: ASN-008 (quick_check status/health), ASN-009 (JSON model artifacts, no pickle), ASN-010
+(optional pinned `terminal_path`), ASN-013 (legacy chains inflated the registry signal counts) and
+ASN-014 (close orders sent with magic 0). Full suite **1,557 passed, 9 skipped**. Browser-verified
+(Chromium viewport emulation, not native DPI) at 1366×768, 1600×900, 1920×1080, 2560×1440 and the
+125 %/150 % equivalents: no page overflow, no chart label overlap, no JS errors.
+
+**Not yet deployed.** The running DEMO process (started 14:49 from `bac6145`) and the live dashboard
+still run the previous code. Deployment needs migration 0029 and a controlled restart; see
+docs/STRATEGY_LAB.md "Safe deployment". Do not run the new code's CLI against the production
+database while the old runtime is live, because it migrates automatically. Live broker at 15:00 GMT+4:
+DEMO 53044952, 0 positions, 0 orders. Preflight `READY_FOR_PAPER`; the only DEMO blocker is the
+stale XAUUSD quote (market closed on Saturday).
+
+## Phase before that (2026-09-26, updated ~10:37 GMT+4 after read-only re-audit)
 
 ASN-012 has been deployed and verified: the running DEMO process (started 08:32 UTC+4 today)
 loads the fix, and `reconcile` reports `CLEAN` (no unrepaired positions/orders, no UNKNOWN

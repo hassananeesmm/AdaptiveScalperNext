@@ -106,3 +106,47 @@ A strategy or model is "validated" only when all of the following hold:
 - It passed **one** untouched OOS run.
 - It used `BROKER_DEMO_CONFIRMED` costs, gathered by `costs observed` from real DEMO fills.
 - A human reviewed it. Record the approval as an OKF Research Finding verified by `human:<id>`.
+
+## 8. Negative-result investigation (2026-09-26)
+
+Source: the 15 recorded walk-forward folds (1,505 trades; BTCUSD 2025-10-01..2026-06-29,
+GBPJPY and XAUUSD 2025-06-01..2026-06-30). This is a read-only query of existing research
+records. No parameter was tuned. The reserved out-of-sample interval (2026-07-01..2026-09-18)
+was not touched. Every fold stopped at the 5 % drawdown halt, so fold samples are truncated
+by the risk rule, not by the data.
+
+| Strategy | Trades | Gross | Costs | Net | Win % | Avg gross R | Avg cost R | Avg net R |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| microstructure_acceleration | 1,377 | +216.6 | 7,349.8 | −7,133.3 | 31.5 | +0.005 | 0.227 | −0.222 |
+| statistical_reversion | 96 | +96.5 | 416.3 | −319.8 | 46.9 | +0.041 | 0.186 | −0.145 |
+| momentum_continuation | 22 | +131.1 | 42.2 | +88.9 | 59.1 | +0.249 | 0.083 | +0.166 |
+| range_breakout | 8 | −46.2 | 15.0 | −61.2 | 12.5 | −0.289 | 0.087 | −0.376 |
+| volatility_expansion | 1 | +4.7 | 0.9 | +3.8 | — | — | — | — |
+| pullback_continuation | 1 | −5.2 | 2.0 | −7.2 | — | — | — | — |
+
+(Account-currency units of the simulation; gross is before simulated spread, slippage and
+commission.)
+
+Findings:
+
+- **Concentration is confirmed, not assumed.** `microstructure_acceleration` produced 91.5 %
+  of all walk-forward trades, with the same share on every symbol (BTCUSD 92.1 %, GBPJPY
+  89.7 %, XAUUSD 93.1 %). 1,422 of the 1,505 trades were entered in `RANGE`.
+- **Costs, not direction, explain the loss.** Its gross edge is essentially zero
+  (+0.005 R/trade) while costs are 0.227 R/trade: costs are about 34× the gross result.
+  It holds about 4.8 minutes on average, so frequent short trades pay spread and slippage
+  with no edge to cover them. The live DEMO record agrees: 25 closed trades, −55.52 USD net,
+  11W/14L, avg R −0.10 (docs/STRATEGY_LAB.md).
+- **By exit:** stop-loss exits −8,207.5 and "thesis invalidated" exits −4,268.1 outweigh
+  take-profit (+3,310.7) and max-hold (+1,036.9) exits.
+- **By direction** both sides lose (BUY −3,943.8, SELL −3,484.9). By cost provenance both
+  BROKER_DEMO_CONFIRMED (−4,938.1) and UNVERIFIED_ASSUMPTION (−2,490.6, GBPJPY) runs lose.
+- **`momentum_continuation`** is the only strategy with a positive net result, but on 22
+  trades. That is an insufficient sample and **not** evidence of an edge. It has never
+  traded on DEMO.
+- **Limitations:** no point-in-time historical news (the news gate is not reproduced in
+  research); M5 bars with the evidence-based fill model; the drawdown halt truncates every fold.
+
+No profitable strategy is claimed. Nothing here changes live configuration. Any change to
+the active set or to parameters requires a separately reviewed change evaluated without the
+reserved OOS interval, followed by the single untouched OOS run (section 7).

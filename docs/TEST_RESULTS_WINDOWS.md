@@ -7,6 +7,10 @@ Date: 2026-09-25. Interpreter: `C:\AdaptiveScalperNext\.venv\Scripts\python.exe`
 
 | Check | Exact command | Result |
 |---|---|---|
+| **2026-09-26 full suite (0.2.0 branch)** | `.venv\Scripts\python.exe -m pytest -q` | **1557 passed, 9 skipped**, 2 third-party warnings, 246.09 s |
+| 2026-09-26 Strategy Lab tests | `pytest -q tests\test_strategy_lab_attribution.py tests\test_dashboard*.py` | 65 passed |
+| 2026-09-26 dependency / security | `pip check`; temporary `pip-audit -r requirements.txt`; `bandit -r adaptive_scalper` | clean; no known vulnerabilities; no new findings |
+| 2026-09-26 browser (viewport emulation) | Chromium via Playwright, 1366x768, 1600x900, 1920x1080, 2560x1440, 1536x864, 1280x720, 1093x614, 911x512 | no page overflow, 0 chart label overlaps, 0 JS errors; not native Windows DPI |
 | Full suite (final) | `.venv\Scripts\python.exe -m pytest -q` | **1521 passed, 9 skipped**, 2 third-party deprecation warnings, 113.35 s |
 | Release build gate (0.1.3) | `scripts\build_release.ps1 -Version 0.1.3` | **1521 passed, 9 skipped**, 110.78 s; archive built |
 | Installed release smoke (0.1.3) | `scripts\release_smoke_test.ps1 -Zip dist\AdaptiveScalperNext-0.1.3.zip` | **PASS**; packaged suite 1521 passed, 9 skipped, 117.46 s; MT5 disabled |

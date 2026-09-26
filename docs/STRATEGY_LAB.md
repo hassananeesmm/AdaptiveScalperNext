@@ -1,167 +1,297 @@
 # Strategy Lab
 
-Strategy Lab is a top-level view in the existing observer-only dashboard
-(`docs/DASHBOARD.md`). It answers, from real recorded evidence only: which
-strategy generated a signal, which was selected, which the broker actually
-executed, which strategies show positive or negative net results, why a
-trade won or lost, and which strategies generate signals but never trade.
-It is read-only: it cannot submit an order, modify a stop, clear the kill
-switch, or activate/retire a strategy. Changing which strategies are active
-is a separate reviewed code/config change with tests and an operator-approved
-deployment (`config/default.toml`'s `[strategies]` table and
-`RETIRED_STRATEGY_KEYS`), never a dashboard interaction.
+Strategy Lab is the top-level **Strategy Lab** view of the observer-only
+dashboard. It answers, from durable recorded evidence only:
 
-Backend: `adaptive_scalper/dashboard/panels.py` (`strategy_registry`,
-`strategy_activity`, `strategy_attribution`, `strategy_performance`).
-Frontend: `adaptive_scalper/dashboard/page.py`. Panels are served at
-`/api/panels/<name>` and pushed over the same WebSocket/polling channel as
-every other panel (`docs/DASHBOARD.md`'s "What live means").
+- which strategy generated each signal, was selected, submitted the broker
+  order, owns each fill, open position and closed trade;
+- which strategies have positive or negative realized net results, and what
+  commission, fees, swap, spread and slippage each incurred;
+- why each trade was opened, managed and closed;
+- which strategies signal but never execute, and why;
+- which broker trades cannot be reliably attributed.
 
-## Where each panel's data comes from
+It is **review-only**. It cannot place, modify or close an order, change risk,
+touch the kill switch, or activate, disable or promote a strategy. The review
+shortlist lives only in the browser. Changing the active strategy set is a
+separately reviewed code/config change with tests and an operator-approved
+controlled deployment.
 
-**Strategy registry** (`strategy_registry`). Strategy identity and entry
-logic are never hand-copied text that could drift from the code: `version`,
-`source_module`, `source_description` (the module's own docstring) and
-`default_parameters` (the strategy class's actual `__init__` defaults) are
-read live via `inspect` from `adaptive_scalper.strategies.build_active_registry()`.
-Retired strategies (`failed_breakout_fade`, `support_resistance_reaction`,
-directive section 8) are reported separately with `registration_status:
-RETIRED_PERMANENTLY` and no source module — the retirement firewall means
-none remains registered to introspect.
+| Piece | Where |
+|---|---|
+| Evidence engine (attribution, accounting, metrics, reconciliation) | `adaptive_scalper/dashboard/strategy_lab.py` |
+| HTTP (GET only, computed on demand) | `/api/strategy-lab/summary`, `/trades`, `/trade/{evidence}/{id}`, `/strategy/{key}`, `/export.csv` in `adaptive_scalper/dashboard/app.py` |
+| UI | Strategy Lab view in `adaptive_scalper/dashboard/page.py` |
+| Tests | `tests/test_strategy_lab_attribution.py`, `tests/test_dashboard_strategy_lab.py` |
 
-`lifecycle_stage` is derived, in order, from the most advanced real evidence
-found in the last 30 days: `RETIRED` > `FILLED` (an OPEN broker position
-exists) > `CLOSED` (latest position is CLOSED) > `SUBMITTED` (an
-`ENTRY_ALLOWED` journal event exists) > `SELECTED` (a `PROPOSAL_CREATED`
-event exists) > `PROPOSED` (a `SIGNAL_CREATED` event exists) > `REGISTERED`
-(none of the above — the strategy exists but has done nothing observable).
-A `REGISTERED` or `PROPOSED` strategy is never described as validated or
-profitable; it has not necessarily traded at all. `counts_last_30d` (signals
-created/rejected, proposals selected, entries allowed/blocked) come from
-`journal_events`, one row per real decision the runtime made — never
-re-derived or estimated.
+The Lab is **not** part of the 2-second WebSocket push. It is computed when
+the view is open (at most every 20 s while visible, or on Reload/filter
+change) from one read-only SQLite snapshot. The DEMO ledger is cached in
+memory, keyed by a database fingerprint (database file, `MAX(rowid)`/`COUNT(*)`
+of every source table, position close markers). Any new deal, order, journal
+event or position change produces a new fingerprint and a fresh computation.
+Every response shows when it was computed and whether it was served from
+cache ("database unchanged").
 
-**Strategy activity** (`strategy_activity`). The 200 most recent rows of
-`entry_decisions` — the complete recorded `reason`/`detail_json` for every
-real evaluation, never truncated or re-summarized. This is the "why no
-trade" evidence: a strategy can appear here proposing a direction that was
-never selected, or selected and then blocked before submission.
+## Evidence sources: DEMO, PAPER, BACKTEST
 
-**Strategy attribution** (`strategy_attribution`). Broker-verified DEMO
-trade attribution. The broker is authoritative (directive section 31): for
-every locally-tracked `positions` row, every `deals` row sharing its
-`broker_position_id` is summed exactly once for gross P&L
-(`sum(profit)`) and cost (`sum(commission + swap + fee)`) — a position is
-never counted twice, and an entry deal is never counted as a realized
-result on its own. `entry_deal_count` / `closing_deal_count` are reported
-directly so a partial fill or multiple closing deals are visible
-(`partial_fill_or_multi_close`) rather than silently averaged away. Any
-`deals` row whose `broker_position_id` does not match a locally-tracked
-position is returned separately under `unattributed_deals` — it is never
-assigned to a strategy by matching symbol, direction or timestamp.
+Three independent tabs. **They are never pooled into one figure.**
 
-**Strategy performance** (`strategy_performance`). Row-level closed trades
-for three separate evidence classes, each its own currency of truth and
-**never pooled into one figure**: `demo_closed_trades` (from `positions`
-joined to `deals`, broker-verified), `paper_trades` (from `paper_trades`,
-simulated), `backtest_trades` (from `backtest_trades`, tagged with
-`run_id`). Each is capped at the 300 most recent rows to keep the panel
-cheap on the dashboard's ~2 s refresh; `sample_sizes` in the response is the
-actual row count shipped, so the UI's "N" always reflects what it actually
-received, not a hidden total.
+- **DEMO**: actual broker execution evidence for one broker account (default:
+  the account holding the most recent imported deal). Money comes only from
+  broker-recorded deals.
+- **PAPER**: rows of `paper_trades` (simulated fills on live data). Sessions
+  are independent per-symbol simulations. Statistics are per trade and never
+  presented as one portfolio equity curve. A session selector narrows to one
+  session.
+- **BACKTEST**: exactly one research run at a time (`backtest_runs.run_id`,
+  default: the most recent). The run selector shows its symbol, trade count
+  and cost provenance. It is a historical research evaluation, not evidence
+  of current live performance. The reserved out-of-sample interval is never
+  run from the dashboard.
 
-## How the comparison table is built (client-side)
+## The DEMO deal population
 
-The comparison table, charts and CSV/JSON export all read from the same
-`strategy_performance` response and the same active filters
-(`page.py`'s `stratPerformancePanel`/`aggregateTrades`) — there is no
-separate, potentially-inconsistent code path for tables vs. charts.
+The population for an account is the union of:
 
-- **Evidence tabs**: DEMO / PAPER / BACKTEST. Switching tabs swaps the
-  entire row set; nothing from one tab is mixed into another tab's
-  aggregates.
-- **Filters**: strategy, symbol, direction, regime, strategy version,
-  cost provenance, and a from/to date range — applied to the row set
-  before aggregation, so every derived number (win rate, profit factor,
-  P&L, drawdown) reflects only the filtered rows.
-- **Win rate** is `null` (shown as "—") when a strategy has zero rows in
-  the filtered set — never `0%`. It is never computed by combining
-  BACKTEST and DEMO rows.
-- **Profit factor** is gross profit / gross loss when gross loss > 0;
-  `Infinity` (shown as "∞") when there are wins and zero losses; `null`
-  ("—") when there are zero trades. It is never silently shown as `0` or
-  omitted.
-- **Sample size (N)** is shown on every comparison row, always. A strategy
-  with one or two closed trades is not described as consistently
-  profitable anywhere in the UI — the table shows the raw count and lets
-  the operator judge it.
-- **Max drawdown** is computed only from the currently filtered,
-  chronologically-ordered trade sequence for that strategy — it changes
-  with the filters and is labelled as such.
-- **Charts** (per-strategy cumulative net P&L, gross vs. cost, results by
-  symbol, results by regime, trade frequency over time) all read the same
-  filtered set used for the table; a losing trade is never dropped from a
-  chart while remaining in the table.
+1. every deal in `broker_account_deals` for that login (the imported broker
+   history, `broker-history import`), and
+2. every deal the runtime recorded itself in `deals` (broker-confirmed at
+   execution) whose ticket is not in that import.
 
-## Partial fills, partial closes and costs
+Deals are **de-duplicated by broker deal ticket**. When both sources hold a
+ticket, the broker-history values are used and any disagreement in profit,
+commission, swap, fee or volume is **listed** in the Reconciliation view
+(never silently resolved).
 
-A `positions` row's `entry_deal_count` / `closing_deal_count` coming back
-greater than 1 means a genuine partial fill or multiple closing deals — the
-panel reports the deal counts and the flag rather than guessing at a single
-clean entry/exit. Realized net P&L for a closed position is
-`gross_pnl + costs`, where `costs` sums commission, swap and fee across
-every deal on that position exactly once. An entry deal alone is never
-reported as a realized win or loss — only a `CLOSED` position's summed
-deals produce a realized figure; an `OPEN` position's floating result is
-kept out of the closed-trade tables entirely (see `positions` panel for
-unrealized exposure).
+Non-trade deals (deposits, balance/credit corrections: MT5 deal types other
+than BUY/SELL) are reported separately and are never counted as trades.
 
-## What UNATTRIBUTED means
+## Attribution rules
 
-A broker deal is UNATTRIBUTED when its `broker_position_id` does not match
-any locally-tracked `positions` row. This can happen for a manual/external
-broker-side action, a position opened before local tracking began, or a
-genuine data gap. UNATTRIBUTED deals are listed with their available
-broker fields (price, volume, commission, swap, profit, fee, deal type,
-timestamp, comment) so the operator can judge them directly — they are
-never guessed onto a strategy by matching symbol, direction or timing, and
-they are never silently dropped from the reconciliation total.
+A broker position is **ATTRIBUTED** to a strategy only when **all** of these
+durable, runtime-written records agree:
 
-## How PAPER, DEMO and BACKTEST differ
+1. a local `positions` row with that exact broker position id;
+2. its `entry_order_id` resolves to an `orders` row whose `chain_key` is a
+   runtime entry chain (`entry:<symbol>:<bar>:<strategy>`, the only chain
+   family the DEMO runtime writes);
+3. that chain contains a `PROPOSAL_CREATED` journal event whose
+   `strategy_key` equals `positions.strategy_key`;
+4. when present, `position_entry_context` for the position names the same
+   strategy and chain (it is also the source of strategy version and entry
+   regime);
+5. when the broker entry deal is known, its order ticket equals the local
+   order's `broker_order_id`;
+6. a broker entry (IN) deal exists in the population.
 
-- **DEMO** — real IC Markets DEMO broker orders and deals, read from the
-  local database that mirrors broker truth via reconciliation. This is the
-  only evidence class that reflects actual (simulated-money) execution.
-- **PAPER** — the PAPER runtime's own simulated fills against live market
-  data (`docs/DASHBOARD.md`); never broker-confirmed, always labelled
-  PAPER.
-- **BACKTEST** — historical evaluations tagged with their own `run_id`,
-  dataset and cost assumptions (`backtest_runs`); a historical result, never
-  a stand-in for a missing DEMO or PAPER result. The protected out-of-sample
-  period is never used to select or tune a strategy shown here.
+The trade lifecycle shows every check with PASS/FAIL. **Symbol, direction,
+timestamp proximity and broker comments are never used to assign a
+strategy.**
 
-These three are shown on separate tabs and are never combined into one
-equity curve, one win rate, or one net-P&L figure.
+Everything else is **UNATTRIBUTED**, split by source class:
 
-## Interpreting a small sample
+| Source class | Meaning (evidence) |
+|---|---|
+| `ASN_UNATTRIBUTED` | This runtime's own trade (local record, or a magic number this runtime stamped on its orders) but at least one chain link above failed. The failing link is named. |
+| `MANUAL` | Broker `DEAL_REASON` is CLIENT, MOBILE or WEB. |
+| `EXTERNAL_EXPERT` | A magic number this runtime never used, or broker `DEAL_REASON` EXPERT without our magic. |
+| `UNKNOWN_SOURCE` | Magic 0 and no broker `DEAL_REASON` recorded. Consistent with manual activity, but not proven. |
 
-Every comparison row carries its own N. A handful of closed DEMO trades is
-not evidence of a validated edge in either direction — treat DEMO figures
-with N in the single digits as a live sanity check, not a verdict. Compare
-against the strategy's own PAPER/BACKTEST evidence and its signal-to-entry
-funnel on the registry panel before drawing a conclusion: a strategy with
-positive DEMO net P&L but a very small N (or a strategy with a high win
-rate but negative net P&L once costs are included) is exactly the case
-this panel is built to surface rather than hide.
+The runtime's magic numbers are read from `orders.magic` (what it actually
+stamped), never hard-coded. `DEAL_REASON` is recorded by the broker-history
+importer from migration 0029 onward. Rows imported earlier have `reason = NULL`
+and are **not** back-filled; re-importing a range stores nothing new for
+existing tickets (`INSERT OR IGNORE`).
 
-## Using the filters and shortlist
+Provenance: every trade lists `recorded_by` (`BROKER_HISTORY_IMPORT`,
+`LOCAL_RUNTIME_RECORD`, or both).
 
-Set the evidence tab first, then the strategy/symbol/direction/regime/
-version/provenance filters and date range — the table, charts and CSV/JSON
-export all update together. Check up to three strategies' "Compare" boxes
-to build a **Human Strategy Review shortlist**; the shortlist is stored in
-the browser (`localStorage`, not the database),
-survives a page reload, and can be exported as JSON or CSV for offline
-comparison. Building or exporting a shortlist never changes the running
-system: promoting, demoting or reconfiguring a strategy is a separate,
-reviewed change outside the dashboard.
+## Accounting
+
+Per broker position, over its de-duplicated deals:
+
+```
+gross     = sum(profit)                       broker-recorded; spread and slippage are already inside it
+costs     = sum(commission) + sum(fee) + sum(swap)
+net       = gross + costs
+realized  = net - entry_commission_and_fee x (open volume / entry volume)
+open-volume entry costs = entry_commission_and_fee x (open volume / entry volume)
+realized R = realized / initial_monetary_risk     CLOSED trades with recorded risk only
+```
+
+- **Status.** `CLOSED` when exit volume ≥ entry volume, `PARTIALLY_CLOSED`
+  when some exit volume exists, `OPEN` when none. `ENTRY_NOT_IN_HISTORY`
+  (entry deal outside the imported range), `REVERSAL_UNSUPPORTED` (INOUT
+  deal) and `UNKNOWN_DEAL_ENTRY` are shown, never hidden.
+- **Only CLOSED trades count** in wins/losses/win rate/profit factor/R. An
+  entry is never a completed trade.
+- **Multiple entry fills** are volume-weighted into one entry price. Multiple
+  exit deals are summed. Each deal is counted exactly once.
+- **Spread and slippage** (DEMO) come from `execution_cost_observations`
+  (spread at entry, entry slippage, price units) and
+  `position_management_state.realized_slippage` (exit). They are **evidence
+  only**: they are already inside broker profit and are never subtracted
+  again. For PAPER/BACKTEST they are separate simulated costs.
+- **Currency.** DEMO money is in the broker account currency last sampled by
+  the runtime (`runtime_state.live_telemetry.account.currency`). If none was
+  recorded the UI says "currency not recorded"; it never assumes USD.
+  PAPER/BACKTEST are simulated in the account currency of the captured
+  broker specs.
+- **Unknown costs** stay `None`/N/A (for example a research trade without
+  a recorded gross or commission). They are never shown as 0.
+- **Floating P&L** of open positions is shown on the Overview (runtime
+  telemetry). The Lab ledger is realized-only.
+
+## Metrics
+
+Computed over CLOSED trades in the currently filtered set:
+
+| Metric | Definition |
+|---|---|
+| Wins / losses / breakevens | realized net > +0.005 / < −0.005 / otherwise |
+| Win rate | wins / closed. **NO CLOSED TRADES** (not 0 %) when none. |
+| Profit factor | sum(winners) / abs(sum(losers)). With no losses: `NO_LOSSES` (undefined, never infinite). |
+| Average R (n) | mean realized R over trades with recorded initial risk; n shown |
+| Expectancy | realized net / closed trades |
+| Max drawdown | peak-to-trough of the cumulative realized net over the closed-trade sequence ("closed-trade basis"), not an equity drawdown |
+| Open exposure | sum of initial monetary risk of this strategy's open/partially-closed positions |
+
+Rows stay in registry order and are never ranked. Every row shows its sample
+size. Rows with few trades are an insufficient sample, not a result.
+
+## The DEMO funnel (signal → order → fill)
+
+Counted **only from runtime entry chains** (`entry:` prefix):
+
+- signals = `SIGNAL_CREATED`; rejected = `SIGNAL_REJECTED`;
+  selected = `PROPOSAL_CREATED`;
+- allowed / blocked = chains with `ENTRY_ALLOWED` / `ENTRY_BLOCKED`
+  (attributed through the chain's proposal);
+- order rows = `orders` created for that chain;
+- **submitted = orders with a `SUBMITTED` state transition**;
+- filled = orders with `filled_volume > 0`.
+
+An order row that never reached SUBMITTED was stopped by a permission gate
+(for example re-entry churn) **before any broker call** and is not a
+submitted order. Such rows remain in state `PROPOSED` by design of the order
+state machine. Journal chains from other producers (the legacy 2026-09-17/18
+`XAUUSD-<strategy>-<ts>-<hash>` replay chains, CLI reconcile chains) are
+counted separately and excluded. They previously inflated the registry
+panel's signal counts, for example `statistical_reversion` "161 signals" of
+which 130 were legacy. Fixed in this release; the registry panel also counts
+runtime chains only.
+
+## Filters
+
+Date range (UTC days; the end date is inclusive; closed trades filter by
+close time, others by entry time), strategy (including `UNATTRIBUTED`),
+symbol, strategy version, regime, direction, trading session (DEMO: session
+recorded at execution; PAPER/BACKTEST: UTC-hour bucket of the entry),
+exit reason, cost provenance, source class. All tables and charts use the
+same filtered set. Losing trades are never silently excluded.
+
+## Views
+
+- **Comparison.** The winning/losing table (all six active strategies,
+  always; unattributed row; retired strategies listed separately and never
+  as candidates), then cumulative net per strategy, gross vs costs, and
+  results by strategy/symbol/regime/direction/session/exit reason. Also
+  trade frequency, the win/loss and R distributions, and signal→order→fill
+  conversion. Every chart has a legend or direct labels and a table view.
+  Colors follow the strategy, not its rank. The chart palette is validated
+  for colour-vision deficiency in both themes.
+- **Strategy detail.** Actual entry rules (`evaluate()` source, verbatim),
+  eligible regimes (parsed from the regime gate in the source), current
+  parameters of the registered instance, ATR stop/target multiples, required
+  confidence, expected duration. Also the latest evaluation, latest proposed
+  signal, last selected signal, latest broker-confirmed trade, open
+  positions, recent closed trades and why-no-trade history.
+- **Compare (max 3).** Side-by-side metrics and cumulative net under
+  identical filters.
+- **All trades.** Paginated (50 per page, server-side, max 200), searchable.
+  Selecting a row opens the full lifecycle: signal, selection, permission
+  checks, expected and observed execution costs, local order and state
+  transitions, order journal events, broker orders, broker deals, position
+  management state, management actions, reviews, advisory ML/RAG evidence
+  (no authority) and accounting.
+- **Unattributed.** The same list restricted to trades without a proven
+  strategy, with totals by source class.
+- **Reconciliation.** See below.
+- **Review shortlist.** Browser-only list with CSV export (the comparison
+  table under the current evidence and filters) and JSON export.
+
+## Verifying that the per-strategy results reconcile with broker deals
+
+The Reconciliation view (DEMO) recomputes the population total
+**independently in SQL** (broker-history deals for the login, plus runtime
+deals not in that import) and compares it with the ledger:
+
+```
+population_net_sql == sum over source classes of position net
+                     + non-trade deals + trade deals without a position id
+realized + open-volume entry costs == position net   (for every class)
+deal count (SQL) == deal count (ledger)
+```
+
+`reconciles: true` requires all three to agree (money within 0.01, counts
+exact). It covers the full population (all dates); filters narrow the tables
+only. The closed-count check compares attributed CLOSED positions with local
+`positions` rows marked CLOSED.
+
+Manual verification, read-only, on a database copy:
+
+```
+python -c "from adaptive_scalper.persistence.database import connect_readonly as c; \
+from adaptive_scalper.dashboard import strategy_lab as s; \
+r=s.summary(c('data/backups/<copy>.sqlite3'),'DEMO',{},{})['reconciliation']; \
+print(r['reconciles'], r['population_net_sql'], r['population_net_ledger'])"
+```
+
+Independent sanity check: with the full account history imported, the
+population net equals the broker account balance (deposits are non-trade
+deals). Measured 2026-09-26 on the pre-change backup: 2,272 deals, ledger
+9,652.33 USD = SQL 9,652.33 USD = broker balance 9,652.33 USD.
+
+### Measured on 2026-09-26 (backup `pre_strategy_lab_attribution_20260926T110252Z`)
+
+| Class | Positions | Net (USD) |
+|---|---|---|
+| ATTRIBUTED (all `microstructure_acceleration`) | 25 closed | −55.52 (11W / 14L, PF 0.65, avg R −0.10) |
+| EXTERNAL_EXPERT (magic 770115, pre-runtime history) | 1,101 closed | −4,576.72 |
+| UNKNOWN_SOURCE (magic 0, reason not recorded) | 8 closed | +3,267.89 |
+| ASN_UNATTRIBUTED / MANUAL | 0 | 0.00 |
+| Non-trade deals (deposits) | 4 | +11,016.68 |
+
+The other five active strategies: NO CLOSED TRADES on DEMO.
+`statistical_reversion` produced 32 runtime signals and 4 selections, all
+blocked before submission; momentum and pullback 4 signals each, all
+rejected; range breakout and volatility expansion none.
+
+## What remains unattributed and why
+
+- Imported history before this runtime existed (other expert adviser,
+  magic 770115) and magic-0 activity: correctly never attributed.
+- Rows imported before migration 0029 have no `DEAL_REASON`, so magic-0
+  activity is `UNKNOWN_SOURCE` rather than `MANUAL`.
+- Until the runtime release carrying the close-magic fix is deployed, the
+  runtime's own adaptive-exit closing deals carry magic 0. Attribution is
+  unaffected (it follows the broker position id), but the broker copy alone
+  cannot distinguish them from manual closes. The exit reason is then
+  evidenced by the runtime's recorded exit request.
+
+## Safe deployment and recovery
+
+The dashboard can be restarted independently of the trading runtime. Its
+failure never affects position management. Deploying this release
+additionally involves:
+
+1. **Migration 0029** (additive: `broker_account_deals.reason` + three
+   indexes). Any CLI command of the new code migrates the database it opens,
+   so do not run the new code's CLI against the production database while
+   the old runtime is live. Apply it during a controlled restart after a
+   verified online backup (see `docs/OPERATIONS_RUNBOOK.md`).
+2. **Close-order magic** (`position_management/manager.py`,
+   `runtime/demo.py`) takes effect only in a restarted runtime.
+3. Recovery: the migration adds a nullable column and indexes only; restoring
+   the pre-change backup fully reverts it. No historical row is modified.
