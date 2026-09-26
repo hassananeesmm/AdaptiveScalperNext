@@ -11,24 +11,28 @@
 - A prior controlled `order_check` for XAUUSD BUY returned retcode 0 / Done and was never
   sent. There were zero positions/orders before and after.
 - The current audit called only read operations. It did not call `order_check` or `order_send`.
+- A separate operator session subsequently disengaged the kill switch and started DEMO.
+  Fifteen naturally generated positions were filled and later closed. The final read-only
+  broker snapshot contained zero positions and zero pending orders.
 
 ## Still unverified
 
-- A naturally generated DEMO entry/fill, partial fill, broker-side protective stop rejection,
-  live close, stop modification and restart with a real open position.
+- Partial fill, broker-side protective stop rejection, stop modification and restart with a
+  real open position. Natural DEMO entry/fill/close is now observed, but this does not verify
+  every broker lifecycle path.
 - Netting behavior (the connected account is hedging).
 - Pinning among the two locally installed MT5 terminals.
 - Every future DST boundary; startup verification remains the fail-closed control.
 
 ## Readiness
 
-`preflight` reports `READY_FOR_PAPER`, not `READY_FOR_DEMO`. Required operator/evidence work:
+Final `preflight` reports `READY_FOR_PAPER`, not `READY_FOR_DEMO`. Required evidence/work:
 
-1. Keep the kill switch under human control; do not bootstrap/clear it merely for testing.
-2. Obtain a fresh CLEAN reconciliation in the controlled DEMO startup path.
+1. Keep the kill switch under human control. The audit did not alter the operator's state.
+2. Restart only while flat to load ASN-012, then confirm CLEAN reconciliation and resolution
+   of the stale orphan-order incident.
 3. Keep GBPJPY DEMO entries blocked until credible slippage evidence exists, or intentionally
    remove GBPJPY from the DEMO symbol set.
 4. Confirm the dashboard and monitoring remain healthy.
 
 REAL, CONTEST and UNKNOWN accounts remain prohibited.
-

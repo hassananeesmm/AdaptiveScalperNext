@@ -35,15 +35,16 @@ Adaptive Scalper Next
 `dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
 W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
-## Current phase (2026-09-25)
+## Current phase (2026-09-26)
 
-Windows verification, live-data verification and the responsive dashboard are
-done on the laptop. PAPER runs against the real IC Markets DEMO terminal with the
-dashboard beside it. **New entries -- simulated and DEMO -- are blocked because the
-persistent kill switch is UNINITIALIZED: only the human operator can bootstrap
-it.** No DEMO order has been sent. DEMO readiness: every automated gate passes
-except the operator actions (kill switch, then starting DEMO); see
-docs/QA_REPORT.md "DEMO readiness".
+Windows verification, live-data verification and the responsive dashboard are done on the
+laptop. A separate operator session stopped PAPER, disengaged the persistent kill switch and
+started DEMO; naturally occurring fills and closes followed. At the final audit snapshot the
+DEMO runtime was running and broker positions/orders were both empty. Preflight still reports
+`READY_FOR_PAPER`, not `READY_FOR_DEMO`, because GBPJPY cost/quote evidence is incomplete and
+the old running process retains one stale reconciliation incident. ASN-012 fixes that
+lifecycle in source; deploy it with a controlled flat restart. The audit did not change the
+kill switch or send an order.
 
 ## Component status matrix (2026-09-25, Windows laptop)
 
@@ -1624,12 +1625,11 @@ responds to) is not wired to anything live. 71 tests
 
 ## Tests
 
-Deep-audit checkpoint (2026-09-25): the canonical Windows suite reports 1518
-passed, 9 skipped. A new non-mutating `preflight` command reports
-`READY_FOR_PAPER`. DEMO remains blocked by the human-owned UNINITIALIZED kill
-switch, absence of a fresh CLEAN DEMO reconciliation snapshot, and insufficient
-GBPJPY slippage evidence. See `docs/DEEP_AUDIT_REPORT.md` and the six companion
-audit/operations reports. No order was sent.
+Deep-audit final checkpoint (2026-09-26): the canonical Windows suite reports 1521 passed,
+9 skipped. Release 0.1.3 passed the same suite during build and again from a clean extracted
+installation. `preflight` is non-mutating and currently reports `READY_FOR_PAPER`. See
+`docs/DEEP_AUDIT_REPORT.md` and the six companion audit/operations reports. No order was sent
+by the audit; operator-started natural DEMO activity is recorded separately.
 
 Latest full run: see WORKLOG.md's final entry and docs/QA_REPORT.md
 (Linux cloud runner, Python 3.13; `MetaTrader5` not installable there).

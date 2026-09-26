@@ -7,7 +7,9 @@ Date: 2026-09-25. Interpreter: `C:\AdaptiveScalperNext\.venv\Scripts\python.exe`
 
 | Check | Exact command | Result |
 |---|---|---|
-| Full suite (final) | `.venv\Scripts\python.exe -m pytest -q` | **1518 passed, 9 skipped**, 2 third-party deprecation warnings, 115.05 s |
+| Full suite (final) | `.venv\Scripts\python.exe -m pytest -q` | **1521 passed, 9 skipped**, 2 third-party deprecation warnings, 113.35 s |
+| Release build gate (0.1.3) | `scripts\build_release.ps1 -Version 0.1.3` | **1521 passed, 9 skipped**, 110.78 s; archive built |
+| Installed release smoke (0.1.3) | `scripts\release_smoke_test.ps1 -Zip dist\AdaptiveScalperNext-0.1.3.zip` | **PASS**; packaged suite 1521 passed, 9 skipped, 117.46 s; MT5 disabled |
 | Preflight regression | `.venv\Scripts\python.exe -m pytest -q tests\test_preflight.py tests\test_cli_commands.py::test_every_directive_command_is_registered` | **4 passed**, 8.10 s |
 | Dependency consistency | `.venv\Scripts\python.exe -m pip check` | No broken requirements |
 | Vulnerability audit | temporary `pip-audit -r requirements.txt` | No known vulnerabilities found |
@@ -26,16 +28,20 @@ directory and did not modify project requirements or the project virtual environ
 
 ## Live state observed
 
-- PAPER runtime: RUNNING, current broker data, task failure counts zero.
-- Kill switch: UNINITIALIZED, blocking all simulated and broker entries.
+- A separate operator session stopped PAPER, disengaged the kill switch and started DEMO.
+- DEMO runtime: RUNNING with current broker data and task failure counts zero.
+- Kill switch: DISENGAGED by that operator session; the audit did not mutate it.
 - Broker: connected DEMO; terminal/account expert permissions true.
-- Orders/positions: no dangerous UNKNOWN and no open execution incidents.
+- Broker orders/positions at final read-only snapshot: zero. One stale reconciliation
+  incident remained from an earlier orphan pending order; ASN-012 fixes its lifecycle in
+  source, pending controlled runtime restart.
 - Database: 275 MB main file plus active WAL; online backup used instead of copying only the
   main file.
 
 ## Tests deliberately not claimed
 
-- No `order_send` test and no naturally occurring DEMO trade.
+- The audit did not call `order_send`; naturally occurring DEMO trades did occur after the
+  separate operator session started DEMO.
 - No open-position DEMO restart or protective-stop lifecycle.
 - No actual Windows display-setting changes at 125%/150%; scaling-equivalent Chrome viewports
   were used.

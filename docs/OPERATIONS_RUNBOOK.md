@@ -40,7 +40,9 @@ Recovery sequence:
 - Clock mismatch: verify the configured broker server-time rule; new exposure stays blocked.
 - News unavailable/stale: restore the provider/cache; do not interpret outage as no news.
 - UNKNOWN order or reconciliation mismatch: compare broker truth with local truth; never
-  blindly resend or fabricate a fill.
+  blindly resend or fabricate a fill. A namespaced incident that remains open after a CLEAN
+  snapshot indicates the running process predates ASN-012; while flat, stop it cleanly,
+  deploy/restart, and verify that the next full reconciliation resolves the stale row.
 - Cost unknown: collect evidence or exclude the symbol; never assume zero.
 - Kill switch UNINITIALIZED/ENGAGED/INVALID: only the human operator resolves it.
 - Dashboard offline: trading remains independent; restore localhost monitoring before DEMO.
@@ -55,9 +57,8 @@ dashboard before allowing new exposure. The system cannot operate while the lapt
 
 Only after applicable QA:
 
-`powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1 -Version 0.1.0`
+`powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1 -Version 0.1.3`
 
-`powershell -ExecutionPolicy Bypass -File scripts\release_smoke_test.ps1 -Zip dist\AdaptiveScalperNext-0.1.0.zip`
+`powershell -ExecutionPolicy Bypass -File scripts\release_smoke_test.ps1 -Zip dist\AdaptiveScalperNext-0.1.3.zip`
 
 Review the branch for secrets before pushing. Do not merge to `main` without approval.
-

@@ -11,6 +11,8 @@
 - Dashboard uses SQLite read-only mode and has no mutation endpoint.
 - Release tooling packages tracked files and rejects databases, keys, `.env`, credentials,
   secrets and model artifacts.
+- Release 0.1.3 was scanned through that allowlist/denylist path, checksum-verified, installed
+  in a fresh temporary environment and tested with `ASN_DISABLE_MT5=1`.
 - No shell execution or unsafe subprocess path was found in the runtime package.
 - YAML uses safe loading. SQL values use parameters in reviewed operational paths.
 - Logs redact secret-shaped key/value text; broker passwords never enter the application.
@@ -28,4 +30,3 @@
 5. Dependency results are point-in-time. Re-run pip-audit for each release.
 
 Runtime operation has no dependency on Claude, Codex, OmniRoute or a paid LLM credential.
-

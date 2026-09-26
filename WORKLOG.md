@@ -2419,3 +2419,26 @@ check or order send occurred.
   CLEAN), GBPJPY slippage UNKNOWN (runtime blocks GBPJPY with BLOCK_COST; left UNKNOWN).
 - Kill switch NOT touched. DEMO NOT started: awaiting operator action.
 - Full suite on Windows: 1518 passed, 9 skipped in 132 s.
+
+## Session: Deep audit finalization, DEMO observation and release 0.1.3 (2026-09-26)
+
+- A separate operator session subsequently disengaged the kill switch and started DEMO. The
+  audit did not change that state, stop/start the runtime, cancel an order or send an order.
+- Read-only broker snapshot: connected DEMO, permissions enabled, 0 positions, 0 pending
+  orders. Local history contained 15 naturally filled and closed DEMO positions; recorded
+  deal totals were gross profit -22.97 and commission -1.62.
+- Found and reproduced ASN-012: stable reconciliation incidents were never resolved after a
+  later complete broker snapshot no longer contained the finding. The live CLEAN snapshot
+  and empty broker truth contradicted one stale open orphan-order incident.
+- Fixed ASN-012 by resolving only absent, namespaced reconciliation finding keys. UNKNOWN
+  and unscoped/manual incidents remain untouched. Focused safety/runtime set: 114 passed.
+- Final source suite: 1521 passed, 9 skipped, 2 third-party warnings in 113.35 s.
+- Built `dist/AdaptiveScalperNext-0.1.3.zip` from commit
+  `e3bb2cca11422ed873dd32656dc2dd98ea6384fd`: 400 entries, SHA-256
+  `84c25619702fee90a6a95444b655130b0fd86d6308cc7b509222bc42b630f352`.
+  Build gate: 1521 passed / 9 skipped in 110.78 s.
+- Clean extracted release smoke: PASS; MT5 disabled at the import boundary; packaged suite
+  1521 passed / 9 skipped in 117.46 s. REAL-money execution remains disabled.
+- Final source preflight remained `READY_FOR_PAPER`, not `READY_FOR_DEMO`. The running process
+  predates ASN-012 and GBPJPY cost/quote evidence remains incomplete. Apply the source fix by
+  a controlled flat restart; do not treat a running DEMO process as readiness proof.

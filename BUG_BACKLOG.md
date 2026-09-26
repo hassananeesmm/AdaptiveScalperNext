@@ -188,6 +188,14 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Fixed
 
+- ~~#28 [MEDIUM, reconciliation] Stable reconciliation incidents were recorded and
+  deduplicated while present, but never resolved after a later complete broker snapshot no
+  longer contained the finding. This left preflight permanently blocked by a stale orphan
+  order/position alert.~~ Fixed 2026-09-26: `run_reconciliation()` now resolves only its own
+  namespaced, absent stable finding keys after a complete snapshot. UNKNOWN and unscoped
+  incidents remain human/recovery-owned. Position/order disappearance and exclusion tests
+  added; full suite 1521 passed / 9 skipped.
+
 - ~~#27 [MEDIUM, release safety] `release_smoke_test.ps1` ran `doctor`
   before pytest's MT5-blocking fixture existed, so it initialized the real
   terminal despite claiming broker isolation; it also ignored doctor's nonzero

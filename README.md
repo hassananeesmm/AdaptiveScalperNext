@@ -57,6 +57,8 @@ Run `.venv\Scripts\python.exe -m adaptive_scalper.cli --help`. The commands are:
 | [docs/WINDOWS_DEPLOYMENT.md](docs/WINDOWS_DEPLOYMENT.md) | Installing and operating on the laptop |
 | [docs/RELEASE.md](docs/RELEASE.md) | Building, verifying and defining a release |
 | [docs/QA_REPORT.md](docs/QA_REPORT.md) | Latest cloud QA: tests, static and security scans |
+| [docs/DEEP_AUDIT_REPORT.md](docs/DEEP_AUDIT_REPORT.md) | Windows deep audit, findings, fixes and readiness disposition |
+| [docs/OPERATIONS_RUNBOOK.md](docs/OPERATIONS_RUNBOOK.md) | Startup, preflight, backup and recovery procedures |
 | [LOCAL_MT5_HANDOFF.md](LOCAL_MT5_HANDOFF.md) | The Windows and MT5 steps the cloud cannot perform |
 
 The project status files are `MASTER_BUILD_DIRECTIVE.md` (authoritative),
@@ -79,5 +81,6 @@ On the dashboard enhancement branch, `START DASHBOARD.bat` serves a responsive, 
 sampled MT5 account/quote/position snapshots about every five seconds; the browser receives
 updates via WebSocket with polling fallback. Stale broker data and disconnected runtimes are
 labelled, never presented as live. The dashboard has no trading or kill-switch mutation
-controls. See [docs/DASHBOARD.md](docs/DASHBOARD.md) for Windows layout, evidence limitations,
-startup steps and acceptance checks. These enhancements still require local Windows testing.
+controls. See [docs/DASHBOARD.md](docs/DASHBOARD.md) and
+[docs/DASHBOARD_ACCEPTANCE.md](docs/DASHBOARD_ACCEPTANCE.md) for the Windows browser results,
+layout evidence, limitations and startup checks.

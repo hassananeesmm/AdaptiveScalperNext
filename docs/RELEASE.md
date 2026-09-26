@@ -14,18 +14,23 @@ The first deployed release means every item below holds, verified **on the Windo
 
 ## Current state
 
-**Windows-verified source release (2026-09-25).** Windows QA, live-terminal tests, live
-PAPER and the dashboard are verified on the laptop (`docs/QA_REPORT.md`, Windows section).
-DEMO execution (handoff steps U-X) is still pending the operator's kill-switch decision, so
-"broker mutations remain DEMO-only" is enforced and tested but no DEMO order has been placed.
-The release is a source bundle; no frozen executable exists. Build results are recorded in
-`WORKLOG.md`.
+**Windows-verified source release 0.1.3 (2026-09-26).** Windows QA, live-terminal tests,
+live PAPER, the dashboard and naturally occurring operator-started DEMO fills are observed on
+the laptop. Release smoke itself remains broker-isolated. The release is a source bundle; no
+frozen executable exists. Build results are recorded in `WORKLOG.md`.
+
+Artifact: `dist\AdaptiveScalperNext-0.1.3.zip`, commit
+`e3bb2cca11422ed873dd32656dc2dd98ea6384fd`, 400 entries, SHA-256
+`84c25619702fee90a6a95444b655130b0fd86d6308cc7b509222bc42b630f352`.
+The clean-install smoke passed all 1,521 tests with nine skips and MT5 explicitly disabled.
+Release 0.1.1 is rejected because its original smoke test touched live MT5; 0.1.2 passed the
+corrected smoke but is superseded by 0.1.3, which includes ASN-012.
 
 ## Build (Windows, after local QA)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1 -Version 0.1.0
-powershell -ExecutionPolicy Bypass -File scripts\release_smoke_test.ps1 -Zip dist\AdaptiveScalperNext-0.1.0.zip
+powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1 -Version 0.1.3
+powershell -ExecutionPolicy Bypass -File scripts\release_smoke_test.ps1 -Zip dist\AdaptiveScalperNext-0.1.3.zip
 ```
 
 `build_release.ps1`:

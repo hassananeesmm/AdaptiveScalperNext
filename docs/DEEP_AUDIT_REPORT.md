@@ -6,11 +6,14 @@ Integration base: dashboard/Windows line through `60a4a15`; not merged to `main`
 
 ## Executive result
 
-The repository is suitable for continued live-data PAPER operation. It is **not ready for
-new DEMO exposure**. The non-mutating preflight returns `READY_FOR_PAPER` and withholds
-`READY_FOR_DEMO` because the operator-owned kill switch is `UNINITIALIZED`, no fresh CLEAN
-DEMO reconciliation snapshot exists while PAPER is running, and GBPJPY slippage evidence is
-insufficient. No `order_send` was performed during this audit.
+The repository is suitable for live-data PAPER operation. During the final audit window a
+separate operator session explicitly disengaged the kill switch and started DEMO; naturally
+generated DEMO entries and exits then occurred. The audit itself did not change the kill
+switch, start DEMO, call `order_check`, or call `order_send`. At the final read-only snapshot,
+the broker had zero open positions and zero pending orders. Preflight still returned
+`READY_FOR_PAPER`, not `READY_FOR_DEMO`, because GBPJPY execution cost/quote evidence was
+incomplete and a now-stale reconciliation incident remained open in the already-running
+process's database.
 
 The audit preserved the pre-existing work, created a verified SQLite online backup at
 `data/backups/adaptive_scalper.pre-deep-audit.20260925T095839Z.sqlite3`, and used the branch
@@ -64,7 +67,7 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
 - Root cause: a skip guard looked for a lazy-import module global that never existed.
 - Consequence: unintended broker reads and potential progression to dry-run trade requests.
 - Correction/regression: suite-wide import block except explicit `ASN_LIVE_MT5=1` tests.
-- Verification/status: final full suite `1518 passed, 9 skipped`; **FIXED**.
+- Verification/status: final full suite `1521 passed, 9 skipped`; **FIXED**.
 
 ### ASN-002 — Broker server timestamps were stored as UTC
 
@@ -134,17 +137,19 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
 - Regression/verification: byte-for-byte no-write test and CLI tests pass; live result is
   `READY_FOR_PAPER`. **FIXED**.
 
-### ASN-007 — Controlled DEMO gates are incomplete
+### ASN-007 — Controlled DEMO readiness evidence remains incomplete
 
 - Severity/type: **HIGH — verified operational block, open**.
 - Affected: operator state and current evidence, not a code defect.
-- Actual/expected: kill switch is UNINITIALIZED; PAPER has no fresh reconciliation state;
-  GBPJPY slippage is unknown. DEMO requires all three resolved.
+- Actual/expected: the operator later disengaged the kill switch and started DEMO. Current
+  reconciliation is CLEAN and no broker exposure is open, but GBPJPY slippage remains
+  unknown and final preflight is not `READY_FOR_DEMO`.
 - Reproduction/evidence: `python -m adaptive_scalper.cli preflight`.
-- Consequence: no new DEMO exposure is authorized.
-- Proposed correction: operator decides kill-switch state; start DEMO only afterward so it
-  performs reconciliation; retain GBPJPY `BLOCK_COST` until sufficient evidence exists or
-  exclude it from DEMO configuration. Never invent a value.
+- Consequence: a running DEMO process is not equivalent to complete audit readiness; GBPJPY
+  continues to fail closed at the cost gate.
+- Proposed correction: retain GBPJPY `BLOCK_COST` until sufficient evidence exists or
+  explicitly exclude it from the DEMO symbol set. Never invent a value. Re-run preflight
+  after deploying ASN-012 and after fresh quote evidence is available.
 - Regression/verification/status: preflight must report `READY_FOR_DEMO`; **OPEN/BLOCKING**.
 
 ### ASN-008 — CLI status and health run a full integrity scan
@@ -200,6 +205,31 @@ each rechecks DEMO identity/permissions appropriate to the mutation. PAPER does 
 - Regression/verification: fresh-process environment-guard test plus rebuilt smoke release.
 - Status: **FIXED**.
 
+### ASN-012 — Reconciliation incidents remained open after broker truth became clean
+
+- Severity/type: **MEDIUM — confirmed defect, fixed in this audit; running process not yet
+  restarted onto the fix**.
+- Affected: `execution/reconciliation.py`, deterministic fake gateway and tests.
+- Actual/expected: an orphan XAUUSD pending order was observed once and recorded correctly,
+  but after it disappeared from broker truth, later CLEAN reconciliation cycles left the
+  stable incident unresolved forever. The preflight therefore continued to block DEMO even
+  though current broker and local truth both contained no exposure.
+- Reproduction/evidence: incident key `ORPHAN_BROKER_ORDER:order:1966108100` had one
+  occurrence and an old `last_seen_at_utc`; the live reconciliation snapshot was CLEAN and
+  read-only `orders_get()`/`positions_get()` both returned empty.
+- Root cause: `run_reconciliation()` deduplicated newly observed findings but had no inverse
+  lifecycle step to resolve stable finding keys absent from a later complete snapshot.
+- Potential consequences: permanent false alerts and permanently conservative preflight;
+  operators could become conditioned to ignore incident warnings.
+- Correction: after each complete broker snapshot, resolve only namespaced reconciliation
+  incidents whose stable key is absent. UNKNOWN and unscoped/manual incidents are never
+  auto-resolved.
+- Regression test: position and pending-order findings resolve after disappearance; UNKNOWN
+  and unscoped incidents remain open.
+- Verification: focused set `114 passed`; full suite `1521 passed, 9 skipped`; packaged smoke
+  suite `1521 passed, 9 skipped`. **FIXED IN SOURCE**. The current DEMO process still has the
+  old module loaded; use a controlled flat restart before relying on automatic cleanup.
+
 ## Backtest, ML and knowledge conclusions
 
 The backtest uses next-bar-open entry, executable bid/ask sides, conservative same-bar
@@ -215,10 +245,13 @@ the kill switch. No paid LLM is required at runtime.
 
 ## Final disposition
 
-- Confirmed defects fixed: ASN-001 through ASN-006 and ASN-011 (some fixed in preceding Windows commits).
+- Confirmed defects fixed: ASN-001 through ASN-006, ASN-011 and ASN-012 (some fixed in
+  preceding Windows commits).
 - Remaining confirmed defect: none known in a currently authorized PAPER send-free path.
-- Remaining blocks/risks: ASN-007 through ASN-010.
-- Live PAPER: genuine current MT5 data, fresh heartbeats, no task failures observed; zero
-  trades is expected because the kill switch remains uninitialized.
-- DEMO readiness: **NOT READY**.
+- Remaining blocks/risks: ASN-007 through ASN-010; ASN-012 requires a controlled process
+  restart to take effect in the live database.
+- DEMO observation: operator-started runtime, 15 naturally filled and subsequently closed
+  local positions, zero broker positions/orders at final snapshot, zero scheduler task
+  failures. Local deals recorded gross profit `-22.97` plus `-1.62` commission.
+- DEMO readiness at final preflight: **NOT READY**, despite DEMO already running.
 - REAL/CONTEST/UNKNOWN execution: blocked by design; not tested by sending orders.
