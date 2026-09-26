@@ -621,16 +621,26 @@ function stratPerformancePanel(panel){
 function multiPositionPanel(p){
   const wrap=el("div");
   wrap.appendChild(el("p",p.headline,"safeguard"));
-  const rc=p.risk_capacity||{};
+  const rc=p.risk_capacity||{};const cur=p.account_currency||"";
   wrap.appendChild(table([{
     max_positions:p.max_open_positions,open_positions:p.open_positions,pending_orders:p.pending_orders,
-    remaining_slots:p.remaining_position_slots,open_risk:money(p.open_monetary_risk),
-    pending_risk:money(p.pending_monetary_risk),
-    remaining_aggregate_risk:rc.status?rc.status+": "+rc.detail:money(rc.remaining_aggregate_risk),
+    remaining_slots:p.remaining_position_slots,open_risk:money(p.open_monetary_risk,cur),
+    pending_risk:money(p.pending_monetary_risk,cur),
+    remaining_aggregate_risk:rc.status?rc.status+": "+rc.detail:money(rc.remaining_aggregate_risk,cur),
     enabled_symbols:(p.enabled_symbols||[]).join(", ")||"None"}]));
+  if((p.positions||[]).length){
+    wrap.appendChild(el("div","Open positions and the strategy that opened each","mini-title"));
+    wrap.appendChild(table(p.positions.map(x=>({symbol:x.symbol,direction:x.direction,volume:x.volume,
+      strategy:x.strategy_key,position:x.broker_position_id,initial_risk:money(x.initial_monetary_risk,cur),
+      floating_pnl:x.floating_pnl===null?"N/A (no fresh broker sample)":money(x.floating_pnl,cur),
+      opened_utc:x.opened_at_utc}))));
+  }
   wrap.appendChild(el("div","Why no second trade — per symbol","mini-title"));
   wrap.appendChild(table(Object.entries(p.symbols||{}).map(([symbol,v])=>({symbol,status:v.status,detail:v.detail,
-    quote:v.quote_status,signal:v.signal_status,cost_eligible:v.cost_eligible,news:v.news,
+    open_position_strategy:v.open_position_strategy,quote:v.quote_status,
+    quote_age_s:v.quote_age_seconds,signal:v.signal_status,cost_eligible:v.cost_eligible,news:v.news,
+    last_decision:v.last_decision?(v.last_decision.stage+" "+v.last_decision.decision+
+      (v.last_decision.strategy_key?" ("+v.last_decision.strategy_key+")":"")):null,
     last_decision_utc:v.last_decision?v.last_decision.decided_at_utc:null}))));
   wrap.appendChild(el("div","Pairwise correlation (aligned M5 returns)","mini-title"));
   const corr=(p.correlation||[]).map(c=>({pair:c.pair.join(" / "),
@@ -976,9 +986,10 @@ function labControls(){
 function labComparison(s){
   const box=el("div",null,"lab");
   const heads=["Compare","Shortlist","Strategy","Version","Status",["Signals","num"],["Selected","num"],["Submitted","num"],
-    ["Filled","num"],["Closed","num"],["W / L / BE","num"],["Win rate","num"],["Gross P&L","num"],["Commission","num"],
+    ["Filled","num"],["Closed","num"],["W / L / BE","num"],["Win rate","num"],["Gross profit (winners)","num"],
+    ["Gross loss (losers)","num"],["Gross P&L","num"],["Commission","num"],
     ["Fees","num"],["Swap","num"],["Net P&L","num"],["Profit factor","num"],["Avg R (n)","num"],["Expectancy","num"],
-    ["Avg hold","num"],["Max DD (closed)","num"],["Spread / slippage evidence","num"],"Last executed",["Open","num"]];
+    ["Avg hold","num"],["Max DD (closed)","num"],["Spread / slippage evidence","num"],"Last executed",["Open","num"],["Unrealized (live)","num"]];
   const rows=s.strategies.map(r=>{
     const tr=el("tr");const f=r.funnel||{};
     const cb=el("input");cb.type="checkbox";cb.checked=LAB.compare.includes(r.strategy_key);
@@ -999,9 +1010,10 @@ function labComparison(s){
     const fn=(k)=>s.evidence==="DEMO"?fmt(f[k]):"N/A";
     cell(tr,fn("signals"),"num");cell(tr,fn("selected_proposals"),"num");cell(tr,fn("orders_submitted"),"num");
     cell(tr,fn("orders_filled"),"num");cell(tr,fmt(r.closed_trades),"num");
-    if(!r.closed_trades){const td=cell(tr,"NO CLOSED TRADES","na");td.colSpan=14;}
+    if(!r.closed_trades){const td=cell(tr,"NO CLOSED TRADES","na");td.colSpan=16;}
     else{
       cell(tr,r.wins+" / "+r.losses+" / "+r.breakevens,"num");cell(tr,pct(r.win_rate),"num");
+      cell(tr,signed(r.gross_profit_of_winners),"num");cell(tr,signed(r.gross_loss_of_losers),"num");
       cell(tr,signed(r.gross_pnl),"num");cell(tr,signed(r.commission),"num");cell(tr,signed(r.fee),"num");cell(tr,signed(r.swap),"num");
       cell(tr,signed(r.net_pnl),"num");
       cell(tr,r.profit_factor!==null?num(r.profit_factor):(r.profit_factor_note||"N/A"),"num");
@@ -1015,20 +1027,24 @@ function labComparison(s){
       cell(tr,r.most_recent_executed_trade?time(r.most_recent_executed_trade.entry_time_utc):"—");
     }
     cell(tr,fmt(r.open_positions),"num");
+    cell(tr,r.unrealized_pnl!==null&&r.unrealized_pnl!==undefined?signed(r.unrealized_pnl):(r.open_positions?(r.unrealized_note||"N/A"):"—"),"num");
     return tr;
   });
   const un=s.unattributed||{};const um=un.metrics||{};
   const utr=el("tr");cell(utr,"");cell(utr,"");const ul=el("span","UNATTRIBUTED (not a strategy)","text-warn");cell(utr,ul);
   cell(utr,"—");cell(utr,"no durable chain");
   for(let i=0;i<4;i++)cell(utr,"—","num");cell(utr,fmt(um.closed_trades),"num");
-  if(!um.closed_trades){const td=cell(utr,"NO CLOSED TRADES","na");td.colSpan=14;}
+  if(!um.closed_trades){const td=cell(utr,"NO CLOSED TRADES","na");td.colSpan=16;}
   else{cell(utr,um.wins+" / "+um.losses+" / "+um.breakevens,"num");cell(utr,pct(um.win_rate),"num");
+    cell(utr,signed(um.gross_profit_of_winners),"num");cell(utr,signed(um.gross_loss_of_losers),"num");
     cell(utr,signed(um.gross_pnl),"num");cell(utr,signed(um.commission),"num");cell(utr,signed(um.fee),"num");cell(utr,signed(um.swap),"num");
     cell(utr,signed(um.net_pnl),"num");for(let i=0;i<6;i++)cell(utr,"—","num");cell(utr,"—");}
-  cell(utr,"—","num");rows.push(utr);
+  cell(utr,"—","num");cell(utr,"—","num");rows.push(utr);
   box.appendChild(el("div","Winning and losing strategies · "+s.evidence+" evidence","mini-title"));
   box.appendChild(gridTable(heads,rows,{nowrap:true}));
   box.appendChild(el("p","Metrics use CLOSED trades only (an entry is never a completed trade). Net = gross + commission + fees + swap, "+
+    "Gross profit / loss (winners / losers) sum the NET realized result of winning / losing closed trades (profit factor = profit / |loss|). "+
+    "Unrealized is the broker's live floating P&L of still-open positions, shown beside and never inside realized results. "+
     "all broker-recorded for DEMO. Spread and slippage are already inside DEMO broker profit, so they are shown as evidence only. "+
     "Profit factor with no losses is undefined, never infinite. Max drawdown is on the closed-trade sequence. "+
     "Rows stay in registry order and are never ranked: small samples cannot support a ranking.","lab-note"));

@@ -583,6 +583,25 @@ def test_readiness_panel_reports_capacity_correlation_and_per_symbol_reasons(tmp
     assert pair["evaluated_now"] is True
 
 
+def test_readiness_panel_lists_each_open_position_with_its_strategy_and_floating_pnl(tmp_path):
+    engine, conn, gateway, clock, stub = _start(tmp_path)
+    stub.fire = {"XAUUSD": "BUY", "BTCUSD": "SELL"}
+    step(engine, clock, seconds=STEP, tick=4)
+    engine._publish_telemetry()
+    p = _panel(conn, clock)
+    assert p["open_positions"] == 2 and p["remaining_position_slots"] == 0
+    assert sorted(x["symbol"] for x in p["positions"]) == ["BTCUSD", "XAUUSD"]
+    broker_ids = {str(b.broker_position_id) for b in gateway.positions_get()}
+    for x in p["positions"]:
+        assert x["strategy_key"] == "multi_position_stub" and str(x["broker_position_id"]) in broker_ids
+        assert isinstance(x["floating_pnl"], (int, float)) and x["initial_monetary_risk"] > 0
+    assert len({x["broker_position_id"] for x in p["positions"]}) == 2
+    for symbol in ("BTCUSD", "XAUUSD"):
+        assert p["symbols"][symbol]["status"] == "EXISTING POSITION"
+        assert p["symbols"][symbol]["open_position_strategy"] == "multi_position_stub"
+    assert p["account_currency"] == gateway.account_info().currency
+
+
 def test_readiness_panel_names_the_correlation_gate_from_the_journal(tmp_path):
     engine, conn, gateway, clock, stub = _start(tmp_path, bars=correlated_market())
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "BUY"}

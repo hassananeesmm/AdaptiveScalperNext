@@ -229,8 +229,8 @@ def multi_position(conn: sqlite3.Connection, now: int) -> dict:
         admission = {"active": sorted((startup or {}).get("symbols", {})), "awaiting_market": closed,
                      "excluded": {s: why for s, why in excluded.items() if s not in closed}}
 
-    open_rows = _rows(conn, "SELECT canonical_symbol, direction, initial_monetary_risk, strategy_key, opened_at_utc "
-                            "FROM positions WHERE status = 'OPEN' ORDER BY opened_at_utc")
+    open_rows = _rows(conn, "SELECT broker_position_id, canonical_symbol, direction, volume, initial_monetary_risk, "
+                            "strategy_key, opened_at_utc FROM positions WHERE status = 'OPEN' ORDER BY opened_at_utc")
     marks = ", ".join("?" * len(OPEN_ORDER_STATES))
     pending_rows = _rows(conn, f"SELECT canonical_symbol, direction, state, "  # nosec B608 - placeholders only
                                f"COALESCE(remaining_pending_monetary_risk, requested_monetary_risk, 0) AS risk "
@@ -255,6 +255,15 @@ def multi_position(conn: sqlite3.Connection, now: int) -> dict:
                          "additional_full_size_trades_by_risk": int(remaining // per_trade) if per_trade > 0 else 0}
     else:
         risk_capacity = {"status": "UNAVAILABLE", "detail": "no fresh DEMO account snapshot (equity unknown)"}
+    # Floating P&L is broker truth from the runtime's sampled snapshot; stale -> None, never a guess.
+    floating = ({str(p["broker_position_id"]): p.get("floating_pnl") for p in (telemetry or {}).get("positions") or []}
+                if fresh else {})
+    open_positions = [{
+        "broker_position_id": r["broker_position_id"], "symbol": r["canonical_symbol"], "direction": r["direction"],
+        "volume": r["volume"], "strategy_key": r["strategy_key"] or "UNATTRIBUTED",
+        "initial_monetary_risk": r["initial_monetary_risk"], "opened_at_utc": r["opened_at_utc"],
+        "floating_pnl": floating.get(str(r["broker_position_id"])),
+    } for r in open_rows]
 
     global_block = (why or {}).get("global_block")
     readiness = readiness or {}
@@ -307,6 +316,7 @@ def multi_position(conn: sqlite3.Connection, now: int) -> dict:
         per_symbol[symbol] = {
             "status": label, "detail": detail, "quote_status": quote_status, "quote_age_seconds": quote_age,
             "signal_status": signal_status, "last_decision": latest,
+            "open_position_strategy": next((p["strategy_key"] for p in open_positions if p["symbol"] == symbol), None),
             "cost_eligible": None if cost is None else cost["eligible"],
             "news": None if news is None else news["decision"],
         }
@@ -325,6 +335,8 @@ def multi_position(conn: sqlite3.Connection, now: int) -> dict:
                      "that passes correlation, risk, cost, news and broker checks.",
         "max_open_positions": max_positions, "max_positions_per_symbol": limits["max_positions_per_symbol"],
         "open_positions": len(open_rows), "pending_orders": len(pending_rows),
+        "positions": open_positions,
+        "account_currency": ((telemetry or {}).get("account") or {}).get("currency"),
         "remaining_position_slots": slots_left,
         "open_monetary_risk": round(open_risk, 2), "pending_monetary_risk": round(pending_risk, 2),
         "risk_capacity": risk_capacity,

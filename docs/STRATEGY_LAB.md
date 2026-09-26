@@ -155,7 +155,9 @@ Computed over CLOSED trades in the currently filtered set:
 | Average R (n) | mean realized R over trades with recorded initial risk; n shown |
 | Expectancy | realized net / closed trades |
 | Max drawdown | peak-to-trough of the cumulative realized net over the closed-trade sequence ("closed-trade basis"), not an equity drawdown |
+| Gross profit (winners) / gross loss (losers) | sum of the realized NET result of the winning / losing closed trades (their net already includes that trade's commission, fees and swap, so costs are never subtracted twice); profit factor = profit / abs(loss) |
 | Open exposure | sum of initial monetary risk of this strategy's open/partially-closed positions |
+| Unrealized (live) | DEMO only: the broker's floating P&L of this strategy's open positions from the runtime's sampled broker snapshot (<= 15 s old, terminal connected). Shown beside realized results and never added to them. `NO_OPEN_POSITIONS`, `NO_FRESH_BROKER_SAMPLE` or `POSITION_NOT_IN_BROKER_SAMPLE` instead of a guessed number; PAPER/BACKTEST show `SIMULATED` |
 
 Rows stay in registry order and are never ranked. Every row shows its sample
 size. Rows with few trades are an insufficient sample, not a result.

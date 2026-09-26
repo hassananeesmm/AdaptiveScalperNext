@@ -2525,3 +2525,33 @@ check or order send occurred.
   Lab attribution on their own position/strategy; an unresolved UNKNOWN on XAUUSD blocks a BTCUSD entry
   (global policy, directive §30). Both passed first time (no defect). Readiness panel rendered against a
   scratch copy of the live DB. Full suite 1587 passed, 9 skipped.
+
+## Session: Strategy Lab 2.0 deployment preparation + multi-position verification (2026-09-27, 02:28- GMT+4)
+
+- Pre-work (read-only): DEMO runtime PIDs 25288/10512 and dashboard 14524/27832 still running from the main
+  checkout at `7f604ab` (release 0.2.0, schema 29). MT5 (read-only `positions_get`/`orders_get`): DEMO account
+  (ICMarketsSC-Demo, trade_mode 0), USD, balance = equity 9,642.07, 0 positions, 0 pending orders. Kill switch
+  DISENGAGED (operator `hassan`); heartbeat fresh; `doctor` OK; preflight `READY_FOR_PAPER`, DEMO blocker =
+  XAUUSD quote stale (market closed, last tick Friday). `reconcile` CLEAN -- note: `reconcile` repairs LOCAL
+  state, so it is not a pure read against a live production DB; it found nothing to repair. Future live checks
+  should use a DB snapshot instead.
+- Online backup `data/backups/pre_multi_position_deploy_20260926T223537Z.sqlite3` (SQLite backup API, source
+  opened `mode=ro`): quick_check ok and 0 FK violations on source and backup, schema 29, identical row counts
+  (positions 47, orders 89, deals 94, broker_account_deals 2,224). No migration is pending (the fix branch adds
+  none), so no rehearsal is needed.
+- Recomputed from that backup (worktree code): 47 closed attributed DEMO trades, all
+  `microstructure_acceleration` (BTCUSD 43: 23W/20L, -40.90; XAUUSD 4: 0W/4L, -24.88); total 23W/24L/0BE,
+  gross -64.16, commission -1.62, fees 0, swap 0, net -65.78 USD, PF 0.79, avg R -0.061 (n=47), expectancy
+  -1.40 USD/trade. Every attributed trade passes all 4 chain checks; 0 deal-source discrepancies; 0 local
+  positions without deals. Funnel: 162 signals, 80 selected, 47 submitted, 47 filled. The other five strategies:
+  0 submitted orders. Unattributed: 1,109 positions (1,101 EXTERNAL_EXPERT -4,576.72, 8 UNKNOWN_SOURCE
+  +3,267.89). Reconciliation: 2,316 deals, SQL = ledger = 9,642.07 USD = broker balance, discrepancy 0.
+- Added (Phase 4/9): per-strategy "Gross profit (winners)", "Gross loss (losers)" and "Unrealized (live)"
+  columns (broker floating P&L from a <=15 s runtime snapshot, never mixed into realized; N/A reasons instead
+  of guesses), CSV export fields; MULTI-POSITION READINESS now lists every open position with the strategy that
+  opened it, broker id, initial risk and floating P&L, money in the account currency, and each symbol's
+  latest decision + strategy and quote age. 5 new tests.
+- Browser (Chromium viewport emulation, not native DPI): scratch dashboard on 127.0.0.1:8766 against a copy of
+  the backup with one synthetic open position; 1366x768, 1920x1080, 2560x1440 and 125 %/150 % equivalents
+  (1536x864, 1280x720, 1093x614, 911x512): no page overflow, no clipped headers, 0 console errors/warnings.
+  Scratch dashboard stopped; production dashboard (8765) untouched.

@@ -35,7 +35,18 @@ Adaptive Scalper Next
 `dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
 W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
-## Current phase (2026-09-26 night, branch `fix/multi-position-readiness`)
+## Current phase (2026-09-27 early, branch `fix/multi-position-readiness`, release candidate 0.2.1)
+
+Running: 0.2.0 (`7f604ab`), schema 29, broker FLAT (0 positions, 0 orders, balance = equity 9,642.07 USD), kill
+switch DISENGAGED, reconciliation CLEAN, preflight `READY_FOR_PAPER` (DEMO blocker: XAUUSD market closed).
+This branch adds per-strategy gross winners/losers and live unrealized P&L to Strategy Lab and lists each open
+position with its strategy in MULTI-POSITION READINESS (TESTED-FAKE, browser-verified on a scratch copy), on
+top of the ASN-016/017 fixes. Full suite 1593 passed, 9 skipped. Current DEMO evidence (backup
+`pre_multi_position_deploy_20260926T223537Z`): 47 closed attributed trades, all `microstructure_acceleration`,
+23W/24L, net -65.78 USD; 2,316 deals reconcile exactly to the broker balance. NOT DEPLOYED: needs a controlled
+restart of the DEMO runtime and dashboard with operator approval (no migration needed).
+
+## Phase before (2026-09-26 night, branch `fix/multi-position-readiness`)
 
 **Supersedes the deployment note below:** release 0.2.0 (`7f604ab`) IS deployed -- the DEMO runtime and
 dashboard were restarted 20:30:54 GMT+4 and migration 0029 is applied (schema 29).

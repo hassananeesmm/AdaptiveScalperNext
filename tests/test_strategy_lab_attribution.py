@@ -232,6 +232,61 @@ def test_open_position_is_never_a_completed_trade_and_has_no_realized_pnl(db):
     assert t["realized_net_pnl"] == pytest.approx(0.0) and t["open_volume_entry_costs"] == pytest.approx(-0.7)
 
 
+def _telemetry(conn, positions, *, age=0, connected=True):
+    conn.execute("UPDATE runtime_state SET value_json = ?, updated_at_utc = ? WHERE key = 'live_telemetry'",
+                 (json.dumps({"account": {"currency": "USD", "trade_mode": "DEMO"},
+                              "terminal": {"connected": connected}, "positions": positions}),
+                  int(time.time()) - age))
+    conn.commit()
+
+
+def _row(s, key="microstructure_acceleration"):
+    return next(r for r in s["strategies"] if r["strategy_key"] == key)
+
+
+def test_unrealized_pnl_is_live_broker_floating_and_never_realized(db):
+    runtime_trade(db, position=12, status="OPEN")
+    broker_deal(db, 120, position=12, entry=0, order=12, commission=-0.7)
+    closed_trade(db, 1, profit=4.0, commission=0.0)
+    db.commit()
+    _telemetry(db, [{"broker_position_id": "12", "floating_pnl": -3.25}])
+    row = _row(sl.summary(db, "DEMO", {}, {}))
+    assert row["unrealized_pnl"] == pytest.approx(-3.25) and row["unrealized_note"] is None
+    assert row["closed_trades"] == 1 and row["net_pnl"] == pytest.approx(4.0)  # floating never enters realized
+    idle = _row(sl.summary(db, "DEMO", {}, {}), "range_breakout")
+    assert idle["unrealized_pnl"] is None and idle["unrealized_note"] == "NO_OPEN_POSITIONS"
+
+
+@pytest.mark.parametrize("age,connected,positions,note", [
+    (60, True, [{"broker_position_id": "12", "floating_pnl": 1.0}], "NO_FRESH_BROKER_SAMPLE"),
+    (0, False, [{"broker_position_id": "12", "floating_pnl": 1.0}], "NO_FRESH_BROKER_SAMPLE"),
+    (0, True, [{"broker_position_id": "99", "floating_pnl": 1.0}], "POSITION_NOT_IN_BROKER_SAMPLE"),
+])
+def test_unrealized_pnl_is_not_available_rather_than_guessed(db, age, connected, positions, note):
+    runtime_trade(db, position=12, status="OPEN")
+    broker_deal(db, 120, position=12, entry=0, order=12)
+    db.commit()
+    _telemetry(db, positions, age=age, connected=connected)
+    row = _row(sl.summary(db, "DEMO", {}, {}))
+    assert row["unrealized_pnl"] is None and row["unrealized_note"] == note
+
+
+def test_gross_profit_and_loss_split_winners_and_losers_in_summary_and_csv(db):
+    closed_trade(db, 1, profit=10.0, commission=-1.0)
+    closed_trade(db, 2, profit=-20.0, commission=-1.0)
+    closed_trade(db, 3, profit=6.0, commission=-1.0)
+    db.commit()
+    s = sl.summary(db, "DEMO", {}, {})
+    row = _row(s)
+    assert row["gross_profit_of_winners"] == pytest.approx(8.0 + 4.0)  # net of both commissions
+    assert row["gross_loss_of_losers"] == pytest.approx(-22.0)
+    assert row["profit_factor"] == pytest.approx(12.0 / 22.0)
+    assert row["net_pnl"] == pytest.approx(row["gross_profit_of_winners"] + row["gross_loss_of_losers"])
+    csv_row = sl.comparison_csv_rows(s, ["microstructure_acceleration"])[0]
+    assert csv_row["gross_profit_of_winners"] == pytest.approx(12.0) and csv_row["currency"] == "USD"
+    assert "unrealized_pnl" in csv_row
+
+
 def test_broker_history_and_local_record_disagreement_is_reported(db):
     closed_trade(db, 13, profit=8.0)
     local_deal(db, 131, position=13, entry_type="OUT", profit=7.5, commission=-0.5)

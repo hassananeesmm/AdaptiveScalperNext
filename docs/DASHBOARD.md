@@ -15,7 +15,10 @@ The PAPER or DEMO runtime must run separately on the Windows laptop.
   `/api/panels/multi_position`):
   position capacity (max/open/pending/remaining slots), open and pending monetary risk, remaining
   aggregate-risk capacity from the fresh DEMO equity, enabled / awaiting-market / excluded symbols,
-  per-symbol quote, signal, cost-evidence and news status, pairwise correlation (value or N/A, aligned
+  every open position with the strategy that opened it (local position record), its broker position id,
+  initial risk and live floating P&L (N/A without a fresh broker sample), money in the account currency,
+  per-symbol quote (with age), signal, latest decision and its strategy, cost-evidence and news status,
+  pairwise correlation (value or N/A, aligned
   sample count, threshold, ALLOW/BLOCK, reason) and one status per symbol explaining why a second trade has
   not opened: NO SIGNAL, EXISTING POSITION, MARKET CLOSED, STALE QUOTE, COST BLOCK, CORRELATION BLOCK,
   RISK BLOCK, PORTFOLIO BLOCK, NEWS BLOCK, BROKER BLOCK, RECONCILIATION BLOCK, UNKNOWN ORDER, KILL SWITCH,

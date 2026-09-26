@@ -124,6 +124,27 @@ def account_currency(conn: sqlite3.Connection) -> str | None:
     return (telemetry.get("account") or {}).get("currency")
 
 
+LIVE_FLOATING_MAX_AGE_SECONDS = 15  # = dashboard.panels.STALE_HEARTBEAT_SECONDS
+
+
+def live_floating_pnl(conn: sqlite3.Connection, now: int | None = None) -> dict[str, float] | None:
+    """Broker floating P&L per open DEMO position id from the runtime's
+    sampled snapshot, or None when that snapshot is missing or stale.
+    Unrealized P&L is shown beside, never inside, realized results."""
+    if not _table_exists(conn, "runtime_state"):
+        return None
+    row = conn.execute("SELECT value_json, updated_at_utc FROM runtime_state WHERE key = 'live_telemetry'").fetchone()
+    if row is None:
+        return None
+    now = int(time.time()) if now is None else now
+    telemetry = _json(row[0])
+    if (not isinstance(telemetry, dict) or now - int(row[1]) > LIVE_FLOATING_MAX_AGE_SECONDS
+            or not (telemetry.get("terminal") or {}).get("connected") or "positions" not in telemetry):
+        return None
+    return {str(p["broker_position_id"]): p["floating_pnl"] for p in telemetry["positions"]
+            if isinstance(p.get("floating_pnl"), (int, float))}
+
+
 def _session_of_hour(hour: int | None) -> str | None:
     """UTC session bucket, applied ONLY to simulated trades (which record
     no session); a DEMO trade's session is the one recorded at execution."""
@@ -1092,6 +1113,20 @@ def summary(conn: sqlite3.Connection, evidence: str, filters: dict, params: dict
     filtered = apply_filters(trades, filters)
     funnel = demo_funnel(conn, filters.get("date_from"), filters.get("date_to")) if evidence == "DEMO" else None
     keys = list(catalog) + sorted({t["strategy_key"] for t in filtered if t["strategy_key"]} - set(catalog))
+    floating = live_floating_pnl(conn) if evidence == "DEMO" else None
+
+    def unrealized(open_trades: list[dict]) -> tuple[float | None, str | None]:
+        if not open_trades:
+            return None, "NO_OPEN_POSITIONS"
+        if evidence != "DEMO":
+            return None, "SIMULATED (no broker floating P&L)"
+        if floating is None:
+            return None, "NO_FRESH_BROKER_SAMPLE"
+        vals = [floating.get(str(t["broker_position_id"])) for t in open_trades]
+        if any(v is None for v in vals):
+            return None, "POSITION_NOT_IN_BROKER_SAMPLE"
+        return float(sum(vals)), None
+
     rows, curves = [], {}
     for key in keys:
         st = [t for t in filtered if t["strategy_key"] == key]
@@ -1107,6 +1142,7 @@ def summary(conn: sqlite3.Connection, evidence: str, filters: dict, params: dict
                                     "REGISTERED" if key in catalog else "NOT_REGISTERED"),
             "trade_records": len(st), "open_positions": len(open_trades),
             "open_exposure_initial_risk": sum(t.get("initial_monetary_risk") or 0.0 for t in open_trades),
+            **dict(zip(("unrealized_pnl", "unrealized_note"), unrealized(open_trades), strict=True)),
             "most_recent_executed_trade": ({"trade_id": last_exec["trade_id"],
                                             "entry_time_utc": last_exec["entry_time_utc"],
                                             "symbol": last_exec["symbol"]} if last_exec else None),
@@ -1380,12 +1416,15 @@ def comparison_csv_rows(summary_payload: dict, keys: list[str]) -> list[dict]:
             "orders_submitted": f.get("orders_submitted"), "orders_filled": f.get("orders_filled"),
             "closed_trades": s["closed_trades"], "sample_status": s["sample_status"], "wins": s["wins"],
             "losses": s["losses"], "breakevens": s["breakevens"], "win_rate": s["win_rate"],
+            "gross_profit_of_winners": s["gross_profit_of_winners"],
+            "gross_loss_of_losers": s["gross_loss_of_losers"],
             "gross_pnl": s["gross_pnl"], "commission": s["commission"], "fee": s["fee"], "swap": s["swap"],
             "net_pnl": s["net_pnl"], "profit_factor": s["profit_factor"],
             "profit_factor_note": s["profit_factor_note"], "avg_r": s["avg_r"], "r_sample": s["r_sample"],
             "expectancy_per_trade": s["expectancy_per_trade"], "avg_holding_seconds": s["avg_holding_seconds"],
             "max_drawdown_closed_trade_basis": s["max_drawdown_closed_trade_basis"],
-            "open_positions": s["open_positions"], "currency": summary_payload.get("currency"),
+            "open_positions": s["open_positions"], "unrealized_pnl": s.get("unrealized_pnl"),
+            "unrealized_note": s.get("unrealized_note"), "currency": summary_payload.get("currency"),
             "filters": json.dumps(summary_payload.get("filters") or {}, sort_keys=True),
         })
     return rows
