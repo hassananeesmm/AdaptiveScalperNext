@@ -2466,3 +2466,14 @@ check or order send occurred.
 - Incident: an inline Python edit used the Windows default encoding and truncated
   `dashboard/page.py`. It was restored from HEAD and re-applied with explicit UTF-8 before commit.
 - Cleanup manifest: docs/CLEANUP_MANIFEST.md (nothing removed; approvals pending).
+- Release: `scripts\build_release.ps1 -Version 0.2.0` at `5f59280` (gate 1557 passed / 9 skipped),
+  `dist\AdaptiveScalperNext-0.2.0.zip`, 406 entries, sha256
+  a0945338a28d7b3cb6e025b018544725e5feae0daa9b09ced1c94b349062d06e. Independent zip audit: no databases,
+  WAL files, logs, keys, .env or credentials; 29 migrations and all Strategy Lab files present.
+  `scripts\release_smoke_test.ps1`: PASSED (MT5 disabled; packaged suite 1557 passed / 9 skipped).
+  Source release only; no frozen executable built. (An earlier 0.2.0 build from `ef7290e` was discarded
+  after the DEMO login number was found in three new doc lines; those lines were redacted first.)
+- Final read-only check (~19:55 GMT+4): runtime RUNNING DEMO, heartbeat fresh, 0 task failures. Broker:
+  1 open DEMO position (BTCUSD SELL 0.52, magic 240924, broker SL/TP set, initial risk 24.17 USD =
+  0.25 %), locally tracked with a runtime entry chain (`microstructure_acceleration`). Reconciliation
+  CLEAN, 0 unresolved incidents. Production database still at schema 28 (migration 0029 not applied).
