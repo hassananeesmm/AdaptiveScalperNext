@@ -2600,3 +2600,20 @@ check or order send occurred.
   credentials or research data; 29 migrations (none new since 0029); research modules, report and tests present; the
   DEMO login number only in the two historical WORKLOG lines (unchanged, flagged). `release_smoke_test.ps1`: PASSED
   (fresh venv, MT5 disabled, packaged suite 1636 passed / 9 skipped). Not deployed: needs operator approval.
+
+## Session: 0.2.2 controlled deployment (2026-09-27, 18:48-18:58 GMT+4, operator-approved "deploy now while flat")
+
+- Re-checked before acting: same 0.2.0 processes, broker flat, no dependency/config/launcher/migration change
+  between `7f604ab` and `eaa024c`. Corrected the proposed procedure: `STOP TRADING.bat` engages the kill switch, so it
+  was NOT used; the documented stop (Ctrl+C in the runtime window) was sent instead.
+- Online backup `data/backups/pre_0_2_2_deploy_20260927T144913Z.sqlite3`: quick_check ok, 0 FK violations, schema 29,
+  row counts identical to the source.
+- 18:50:10 flat re-check in the same process (telemetry 0.4 s old, 0 broker positions, 0 local open, 0 working
+  orders, DEMO), then Ctrl+C to the runtime console and the dashboard console: ENGINE_STOPPED recorded.
+- Main checkout: `git checkout --detach eaa024c`. Started `START DEMO + DASHBOARD.bat` (doctor + reconcile OK, runtime
+  18:52:38); its dashboard window did not come up, so `START DASHBOARD.bat` was started separately (up at once).
+- Verified: engine RUNNING (heartbeat 1 s), trade mode DEMO, reconciliation CLEAN, kill switch DISENGAGED (unchanged),
+  schema 29, 0 positions, balance = equity 9,607.31 USD, symbol admission active {BTCUSD} with XAUUSD awaiting market,
+  /api/health HEALTHY, /api/strategy-lab/research OK, readiness BTCUSD NO SIGNAL / AWAITING COMPLETED BAR, XAUUSD
+  MARKET CLOSED; preflight READY_FOR_PAPER, DEMO blocker only "no fresh quote for: XAUUSD".
+- The old 03:06 launcher windows stay open at their final `pause` prompt; the operator may close them.

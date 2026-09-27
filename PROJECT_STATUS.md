@@ -35,7 +35,19 @@ Adaptive Scalper Next
 `dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
 W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
-## Current phase (2026-09-27 afternoon, branch `feature/independent-strategy-research`, release candidate 0.2.2)
+## Current phase (2026-09-27 evening): release 0.2.2 DEPLOYED
+
+Deployed with operator approval at 18:50-18:57 GMT+4 while the broker was flat: verified online backup
+`data/backups/pre_0_2_2_deploy_20260927T144913Z.sqlite3`; runtime and dashboard stopped with Ctrl+C (graceful
+ENGINE_STOPPED; kill switch NOT touched, still DISENGAGED); main checkout switched to `eaa024c` (detached HEAD,
+release 0.2.2; no migration, schema 29); restarted through `START DEMO + DASHBOARD.bat` (doctor + reconcile passed)
+and `START DASHBOARD.bat`. Verified after restart: engine RUNNING, account trade mode DEMO, reconciliation CLEAN,
+0 positions / 0 orders, balance = equity 9,607.31 USD, symbols {BTCUSD}, XAUUSD `awaiting_market` (re-admitted
+automatically when its market reopens: ASN-016 fix now live), dashboard HEALTHY with the research and readiness
+endpoints, preflight READY_FOR_PAPER with the single DEMO blocker "no fresh quote for XAUUSD" (market closed).
+Live two-symbol DEMO operation: PENDING the XAUUSD reopen and natural signals.
+
+## Current phase (2026-09-27 afternoon, branch `feature/independent-strategy-research`, release 0.2.2 (see deployment above))
 
 Running (unchanged, not interrupted): 0.2.0 (`7f604ab`) DEMO runtime and dashboard, restarted by the operator at
 03:06 GMT+4, schema 29, IC Markets DEMO account (trade mode DEMO), broker FLAT, balance = equity 9,609.01 USD,
