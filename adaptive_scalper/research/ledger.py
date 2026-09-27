@@ -69,13 +69,18 @@ def family_trial_count(conn: sqlite3.Connection, family: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM research_trials WHERE family = ?", (family,)).fetchone()[0]
 
 
-def family_sharpe_variance(conn: sqlite3.Connection, family: str) -> float | None:
+def family_sharpe_variance(conn: sqlite3.Connection, family: str, *, min_observations: int = 0) -> float | None:
     """Variance of the Sharpe ratios of the family's completed trials;
-    None with fewer than two (the cross-trial variance is unknowable)."""
+    None with fewer than two (the cross-trial variance is unknowable).
+
+    `min_observations` excludes trials whose Sharpe rests on fewer
+    observations from the VARIANCE estimate only (a 3-trade Sharpe is noise
+    and would inflate it); the trial COUNT used by DSR is unaffected."""
     values = [
         r[0] for r in conn.execute(
-            "SELECT sharpe FROM research_trials WHERE family = ? AND status = 'COMPLETED' AND sharpe IS NOT NULL",
-            (family,),
+            "SELECT sharpe FROM research_trials WHERE family = ? AND status = 'COMPLETED' AND sharpe IS NOT NULL "
+            "AND COALESCE(n_observations, 0) >= ?",
+            (family, min_observations),
         )
     ]
     return statistics.variance(values) if len(values) >= 2 else None

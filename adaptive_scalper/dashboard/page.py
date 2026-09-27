@@ -634,14 +634,28 @@ function multiPositionPanel(p){
       strategy:x.strategy_key,position:x.broker_position_id,initial_risk:money(x.initial_monetary_risk,cur),
       floating_pnl:x.floating_pnl===null?"N/A (no fresh broker sample)":money(x.floating_pnl,cur),
       opened_utc:x.opened_at_utc}))));
+    const links=el("div",null,"lab-links");
+    p.positions.forEach(x=>{
+      const b=el("button","Strategy Lab history: "+x.symbol+" #"+x.broker_position_id+" ("+x.strategy_key+")");
+      b.type="button";b.className="secondary-button";
+      b.addEventListener("click",()=>{current="strategy_lab";LAB.evidence="DEMO";LAB.filters={};showView();
+        labRender();labLoad(true);labOpenTrade("DEMO",String(x.broker_position_id));});
+      links.appendChild(b);
+    });
+    wrap.appendChild(links);
   }
   wrap.appendChild(el("div","Why no second trade — per symbol","mini-title"));
   wrap.appendChild(table(Object.entries(p.symbols||{}).map(([symbol,v])=>({symbol,status:v.status,detail:v.detail,
-    open_position_strategy:v.open_position_strategy,quote:v.quote_status,
-    quote_age_s:v.quote_age_seconds,signal:v.signal_status,cost_eligible:v.cost_eligible,news:v.news,
+    bar:v.bar_status,open_position_strategy:v.open_position_strategy,quote:v.quote_status,
+    quote_age_s:v.quote_age_seconds,signal:v.signal_status,
+    latest_signals:(v.latest_signals&&v.latest_signals.signals.length)?v.latest_signals.signals.map(s=>
+      s.strategy_key+" "+(s.direction||"")+(s.raw_confidence!=null?" p="+Number(s.raw_confidence).toFixed(2):"")).join("; "):"none",
+    cost_eligible:v.cost_eligible,news:v.news,
     last_decision:v.last_decision?(v.last_decision.stage+" "+v.last_decision.decision+
       (v.last_decision.strategy_key?" ("+v.last_decision.strategy_key+")":"")):null,
-    last_decision_utc:v.last_decision?v.last_decision.decided_at_utc:null}))));
+    last_decision_utc:v.last_decision?v.last_decision.decided_at_utc:null,
+    last_actual_block:v.last_block?(v.last_block.label+" — "+(v.last_block.reason||"")):"none recorded",
+    last_block_utc:v.last_block?v.last_block.decided_at_utc:null}))));
   wrap.appendChild(el("div","Pairwise correlation (aligned M5 returns)","mini-title"));
   const corr=(p.correlation||[]).map(c=>({pair:c.pair.join(" / "),
     correlation:c.correlation===null?"N/A":Number(c.correlation).toFixed(3),sample_size:c.sample_size,
@@ -768,7 +782,7 @@ function paintSummary(){
   document.getElementById("clock").textContent="Your local time: "+new Date().toLocaleString();
 }
 /* ================= Strategy Lab (on-demand, read-only) ================= */
-const LAB={evidence:"DEMO",sub:"comparison",filters:{},run_id:"",session_key:"",page:1,q:"",
+const LAB={evidence:"DEMO",sub:"comparison",filters:{},run_id:"",session_key:"",page:1,q:"",research:null,
   summary:null,loading:false,error:null,detailKey:"",detail:null,trade:null,trades:null,
   compare:(()=>{try{return JSON.parse(localStorage.getItem("asn-lab-compare")||"[]");}catch(e){return [];}})(),
   shortlist:(()=>{try{return JSON.parse(localStorage.getItem("asn-lab-shortlist")||"[]");}catch(e){return [];}})(),
@@ -802,6 +816,12 @@ async function labGet(url){
 async function labLoad(force){
   if(current!=="strategy_lab")return;
   const seq=++LAB.seq;LAB.loading=true;if(force)labRender();
+  if(LAB.evidence==="RESEARCH"){
+    try{const r=await labGet("/api/strategy-lab/research");if(seq===LAB.seq){LAB.research=r;LAB.error=null;LAB.lastFetch=Date.now();}}
+    catch(err){if(seq===LAB.seq)LAB.error=String(err);}
+    finally{if(seq===LAB.seq){LAB.loading=false;labRender();}}
+    return;
+  }
   try{
     const s=await labGet("/api/strategy-lab/summary?"+labQuery());
     if(seq!==LAB.seq)return;
@@ -928,7 +948,8 @@ function labControls(){
   const box=el("div",null,"lab");
   const top=el("div",null,"lab-bar");
   const seg=el("div",null,"seg");seg.setAttribute("role","tablist");seg.setAttribute("aria-label","Evidence source");
-  ["DEMO","PAPER","BACKTEST"].forEach(ev=>{const b=el("button",ev);b.type="button";b.setAttribute("role","tab");
+  ["DEMO","PAPER","BACKTEST","RESEARCH"].forEach(ev=>{const b=el("button",ev==="RESEARCH"?"INDEPENDENT RESEARCH":ev);
+    b.type="button";b.setAttribute("role","tab");
     b.setAttribute("aria-selected",String(LAB.evidence===ev));
     b.addEventListener("click",()=>{if(LAB.evidence===ev)return;LAB.evidence=ev;LAB.filters={};LAB.page=1;LAB.trade=null;
       LAB.trades=null;LAB.summary=null;labLoad(true);});seg.appendChild(b);});
@@ -957,6 +978,7 @@ function labControls(){
   top.appendChild(status);
   const rb=el("button","Reload");rb.type="button";rb.className="secondary-button";rb.addEventListener("click",()=>labLoad(true));
   top.appendChild(rb);box.appendChild(top);
+  if(LAB.evidence==="RESEARCH")return box;
   const fbar=el("div",null,"lab-bar");fbar.setAttribute("aria-label","Strategy Lab filters");
   const dateInput=(key,label)=>{const l=el("label",label);const i=el("input");i.type="date";i.value=LAB.filters[key]||"";
     i.addEventListener("change",()=>{LAB.filters[key]=i.value;LAB.page=1;labLoad(true);});l.appendChild(i);fbar.appendChild(l);};
@@ -983,12 +1005,85 @@ function labControls(){
   return box;
 }
 /* ---------- sections ---------- */
+function labCosts(r){
+  /* recorded transaction costs as a positive number; N/A when any component is unrecorded */
+  if([r.commission,r.fee,r.swap].some(v=>typeof v!=="number"))return null;
+  return -((r.commission||0)+(r.fee||0)+(r.swap||0));
+}
+function labGrossNet(s){
+  /* gross versus recorded costs versus net, totals of this evidence source only */
+  const rows=s.strategies.filter(r=>r.closed_trades);
+  const tot=(k)=>rows.reduce((a,r)=>a+(typeof r[k]==="number"?r[k]:0),0);
+  const costs=rows.reduce((a,r)=>a+(labCosts(r)||0),0);
+  const box=el("div",null,"lab-grossnet");
+  box.appendChild(el("div","Gross versus net · attributed "+s.evidence+" trades","mini-title"));
+  const tr=el("tr");cell(tr,fmt(rows.reduce((a,r)=>a+r.closed_trades,0)),"num");cell(tr,signed(tot("gross_pnl")),"num");
+  cell(tr,signed(-costs),"num");cell(tr,signed(tot("net_pnl")),"num");
+  cell(tr,tot("gross_pnl")!==0?num(costs/Math.abs(tot("gross_pnl")))+" ×":"N/A","num");
+  box.appendChild(gridTable([["Closed trades","num"],["Gross P&L","num"],["Recorded costs","num"],["Net P&L","num"],
+    ["Costs ÷ |gross|","num"]],[tr]));
+  box.appendChild(el("p",s.evidence==="DEMO"?"DEMO gross is the broker's trade profit; recorded costs are broker commission, fees and swap. "+
+    "Spread and slippage are already inside the broker price, so real friction is larger than the recorded costs shown.":
+    "Simulated gross is mid-to-mid; costs include simulated spread, slippage, commission and swap.","lab-note"));
+  return box;
+}
+function labResearch(){
+  const box=el("div",null,"lab");const r=LAB.research;
+  if(!r){box.appendChild(el("p","Loading independent research…","empty"));return box;}
+  box.appendChild(el("div",r.note,"safeguard"));
+  if(r.status!=="OK"){box.appendChild(el("p",fmt(r.status)+": "+fmt(r.detail),"empty"));return box;}
+  Object.entries(r.symbols).forEach(([symbol,x])=>{
+    box.appendChild(el("div",symbol+" · "+fmt(x.bars)+" M5 bars · "+x.folds+" folds · "+
+      (x.range?time(x.range[0])+" → "+time(x.range[1]):"")+" · costs "+fmt(x.cost_provenance)+
+      " · identical inputs "+(x.inputs_identical?"YES":"NO")+" · file "+fmt(x.file),"mini-title"));
+    const heads=["Session",["Trades","num"],["W / L / BE","num"],["Win rate","num"],["Gross","num"],["Costs","num"],["Net","num"],
+      ["Avg gross R","num"],["Avg cost R","num"],["Avg net R","num"],["PF","num"],["Avg hold","num"],
+      ["Positive folds","num"],["Halted folds","num"],["PSR (vs 0)","num"],["DSR","num"]];
+    const rows=Object.entries(x.sessions).map(([k,v])=>{
+      const tr=el("tr");const n=el("span",k==="__selector__"?"SELECTOR (all six, live logic)":k);
+      if(k!=="__selector__"){n.style.borderLeft="3px solid "+labColor(k);n.style.paddingLeft="6px";}cell(tr,n);
+      if(v.error){const td=cell(tr,"FAILED: "+v.error,"error");td.colSpan=15;return tr;}
+      if(!v.trades){cell(tr,"0","num");const td=cell(tr,"NO TRADES","na");td.colSpan=14;return tr;}
+      cell(tr,fmt(v.trades),"num");cell(tr,v.wins+" / "+v.losses+" / "+v.breakevens,"num");cell(tr,pct(v.win_rate),"num");
+      cell(tr,num(v.gross_pnl),"num");cell(tr,num(v.total_cost),"num");cell(tr,signed(v.net_pnl," (sim.)"),"num");
+      cell(tr,num(v.avg_gross_r,3),"num");cell(tr,num(v.avg_cost_r,3),"num");cell(tr,num(v.avg_net_r,3),"num");
+      cell(tr,num(v.profit_factor),"num");cell(tr,dur(v.avg_holding_seconds),"num");
+      cell(tr,fmt(v.positive_folds)+" / "+fmt(v.folds),"num");cell(tr,fmt(v.halted_folds),"num");
+      cell(tr,num(v.psr_vs_zero,3),"num");cell(tr,v.dsr===null||v.dsr===undefined?"N/A":num(v.dsr,3),"num");
+      return tr;
+    });
+    box.appendChild(gridTable(heads,rows,{nowrap:true}));
+    const sel=x.selector||{};const ps=sel.per_strategy||{};
+    const srows=Object.entries(ps).map(([k,v])=>{const tr=el("tr");cell(tr,k);
+      cell(tr,fmt(v.signals),"num");cell(tr,fmt(v.selected),"num");cell(tr,pct(v.selection_share),"num");
+      cell(tr,fmt(v.lost_to_higher_edge),"num");cell(tr,fmt(v.filter_rejected),"num");
+      cell(tr,num(v.stated_p_selected),"num");cell(tr,pct(v.capped_confidence_share),"num");
+      cell(tr,num(v.expected_net_r_selected,3),"num");cell(tr,num(v.expected_cost_r_selected,3),"num");
+      cell(tr,num(v.realized_net_r_selected_matched,3)+" (n="+fmt(v.selected_matched)+")","num");
+      cell(tr,num(v.realized_cost_r_selected_matched,3),"num");
+      cell(tr,num(v.realized_net_r_lost_matched,3)+" (n="+fmt(v.lost_matched)+")","num");return tr;});
+    box.appendChild(el("div","Selector study · "+symbol+" · "+fmt(sel.candidates)+" candidates, "+fmt(sel.selected)+
+      " selected, "+fmt(sel.contested_bars)+" contested bars","mini-title"));
+    box.appendChild(gridTable(["Strategy",["Signals","num"],["Selected","num"],["Share of selections","num"],
+      ["Lost to higher edge","num"],["Filtered","num"],["Stated p (selected)","num"],["Confidence capped at 1.0","num"],
+      ["Expected net R (selected)","num"],["Expected cost R","num"],["Realized net R (selected)","num"],
+      ["Realized cost R","num"],["Realized net R (lost)","num"]],srows,{nowrap:true}));
+    const pbo=x.pbo||{};
+    box.appendChild(el("p","Probability of backtest overfitting (pick-the-best-strategy, CSCV): "+
+      (pbo.computable?num(pbo.pbo,2)+" over "+pbo.combinations+" combinations":"not computable — "+fmt(pbo.reason))+
+      ". Realized R is from each strategy's own independent session at the same bar close (matched candidates only).","lab-note"));
+  });
+  box.appendChild(el("p","Research is review-only evidence. It never changes live configuration, never promotes a strategy, "+
+    "and the reserved out-of-sample interval (2026-07-01..2026-09-18) is never read by it.","lab-note"));
+  return box;
+}
 function labComparison(s){
   const box=el("div",null,"lab");
-  const heads=["Compare","Shortlist","Strategy","Version","Status",["Signals","num"],["Selected","num"],["Submitted","num"],
+  const heads=["Compare","Shortlist","Strategy","Version","Status",["Signals","num"],["Rejected (filter · lost)","num"],
+    ["Selected","num"],["Submitted","num"],
     ["Filled","num"],["Closed","num"],["W / L / BE","num"],["Win rate","num"],["Gross profit (winners)","num"],
     ["Gross loss (losers)","num"],["Gross P&L","num"],["Commission","num"],
-    ["Fees","num"],["Swap","num"],["Net P&L","num"],["Profit factor","num"],["Avg R (n)","num"],["Expectancy","num"],
+    ["Fees","num"],["Swap","num"],["Recorded costs","num"],["Net P&L","num"],["Profit factor","num"],["Avg R (n)","num"],["Expectancy","num"],
     ["Avg hold","num"],["Max DD (closed)","num"],["Spread / slippage evidence","num"],"Last executed",["Open","num"],["Unrealized (live)","num"]];
   const rows=s.strategies.map(r=>{
     const tr=el("tr");const f=r.funnel||{};
@@ -1008,14 +1103,16 @@ function labComparison(s){
     cell(tr,name);cell(tr,fmt(r.strategy_version)+(r.versions_in_evidence.length?" (evidence: v"+r.versions_in_evidence.join(", v")+")":""));
     cell(tr,r.registration_status);
     const fn=(k)=>s.evidence==="DEMO"?fmt(f[k]):"N/A";
-    cell(tr,fn("signals"),"num");cell(tr,fn("selected_proposals"),"num");cell(tr,fn("orders_submitted"),"num");
+    cell(tr,fn("signals"),"num");
+    cell(tr,s.evidence==="DEMO"?fmt(f.signals_rejected)+" · "+fmt(f.proposals_rejected):"N/A","num");
+    cell(tr,fn("selected_proposals"),"num");cell(tr,fn("orders_submitted"),"num");
     cell(tr,fn("orders_filled"),"num");cell(tr,fmt(r.closed_trades),"num");
-    if(!r.closed_trades){const td=cell(tr,"NO CLOSED TRADES","na");td.colSpan=16;}
+    if(!r.closed_trades){const td=cell(tr,"NO CLOSED TRADES","na");td.colSpan=17;}
     else{
       cell(tr,r.wins+" / "+r.losses+" / "+r.breakevens,"num");cell(tr,pct(r.win_rate),"num");
       cell(tr,signed(r.gross_profit_of_winners),"num");cell(tr,signed(r.gross_loss_of_losers),"num");
       cell(tr,signed(r.gross_pnl),"num");cell(tr,signed(r.commission),"num");cell(tr,signed(r.fee),"num");cell(tr,signed(r.swap),"num");
-      cell(tr,signed(r.net_pnl),"num");
+      cell(tr,signed(labCosts(r)),"num");cell(tr,signed(r.net_pnl),"num");
       cell(tr,r.profit_factor!==null?num(r.profit_factor):(r.profit_factor_note||"N/A"),"num");
       cell(tr,r.avg_r!==null?num(r.avg_r)+" ("+r.r_sample+")":"N/A","num");cell(tr,signed(r.expectancy_per_trade),"num");
       cell(tr,dur(r.avg_holding_seconds),"num");
@@ -1033,13 +1130,14 @@ function labComparison(s){
   const un=s.unattributed||{};const um=un.metrics||{};
   const utr=el("tr");cell(utr,"");cell(utr,"");const ul=el("span","UNATTRIBUTED (not a strategy)","text-warn");cell(utr,ul);
   cell(utr,"—");cell(utr,"no durable chain");
-  for(let i=0;i<4;i++)cell(utr,"—","num");cell(utr,fmt(um.closed_trades),"num");
-  if(!um.closed_trades){const td=cell(utr,"NO CLOSED TRADES","na");td.colSpan=16;}
+  for(let i=0;i<5;i++)cell(utr,"—","num");cell(utr,fmt(um.closed_trades),"num");
+  if(!um.closed_trades){const td=cell(utr,"NO CLOSED TRADES","na");td.colSpan=17;}
   else{cell(utr,um.wins+" / "+um.losses+" / "+um.breakevens,"num");cell(utr,pct(um.win_rate),"num");
     cell(utr,signed(um.gross_profit_of_winners),"num");cell(utr,signed(um.gross_loss_of_losers),"num");
     cell(utr,signed(um.gross_pnl),"num");cell(utr,signed(um.commission),"num");cell(utr,signed(um.fee),"num");cell(utr,signed(um.swap),"num");
-    cell(utr,signed(um.net_pnl),"num");for(let i=0;i<6;i++)cell(utr,"—","num");cell(utr,"—");}
+    cell(utr,signed(labCosts(um)),"num");cell(utr,signed(um.net_pnl),"num");for(let i=0;i<6;i++)cell(utr,"—","num");cell(utr,"—");}
   cell(utr,"—","num");cell(utr,"—","num");rows.push(utr);
+  box.appendChild(labGrossNet(s));
   box.appendChild(el("div","Winning and losing strategies · "+s.evidence+" evidence","mini-title"));
   box.appendChild(gridTable(heads,rows,{nowrap:true}));
   box.appendChild(el("p","Metrics use CLOSED trades only (an entry is never a completed trade). Net = gross + commission + fees + swap, "+
@@ -1325,7 +1423,8 @@ function labRender(){
   const y=window.scrollY;const frag=el("div",null,"lab");
   frag.appendChild(labControls());
   const s=LAB.summary;
-  if(LAB.sub==="readiness"){
+  if(LAB.evidence==="RESEARCH"){frag.appendChild(labResearch());}
+  else if(LAB.sub==="readiness"){
     const mp=data&&data.panels?data.panels.multi_position:null;
     frag.appendChild(!mp?el("p","Waiting for the dashboard feed…","empty"):
       (mp.status==="NO_DATA"||mp.status==="UNAVAILABLE")?el("p",fmt(mp.status)+": "+fmt(mp.detail),"empty"):
@@ -1339,7 +1438,7 @@ function labRender(){
   else if(LAB.sub==="unattributed")frag.appendChild(labTrades(true));
   else if(LAB.sub==="reconciliation")frag.appendChild(labReconciliation());
   else if(LAB.sub==="shortlist")frag.appendChild(labShortlist());
-  if(s&&!["trades","unattributed","detail","readiness"].includes(LAB.sub))frag.appendChild(labLifecycle());
+  if(s&&LAB.evidence!=="RESEARCH"&&!["trades","unattributed","detail","readiness"].includes(LAB.sub))frag.appendChild(labLifecycle());
   frag.appendChild(el("div","Strategy Lab is review-only. It reads the local database; it cannot place, modify or close orders, "+
     "change risk, touch the kill switch, or activate, disable or promote any strategy.","footer"));
   root.replaceChildren(frag);window.scrollTo(0,y);

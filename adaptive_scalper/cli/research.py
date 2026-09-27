@@ -198,6 +198,145 @@ def cmd_purged_validation(args: argparse.Namespace) -> int:
     return 0
 
 
+def open_research_db(config_path: str, research_db: str):
+    """The separate research database (a snapshot copy of production).
+    Refuses the production database path: research never writes there."""
+    import os
+
+    from adaptive_scalper.config.loader import load_config
+    from adaptive_scalper.history.time_basis import TimeBasisError, require_utc
+    from adaptive_scalper.persistence.database import connect, migrate
+    from adaptive_scalper.research.independent import _same_file
+
+    cfg = load_config(config_path)
+    if _same_file(research_db, cfg.database.path):
+        raise CliError(f"--research-db {research_db!r} is the production database; research needs a separate copy")
+    if not os.path.exists(research_db):
+        raise CliError(f"research database {research_db!r} does not exist; create it with `research-snapshot`")
+    conn = connect(research_db)
+    migrate(conn)
+    try:
+        require_utc(conn)
+    except TimeBasisError as exc:
+        conn.close()
+        raise CliError(str(exc)) from exc
+    return cfg, conn
+
+
+def cmd_research_snapshot(args: argparse.Namespace) -> int:
+    """Online SQLite backup of the production database into a NEW research
+    file. The source is opened read-only; the running runtime is not
+    stopped or blocked beyond SQLite's normal reader behaviour."""
+    import os
+    import sqlite3
+
+    from adaptive_scalper.config.loader import load_config
+    from adaptive_scalper.research.independent import _same_file
+
+    cfg = load_config(args.config)
+    if _same_file(args.out, cfg.database.path):
+        raise CliError("--out must not be the production database")
+    if os.path.exists(args.out):
+        raise CliError(f"{args.out!r} already exists; research snapshots are never overwritten")
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    src = sqlite3.connect(f"file:{os.path.abspath(cfg.database.path)}?mode=ro", uri=True)
+    dst = sqlite3.connect(args.out)
+    try:
+        src.backup(dst)
+        checks = {name: c.execute("PRAGMA quick_check").fetchone()[0] for name, c in (("source", src), ("copy", dst))}
+        counts = {t: [c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for c in (src, dst)]
+                  for t in ("bars", "positions", "broker_account_deals", "backtest_trades", "research_trials")}
+    finally:
+        src.close()
+        dst.close()
+    ok = all(v == "ok" for v in checks.values()) and all(a == b for a, b in counts.values())
+    print_json({"snapshot": args.out, "quick_check": checks, "row_counts_source_copy": counts, "verified": ok})
+    return 0 if ok else 1
+
+
+def cmd_independent_research(args: argparse.Namespace) -> int:
+    """One independent session per active strategy (plus the combined
+    selector session) over the SAME stored bars, in the separate research
+    database. Never touches a broker or the production DB."""
+    import json
+    import os
+
+    from adaptive_scalper.research.independent import (
+        SELECTOR_SESSION,
+        ReservedOosOverlapError,
+        deflated_sharpe_for_family,
+        pbo_across_strategies,
+        persist_study,
+        run_independent_study,
+        session_statistics,
+        trial_family,
+    )
+    from adaptive_scalper.research.selector_study import selector_study
+    from adaptive_scalper.research.trade_analysis import calibration, full_breakdown, summarize
+
+    cfg, conn = open_research_db(args.config, args.research_db)
+    try:
+        bars, spec, config, news = _inputs(args, conn, cfg)
+        now = int(time.time())
+        strategies = tuple(args.strategy) if args.strategy else None
+        try:
+            study = run_independent_study(bars, args.symbol, args.resolution, spec, config=config,
+                                          n_folds=args.folds, strategies=strategies, now_utc=now)
+        except ReservedOosOverlapError as exc:
+            raise CliError(str(exc)) from exc
+        tag = args.tag or str(now)
+        prefixes = persist_study(conn, study, bars, run_tag=tag, production_db_path=cfg.database.path, now_utc=now)
+        sessions = {}
+        for key, result in study.sessions.items():
+            if result.error is not None:
+                sessions[key] = {"error": result.error}
+                continue
+            stats = session_statistics(result)
+            trades = result.trades
+            sessions[key] = {
+                "run_id_prefix": prefixes[key], "config_fingerprint": result.config_fingerprint,
+                "bars_checksum": result.bars_checksum, "summary": summarize(trades),
+                "statistics": stats,
+                "dsr": deflated_sharpe_for_family(conn, trial_family(args.symbol, key), stats["sharpe"], stats["n"],
+                                                  stats.get("skew") or 0.0, stats.get("kurtosis") or 3.0),
+                "halted_folds": result.halted_folds, "max_fold_drawdown": result.max_fold_drawdown,
+                "entry_rejections": result.entry_rejections,
+                "final_equity_by_fold": [f.metrics.final_equity for f in result.folds],
+                "breakdown": full_breakdown(trades), "calibration": calibration(trades),
+            }
+        report = {
+            "kind": "INDEPENDENT_STRATEGY_RESEARCH", "origin": "BACKTEST",
+            "symbol": args.symbol, "resolution": args.resolution, "range": [study.range_start_utc, study.range_end_utc],
+            "bars": len(bars), "bars_checksum": study.bars_checksum, "inputs_identical": study.inputs_identical,
+            "folds": study.n_folds, "news_windows_applied": news, "cost_provenance": config.fill_assumptions.provenance,
+            "initial_equity_per_session": config.initial_equity, "tag": tag, "created_at_utc": now,
+            "sessions": sessions, "selector_session": SELECTOR_SESSION,
+            "pbo": pbo_across_strategies(study), "selector_study": selector_study(study),
+            "notes": [
+                "each session is independent: own positions, risk state, equity, drawdown and costs; never pooled",
+                "every fold starts flat at the initial equity; live risk ceilings apply unchanged",
+                "reserved OOS 2026-07-01..2026-09-18 refused by construction",
+            ],
+        }
+    finally:
+        conn.close()
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=1, default=str)
+    print_json({
+        "symbol": args.symbol, "folds": report["folds"], "inputs_identical": report["inputs_identical"],
+        "out": args.out,
+        "sessions": {k: ({"error": v["error"]} if "error" in v else {
+            "trades": v["summary"]["trades"], "net": round(v["summary"]["net_pnl"], 2),
+            "gross": round(v["summary"]["gross_pnl"], 2), "cost": round(v["summary"]["total_cost"], 2),
+            "avg_net_r": v["summary"]["avg_net_r"], "psr": v["statistics"]["psr_vs_zero"], "dsr": v["dsr"]["dsr"]})
+            for k, v in report["sessions"].items()},
+        "pbo": report["pbo"]["pbo"],
+    })
+    return 0
+
+
 def _range_args(p: argparse.ArgumentParser) -> None:
     add_symbol_arg(p)
     p.add_argument("--resolution", default="M5")
@@ -236,3 +375,17 @@ def register(sub) -> None:
     pv.add_argument("--folds", type=int, default=5)
     pv.add_argument("--embargo-seconds", type=int, default=0)
     pv.set_defaults(func=cmd_purged_validation)
+
+    snap = sub.add_parser("research-snapshot", help="online read-only backup of the production DB into a NEW research DB")
+    snap.add_argument("--out", required=True)
+    snap.set_defaults(func=cmd_research_snapshot)
+
+    ind = sub.add_parser("independent-research",
+                         help="one independent session per active strategy + the selector, same bars, research DB only")
+    _range_args(ind)
+    ind.add_argument("--research-db", required=True, help="separate research database (never the production DB)")
+    ind.add_argument("--folds", type=int, default=12)
+    ind.add_argument("--strategy", action="append", help="limit to these strategies (default: all six)")
+    ind.add_argument("--tag")
+    ind.add_argument("--out", help="write the full JSON report here")
+    ind.set_defaults(func=cmd_independent_research)

@@ -164,16 +164,30 @@ def risk(conn: sqlite3.Connection, now: int) -> dict:
 EXECUTION_QUOTE_MAX_AGE_SECONDS = 30
 MARKET_CLOSED_PREFIXES = ("no_quote", "invalid_quote", "stale_quote")  # runtime.engine.MARKET_CLOSED_REASONS
 # Final-permission gate code (journal ENTRY_BLOCKED payload) -> readiness label.
+NO_SIGNAL = "NO SIGNAL"
+AWAITING_COMPLETED_BAR = "AWAITING COMPLETED BAR"
+EXISTING_POSITION = "EXISTING POSITION"
+STALE_QUOTE = "STALE QUOTE"
+MARKET_CLOSED = "MARKET CLOSED"
+BLOCKED_BY_CORRELATION = "BLOCKED BY CORRELATION"
+BLOCKED_BY_COST = "BLOCKED BY COST"
+BLOCKED_BY_NEWS = "BLOCKED BY NEWS"
+BLOCKED_BY_RISK = "BLOCKED BY RISK"
+BLOCKED_BY_MARGIN = "BLOCKED BY MARGIN"
+BLOCKED_BY_RECONCILIATION = "BLOCKED BY RECONCILIATION"
+ELIGIBLE = "ELIGIBLE FOR A NATURAL SIGNAL"
 _GATE_LABELS = {
-    "BLOCK_CORRELATION": "CORRELATION BLOCK", "BLOCK_RISK": "RISK BLOCK", "BLOCK_PORTFOLIO_RISK": "PORTFOLIO BLOCK",
-    "BLOCK_NEWS": "NEWS BLOCK", "BLOCK_NEWS_CALENDAR_UNAVAILABLE": "NEWS BLOCK",
-    "BLOCK_NEWS_PROVIDER_CONFLICT": "NEWS BLOCK", "BLOCK_COST": "COST BLOCK", "BLOCK_EXPECTED_EDGE": "COST BLOCK",
-    "BLOCK_RECONCILIATION": "RECONCILIATION BLOCK", "BLOCK_UNKNOWN_ORDER": "UNKNOWN ORDER",
-    "BLOCK_STALE_QUOTE": "STALE QUOTE", "BLOCK_DUPLICATE": "EXISTING POSITION", "BLOCK_KILL_SWITCH": "KILL SWITCH",
+    "BLOCK_CORRELATION": BLOCKED_BY_CORRELATION, "BLOCK_RISK": BLOCKED_BY_RISK,
+    "BLOCK_PORTFOLIO_RISK": BLOCKED_BY_RISK,
+    "BLOCK_NEWS": BLOCKED_BY_NEWS, "BLOCK_NEWS_CALENDAR_UNAVAILABLE": BLOCKED_BY_NEWS,
+    "BLOCK_NEWS_PROVIDER_CONFLICT": BLOCKED_BY_NEWS, "BLOCK_COST": BLOCKED_BY_COST,
+    "BLOCK_EXPECTED_EDGE": BLOCKED_BY_COST,
+    "BLOCK_RECONCILIATION": BLOCKED_BY_RECONCILIATION, "BLOCK_UNKNOWN_ORDER": "UNKNOWN ORDER",
+    "BLOCK_STALE_QUOTE": STALE_QUOTE, "BLOCK_DUPLICATE": EXISTING_POSITION, "BLOCK_KILL_SWITCH": "KILL SWITCH",
     "BLOCK_REENTRY_CHURN": "RE-ENTRY RULE",
 }
 _EXECUTION_LABELS = {
-    "BLOCKED_MARGIN": "BROKER BLOCK", "BLOCKED_BROKER_CONSTRAINT": "BROKER BLOCK",
+    "BLOCKED_MARGIN": BLOCKED_BY_MARGIN, "BLOCKED_BROKER_CONSTRAINT": "BROKER BLOCK",
     "BLOCKED_BROKER_STATE": "BROKER BLOCK", "BLOCKED_PRESEND_RECHECK": "BROKER BLOCK", "REJECTED": "BROKER BLOCK",
     "CANCELLED": "BROKER BLOCK", "UNKNOWN": "UNKNOWN ORDER",
 }
@@ -188,11 +202,11 @@ def _global_label(code: str) -> str:
 def _decision_label(conn: sqlite3.Connection, row: dict) -> str:
     decision, stage = row["decision"], row["stage"]
     if stage == "SIGNAL" and decision == "FLAT":
-        return "EXISTING POSITION" if "already open" in (row["reason"] or "") else "NO SIGNAL"
+        return EXISTING_POSITION if "already open" in (row["reason"] or "") else NO_SIGNAL
     if stage == "SELECTOR":
-        return "COST BLOCK" if decision == "BLOCK_COST" else "NO SIGNAL"
+        return BLOCKED_BY_COST if decision == "BLOCK_COST" else NO_SIGNAL
     if stage == "SIZING":
-        return "RISK BLOCK"
+        return BLOCKED_BY_RISK
     if stage == "DATA":
         return "BROKER BLOCK"
     if decision == "BLOCKED_PERMISSION" and row["chain_key"]:
@@ -203,8 +217,45 @@ def _decision_label(conn: sqlite3.Connection, row: dict) -> str:
         code = json.loads(event["payload_json"]).get("decision") if event else None
         return _GATE_LABELS.get(code, "PERMISSION BLOCK")
     if decision in ("FILLED", "PARTIAL", "RESTING"):
-        return "ELIGIBLE — AWAITING NATURAL SIGNAL"
+        return ELIGIBLE
     return _EXECUTION_LABELS.get(decision, _global_label(decision) if decision.startswith("BLOCK") else decision)
+
+
+def _last_block(conn: sqlite3.Connection, symbol: str) -> dict | None:
+    """The most recent DEMO decision on `symbol` that was a real block (a
+    signal existed but a gate stopped it), as opposed to a bar with no
+    signal or a fill."""
+    row = conn.execute(
+        "SELECT decided_at_utc, stage, decision, reason, strategy_key, chain_key FROM entry_decisions "
+        "WHERE canonical_symbol = ? AND mode = 'DEMO' AND decision NOT IN ('FILLED', 'PARTIAL', 'RESTING', 'FLAT') "
+        "AND NOT (stage IN ('SIGNAL', 'SELECTOR') AND decision != 'BLOCK_COST') "
+        "ORDER BY id DESC LIMIT 1", (symbol,)).fetchone()
+    if row is None:
+        return None
+    row = dict(row)
+    row["label"] = _decision_label(conn, row)
+    return row
+
+
+def _latest_signals(conn: sqlite3.Connection, symbol: str) -> dict:
+    """Strategy signals created on the symbol's most recent decided bar
+    (DEMO runtime entry chains only)."""
+    last = conn.execute(
+        "SELECT MAX(j.event_timestamp_utc) FROM journal_events j JOIN decision_chains d ON d.id = j.chain_id "
+        "WHERE d.chain_key LIKE 'entry:%' AND j.canonical_symbol = ? AND j.event_type = 'SIGNAL_CREATED'",
+        (symbol,)).fetchone()[0]
+    if last is None:
+        return {"at_utc": None, "signals": []}
+    rows = conn.execute(
+        "SELECT j.strategy_key, j.payload_json FROM journal_events j JOIN decision_chains d ON d.id = j.chain_id "
+        "WHERE d.chain_key LIKE 'entry:%' AND j.canonical_symbol = ? AND j.event_type = 'SIGNAL_CREATED' "
+        "AND j.event_timestamp_utc = ? ORDER BY j.id", (symbol, last)).fetchall()
+    signals = []
+    for r in rows:
+        payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
+        signals.append({"strategy_key": r["strategy_key"], "direction": payload.get("direction"),
+                        "raw_confidence": payload.get("raw_confidence")})
+    return {"at_utc": last, "signals": signals}
 
 
 def multi_position(conn: sqlite3.Connection, now: int) -> dict:
@@ -284,44 +335,48 @@ def multi_position(conn: sqlite3.Connection, now: int) -> dict:
                          "SIGNAL" if latest["stage"] in ("EXECUTION", "SIZING") or latest["decision"] == "BLOCK_COST"
                          else "NO SIGNAL" if latest["stage"] in ("SIGNAL", "SELECTOR") else latest["stage"])
 
+        bar_wait = ((why or {}).get("symbols") or {}).get(symbol, {}).get("decision") == "WAITING_FOR_BAR_CLOSE"
         if symbol in admission.get("excluded", {}):
             label, detail = "BROKER BLOCK", f"excluded at startup: {admission['excluded'][symbol]}"
         elif symbol in admission.get("awaiting_market", {}):
-            label, detail = "MARKET CLOSED", admission["awaiting_market"][symbol]
+            label, detail = MARKET_CLOSED, admission["awaiting_market"][symbol]
         elif symbol not in admission.get("active", []):
             label, detail = "NOT ENABLED", "not in the running configuration's market.symbols"
         elif symbol in open_symbols:
-            label, detail = "EXISTING POSITION", "one position per symbol (max_positions_per_symbol)"
+            label, detail = EXISTING_POSITION, "one position per symbol (max_positions_per_symbol)"
         elif any(r["canonical_symbol"] == symbol for r in pending_rows):
             label, detail = "UNKNOWN ORDER" if any(r["state"] in ("UNKNOWN", "PENDING_RECONCILIATION")
                                                    for r in pending_rows if r["canonical_symbol"] == symbol) \
-                else "EXISTING POSITION", "an order on this symbol is still working"
+                else EXISTING_POSITION, "an order on this symbol is still working"
         elif global_block:
             label, detail = _global_label(global_block["decision"]), global_block["reason"]
         elif slots_left == 0:
-            label, detail = "RISK BLOCK", f"max_open_positions reached ({max_positions}/{max_positions})"
+            label, detail = BLOCKED_BY_RISK, f"max_open_positions reached ({max_positions}/{max_positions})"
         elif quote_status != "FRESH":
-            label, detail = "STALE QUOTE", (f"quote age {quote_age}s" if quote_age is not None
-                                            else "no quote in the runtime's broker snapshot")
+            label, detail = STALE_QUOTE, (f"quote age {quote_age}s" if quote_age is not None
+                                          else "no quote in the runtime's broker snapshot")
         elif cost is not None and not cost["eligible"]:
-            label, detail = "COST BLOCK", f"unknown cost evidence: {', '.join(cost['unknown_components'])}"
+            label, detail = BLOCKED_BY_COST, f"unknown cost evidence: {', '.join(cost['unknown_components'])}"
         elif news is not None and news["decision"] != "ALLOW":
-            label, detail = "NEWS BLOCK", news["reason"]
+            label, detail = BLOCKED_BY_NEWS, news["reason"]
         elif latest is None:
-            label, detail = "ELIGIBLE — AWAITING NATURAL SIGNAL", "no completed-bar decision recorded yet"
+            label, detail = AWAITING_COMPLETED_BAR, "no completed-bar decision recorded yet"
         else:
             label, detail = _decision_label(conn, latest), latest["reason"]
-            if label == "EXISTING POSITION":  # that position has closed since
-                label = "ELIGIBLE — AWAITING NATURAL SIGNAL"
+            if label == EXISTING_POSITION:  # that position has closed since
+                label = ELIGIBLE
         per_symbol[symbol] = {
             "status": label, "detail": detail, "quote_status": quote_status, "quote_age_seconds": quote_age,
             "signal_status": signal_status, "last_decision": latest,
             "open_position_strategy": next((p["strategy_key"] for p in open_positions if p["symbol"] == symbol), None),
             "cost_eligible": None if cost is None else cost["eligible"],
             "news": None if news is None else news["decision"],
+            "bar_status": AWAITING_COMPLETED_BAR if bar_wait else None,
+            "latest_signals": _latest_signals(conn, symbol),
+            "last_block": _last_block(conn, symbol),
         }
 
-    waiting = {s: v for s, v in per_symbol.items() if v["status"] not in ("EXISTING POSITION", "NOT ENABLED")}
+    waiting = {s: v for s, v in per_symbol.items() if v["status"] not in (EXISTING_POSITION, "NOT ENABLED")}
     if not open_rows and not pending_only:
         headline = "No position is open; a first position needs a natural signal that passes every gate."
     elif slots_left == 0:
@@ -347,6 +402,10 @@ def multi_position(conn: sqlite3.Connection, now: int) -> dict:
         "correlation": readiness.get("correlation", []),
         "correlation_min_samples": readiness.get("correlation_min_samples"),
         "readiness_age_seconds": readiness_age,
+        "status_vocabulary": [NO_SIGNAL, AWAITING_COMPLETED_BAR, EXISTING_POSITION, STALE_QUOTE, MARKET_CLOSED,
+                              BLOCKED_BY_CORRELATION, BLOCKED_BY_COST, BLOCKED_BY_NEWS, BLOCKED_BY_RISK,
+                              BLOCKED_BY_MARGIN, BLOCKED_BY_RECONCILIATION, ELIGIBLE, "UNKNOWN ORDER",
+                              "KILL SWITCH", "RE-ENTRY RULE", "BROKER BLOCK", "NOT ENABLED"],
     }
 
 

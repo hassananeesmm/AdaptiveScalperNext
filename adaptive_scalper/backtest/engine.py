@@ -90,6 +90,7 @@ from adaptive_scalper.backtest.types import (
     FILL_RANGE_END_CLOSE,
     FILL_STOP_TRIGGER,
     FILL_TARGET_TRIGGER,
+    LOST_TO_HIGHER_EDGE,
     NOT_CONSULTED,
     REJECT_CORRELATION,
     REJECT_COST,
@@ -102,6 +103,7 @@ from adaptive_scalper.backtest.types import (
     BacktestConfig,
     BacktestMetrics,
     BacktestResult,
+    CandidateRecord,
     EntryRejection,
     OpenPositionState,
     PendingEntryState,
@@ -145,7 +147,7 @@ from adaptive_scalper.simulation.fill_model import (
     simulate_fill,
 )
 from adaptive_scalper.simulation.types import EvidenceOrigin
-from adaptive_scalper.strategies import build_active_registry
+from adaptive_scalper.strategies import build_active_registry, select_active_strategies
 from adaptive_scalper.strategies.base import StrategySignal
 
 STOP_LOSS_HIT = "STOP_LOSS_HIT"
@@ -272,8 +274,20 @@ def run_backtest(
     external_open_positions: tuple[PositionExposure, ...] = (),
     correlation_matrix: dict[tuple[str, str], CorrelationResult] | None = None,
     entry_block_reason: str | None = None,
+    strategy_keys: tuple[str, ...] | None = None,
+    candidate_log: list[CandidateRecord] | None = None,
 ) -> BacktestResult:
-    """`entry_block_reason`: a GLOBAL new-entry block the caller is under
+    """`strategy_keys`: evaluate only these active strategies (None = all
+    six). An independent research session passes exactly one, so its
+    positions, risk, equity and costs are its own and never compete with
+    another strategy in the selector. The subset is part of the config
+    fingerprint.
+
+    `candidate_log`: if given, every signal the selector saw is appended
+    as a `CandidateRecord` (bar-close knowledge only), for the selector
+    study. Signals are only generated while flat, as in live operation.
+
+    `entry_block_reason`: a GLOBAL new-entry block the caller is under
     for this whole call (kill switch not DISENGAGED, news calendar
     unavailable...). No entry is scanned or filled -- a pending entry is
     dropped with this reason -- while existing positions are still
@@ -310,8 +324,7 @@ def run_backtest(
         else 2 * resolution_seconds(resolution)
     )
 
-    registry = build_active_registry()
-    active_strategies = registry.all_active()
+    active_strategies = select_active_strategies(strategy_keys, build_active_registry())
     fingerprint, _ = compute_config_fingerprint(
         config, canonical_symbol=canonical_symbol, resolutions=(resolution,),
         strategies=tuple((s.key, s.version) for s in active_strategies),
@@ -446,6 +459,8 @@ def run_backtest(
                     candidates, {canonical_symbol: cost},
                     min_net_edge_price=config.min_net_edge_price, min_raw_confidence=config.min_raw_confidence,
                 )
+                if candidate_log is not None:
+                    candidate_log.extend(_candidate_records(selection, bar.time, cost))
                 if selection.selected is not None:
                     net_edge = next(
                         (e.expected_net_edge for e in selection.candidates if e.signal is selection.selected), None,
@@ -494,6 +509,23 @@ def run_backtest(
         entry_rejections=tuple(rejections), final_risk_state=risk_state, risk_halted_scans=halted_scans,
         config_fingerprint=fingerprint, fill_model_version=FILL_MODEL_VERSION, cost_provenance=fills.provenance,
     )
+
+
+def _candidate_records(selection, bar_time: int, cost) -> list[CandidateRecord]:
+    records = []
+    for evaluation in selection.candidates:
+        signal = evaluation.signal
+        selected = signal is selection.selected
+        reason = evaluation.rejection_reason if evaluation.rejected else (None if selected else LOST_TO_HIGHER_EDGE)
+        records.append(CandidateRecord(
+            bar_time_utc=bar_time, strategy_key=signal.strategy_key, direction=signal.direction,
+            raw_confidence=signal.raw_confidence, stop_distance=signal.stop_distance,
+            target_distance=signal.target_distance,
+            estimated_cost_price=cost.total_cost if cost is not None else None,
+            expected_net_edge_price=evaluation.expected_net_edge, selected=selected,
+            rejected=evaluation.rejected, rejection_reason=reason, regime=signal.regime,
+        ))
+    return records
 
 
 def _revalidate_and_open(

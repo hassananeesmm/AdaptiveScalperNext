@@ -971,7 +971,8 @@ def breakdowns(trades: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 # DEMO runtime funnel: signal -> selected -> allowed -> submitted -> filled
 # ---------------------------------------------------------------------------
-_EMPTY_FUNNEL = {"signals": 0, "signals_rejected": 0, "selected_proposals": 0, "entry_allowed_chains": 0,
+_EMPTY_FUNNEL = {"signals": 0, "signals_rejected": 0, "proposals_rejected": 0, "selected_proposals": 0,
+                 "entry_allowed_chains": 0,
                  "entry_blocked_chains": 0, "orders_created": 0, "orders_submitted": 0, "orders_filled": 0,
                  "signal_to_order_conversion": None, "order_to_fill_conversion": None}
 
@@ -989,7 +990,8 @@ def demo_funnel(conn: sqlite3.Connection, lo: int | None, hi: int | None) -> dic
         "SELECT j.strategy_key, j.event_type, COUNT(*) FROM journal_events j "
         "JOIN decision_chains d ON d.id = j.chain_id "
         "WHERE d.chain_key LIKE 'entry:%' AND j.event_timestamp_utc >= ? AND j.event_timestamp_utc < ? "
-        "AND j.event_type IN ('SIGNAL_CREATED','SIGNAL_REJECTED','PROPOSAL_CREATED') AND j.strategy_key IS NOT NULL "
+        "AND j.event_type IN ('SIGNAL_CREATED','SIGNAL_REJECTED','PROPOSAL_CREATED','PROPOSAL_REJECTED') "
+        "AND j.strategy_key IS NOT NULL "
         "GROUP BY j.strategy_key, j.event_type", (lo, hi),
     ):
         counts[key][etype] = n
@@ -1028,6 +1030,7 @@ def demo_funnel(conn: sqlite3.Connection, lo: int | None, hi: int | None) -> dic
         signals, submitted, filled = c.get("SIGNAL_CREATED", 0), c.get("ORDERS_SUBMITTED", 0), c.get("ORDERS_FILLED", 0)
         result[key] = {
             "signals": signals, "signals_rejected": c.get("SIGNAL_REJECTED", 0),
+            "proposals_rejected": c.get("PROPOSAL_REJECTED", 0),
             "selected_proposals": c.get("PROPOSAL_CREATED", 0),
             "entry_allowed_chains": c.get("ENTRY_ALLOWED_CHAINS", 0),
             "entry_blocked_chains": c.get("ENTRY_BLOCKED_CHAINS", 0),
@@ -1401,6 +1404,83 @@ def strategy_detail(conn: sqlite3.Connection, strategy_key: str) -> dict | None:
         "why_no_trade": _why_no_trade(conn, strategy_key),
         "freshness": freshness, "currency": ledger.get("currency"),
     }
+
+
+RESEARCH_REPORT_GLOB = "independent_*.json"
+_RESEARCH_SUMMARY_KEYS = (
+    "trades", "wins", "losses", "breakevens", "win_rate", "gross_pnl", "total_cost", "net_pnl", "profit_factor",
+    "expectancy_per_trade", "avg_gross_r", "avg_cost_r", "avg_net_r", "avg_holding_seconds", "loss_classes",
+    "gross_positive_share", "cost_to_abs_gross",
+)
+
+
+def research_reports(research_dir) -> dict:
+    """Independent per-strategy research (BACKTEST origin, research
+    database only), read from the JSON reports `independent-research`
+    writes. Latest report per symbol. Never mixed with DEMO or PAPER."""
+    import pathlib
+
+    folder = pathlib.Path(research_dir)
+    note = ("Independent research: each active strategy simulated ON ITS OWN over the same historical bars "
+            "(BACKTEST origin, separate research database, reserved OOS never used). Each session has its own "
+            "equity and costs; nothing here is pooled or live evidence, and nothing here promotes a strategy.")
+    if not folder.is_dir():
+        return {"status": "NO_DATA", "detail": f"no research folder {str(folder)!r}", "note": note, "symbols": {}}
+    latest: dict[str, dict] = {}
+    errors = []
+    for path in sorted(folder.glob(RESEARCH_REPORT_GLOB)):
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            errors.append(f"{path.name}: {exc}")
+            continue
+        if report.get("kind") != "INDEPENDENT_STRATEGY_RESEARCH":
+            continue
+        symbol = report.get("symbol")
+        if symbol and (symbol not in latest or report.get("created_at_utc", 0) > latest[symbol].get("created_at_utc", 0)):
+            report["_file"] = path.name
+            latest[symbol] = report
+    out = {}
+    for symbol, r in sorted(latest.items()):
+        sessions = {}
+        for key, v in (r.get("sessions") or {}).items():
+            if "error" in v:
+                sessions[key] = {"error": v["error"]}
+                continue
+            summ = v.get("summary") or {}
+            stats = v.get("statistics") or {}
+            sessions[key] = {
+                **{k: summ.get(k) for k in _RESEARCH_SUMMARY_KEYS},
+                "psr_vs_zero": stats.get("psr_vs_zero"), "per_trade_sharpe": stats.get("sharpe"),
+                "positive_folds": stats.get("positive_folds"), "folds": stats.get("folds"),
+                "dsr": (v.get("dsr") or {}).get("dsr"), "dsr_family_trials": (v.get("dsr") or {}).get("family_trials"),
+                "halted_folds": v.get("halted_folds"), "max_fold_drawdown": v.get("max_fold_drawdown"),
+                "config_fingerprint": v.get("config_fingerprint"),
+                "by_exit_reason": {k: {"trades": x.get("trades"), "net_pnl": x.get("net_pnl")}
+                                   for k, x in ((v.get("breakdown") or {}).get("exit_reason") or {}).items()},
+            }
+        study = r.get("selector_study") or {}
+        out[symbol] = {
+            "file": r.get("_file"), "created_at_utc": r.get("created_at_utc"), "range": r.get("range"),
+            "bars": r.get("bars"), "folds": r.get("folds"), "inputs_identical": r.get("inputs_identical"),
+            "bars_checksum": r.get("bars_checksum"), "cost_provenance": r.get("cost_provenance"),
+            "initial_equity_per_session": r.get("initial_equity_per_session"),
+            "news_windows_applied": r.get("news_windows_applied"), "sessions": sessions,
+            "pbo": r.get("pbo"),
+            "selector": {
+                "candidates": study.get("candidates"), "selected": study.get("selected"),
+                "contested_bars": study.get("contested_bars"), "contested_winners": study.get("contested_winners"),
+                "per_strategy": {k: {x: v.get(x) for x in (
+                    "signals", "selected", "lost_to_higher_edge", "filter_rejected", "selection_share",
+                    "stated_p_selected", "capped_confidence_share", "expected_net_r_selected",
+                    "expected_cost_r_selected", "realized_net_r_selected_matched", "realized_cost_r_selected_matched",
+                    "selected_matched", "realized_net_r_lost_matched", "lost_matched")}
+                    for k, v in (study.get("per_strategy") or {}).items()},
+                "expected_vs_realized_quantiles": study.get("expected_vs_realized_quantiles"),
+            },
+        }
+    return {"status": "OK" if out else "NO_DATA", "note": note, "symbols": out, "errors": errors,
+            "detail": None if out else "no independent research report found; run `independent-research`"}
 
 
 def comparison_csv_rows(summary_payload: dict, keys: list[str]) -> list[dict]:

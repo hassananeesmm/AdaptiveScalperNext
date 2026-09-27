@@ -256,6 +256,30 @@ REJECT_CORRELATION = "BLOCK_CORRELATION"
 
 
 @dataclass(frozen=True)
+class CandidateRecord:
+    """One strategy signal the selector saw at a bar close, and what it did
+    with it. Everything here was knowable at that close (no outcome field):
+    the selector study joins outcomes on separately, from independent
+    single-strategy sessions over the same bars."""
+
+    bar_time_utc: int
+    strategy_key: str
+    direction: str
+    raw_confidence: float
+    stop_distance: float
+    target_distance: float
+    estimated_cost_price: float | None
+    expected_net_edge_price: float | None
+    selected: bool
+    rejected: bool
+    rejection_reason: str | None  # filter reason, or LOST_TO_HIGHER_EDGE for a qualifying loser
+    regime: str
+
+
+LOST_TO_HIGHER_EDGE = "lost_to_higher_expected_net_edge"
+
+
+@dataclass(frozen=True)
 class EntryRejection:
     signal_time_utc: int
     attempted_fill_time_utc: int

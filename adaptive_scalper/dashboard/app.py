@@ -169,6 +169,12 @@ def create_app(db_path: str | Path, *, push_seconds: float = DEFAULT_PUSH_SECOND
             raise HTTPException(status_code=404, detail=f"unknown strategy {strategy_key!r}")
         return result
 
+    @app.get("/api/strategy-lab/research")
+    def lab_research() -> dict:
+        """Independent per-strategy research reports (files next to the DB
+        in `research/`). Read-only; never the live evidence tabs."""
+        return strategy_lab.research_reports(Path(db_path).resolve().parent / "research")
+
     @app.get("/api/strategy-lab/export.csv")
     def lab_export(request: Request, keys: str = "") -> Response:
         """Review export of the comparison table (same filters). Exporting

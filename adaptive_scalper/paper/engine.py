@@ -107,8 +107,16 @@ def run_paper_cycle(
     external_open_positions: tuple[PositionExposure, ...] = (),
     correlation_matrix: dict[tuple[str, str], CorrelationResult] | None = None,
     entry_block_reason: str | None = None,
+    strategy_keys: tuple[str, ...] | None = None,
+    origin: EvidenceOrigin = EvidenceOrigin.PAPER_LIVE_DATA,
 ) -> PaperCycleResult:
-    """`external_open_positions`/`correlation_matrix`: the OTHER symbols'
+    """`strategy_keys`: an independent research session evaluates only
+    these strategies (see `backtest.engine.run_backtest`); the subset is in
+    the fingerprint, so a session can never be resumed under a different
+    strategy set. `origin`: `HISTORICAL_MT5_REPLAY`-fed research replays
+    label their trades as `BACKTEST`, never as live PAPER evidence.
+
+    `external_open_positions`/`correlation_matrix`: the OTHER symbols'
     current PAPER exposure, so this symbol's deferred entries pass the
     same max-positions/total-risk/portfolio-heat/correlation gates a DEMO
     entry would. `entry_block_reason`: a global new-entry block (kill
@@ -116,7 +124,7 @@ def run_paper_cycle(
     key = session_key or f"PAPER:{canonical_symbol}:{resolution}"
     now = now_utc if now_utc is not None else int(time.time())
 
-    strategies = tuple((s.key, s.version) for s in _engine.build_active_registry().all_active())
+    strategies = tuple((s.key, s.version) for s in _engine.select_active_strategies(strategy_keys, _engine.build_active_registry()))
     fingerprint, config_json = compute_config_fingerprint(
         config, canonical_symbol=canonical_symbol, resolutions=(resolution,), strategies=strategies,
     )
@@ -158,7 +166,7 @@ def run_paper_cycle(
         window, canonical_symbol, resolution, symbol_spec, config=run_config, now_utc=now,
         resume_open_position=session.open_position, resume_pending_entry=session.pending_entry,
         resume_regime_tracker=session.regime_tracker_state, resume_risk_state=session.risk_state,
-        force_close_at_range_end=False, origin=EvidenceOrigin.PAPER_LIVE_DATA,
+        force_close_at_range_end=False, origin=origin, strategy_keys=strategy_keys,
         external_open_positions=external_open_positions, correlation_matrix=correlation_matrix,
         entry_block_reason=entry_block_reason,
     )

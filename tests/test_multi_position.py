@@ -574,7 +574,7 @@ def test_readiness_panel_reports_capacity_correlation_and_per_symbol_reasons(tmp
     assert (p["max_open_positions"], p["open_positions"], p["pending_orders"], p["remaining_position_slots"]) == (2, 1, 0, 1)
     assert p["open_monetary_risk"] > 0 and p["risk_capacity"]["remaining_aggregate_risk"] > 0
     assert p["symbols"]["BTCUSD"]["status"] == "EXISTING POSITION"
-    assert p["symbols"]["XAUUSD"]["status"] in ("NO SIGNAL", "ELIGIBLE — AWAITING NATURAL SIGNAL")
+    assert p["symbols"]["XAUUSD"]["status"] in ("NO SIGNAL", "ELIGIBLE FOR A NATURAL SIGNAL", "AWAITING COMPLETED BAR")
     assert p["symbols"]["XAUUSD"]["quote_status"] == "FRESH"
     assert "not a forecast" in p["guarantee"]
     pair = next(c for c in p["correlation"] if c["pair"] == ["BTCUSD", "XAUUSD"])
@@ -609,7 +609,7 @@ def test_readiness_panel_names_the_correlation_gate_from_the_journal(tmp_path):
     engine._publish_telemetry()
     p = _panel(conn, clock)
     blocked = ({"XAUUSD", "BTCUSD"} - set(_open_symbols(conn))).pop()
-    assert p["symbols"][blocked]["status"] == "CORRELATION BLOCK"
+    assert p["symbols"][blocked]["status"] == "BLOCKED BY CORRELATION"
     pair = next(c for c in p["correlation"] if c["pair"] == ["BTCUSD", "XAUUSD"])
     assert pair["decision"] == "BLOCK_CORRELATION" and abs(pair["correlation"]) >= 0.7
 

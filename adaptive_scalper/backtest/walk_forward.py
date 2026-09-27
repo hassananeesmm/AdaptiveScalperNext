@@ -39,7 +39,7 @@ from adaptive_scalper.backtest.engine import _compute_metrics, run_backtest
 from adaptive_scalper.backtest.persistence import record_backtest_run
 from adaptive_scalper.backtest.types import BacktestConfig, WalkForwardFold, WalkForwardResult
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
-from adaptive_scalper.strategies import build_active_registry
+from adaptive_scalper.strategies import select_active_strategies
 
 
 def _fold_ranges(n_bars: int, n_folds: int, min_fold_size: int, embargo_bars: int) -> list[tuple[int, int]]:
@@ -76,7 +76,12 @@ def run_walk_forward(
     conn: sqlite3.Connection | None = None,
     run_id_prefix: str | None = None,
     now_utc: int | None = None,
+    strategy_keys: tuple[str, ...] | None = None,
+    candidate_log: list | None = None,
 ) -> WalkForwardResult:
+    """`strategy_keys` restricts every fold to those strategies (an
+    independent single-strategy evaluation); `candidate_log` collects every
+    fold's selector candidates (see `engine.run_backtest`)."""
     if n_folds < 2:
         raise ValueError(f"n_folds must be >= 2, got {n_folds!r}")
     if embargo_bars < 0:
@@ -86,13 +91,14 @@ def run_walk_forward(
     min_fold_size = config.feature_lookback + 3
     ranges = _fold_ranges(len(bars), n_folds, min_fold_size, embargo_bars)
 
-    strategies = tuple(s.key for s in build_active_registry().all_active())
+    strategies = tuple(s.key for s in select_active_strategies(strategy_keys))
     folds: list[WalkForwardFold] = []
     all_trades = []
 
     for fold_index, (start, end) in enumerate(ranges):
         fold_bars = bars[start:end]
-        result = run_backtest(fold_bars, canonical_symbol, resolution, symbol_spec, config=config, now_utc=now)
+        result = run_backtest(fold_bars, canonical_symbol, resolution, symbol_spec, config=config, now_utc=now,
+                              strategy_keys=strategy_keys, candidate_log=candidate_log)
         folds.append(WalkForwardFold(
             fold_index=fold_index, range_start_utc=fold_bars[0].time, range_end_utc=fold_bars[-1].time,
             result=result,
