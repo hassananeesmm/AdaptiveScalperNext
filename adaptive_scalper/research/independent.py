@@ -43,7 +43,11 @@ from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
 from adaptive_scalper.backtest.persistence import record_backtest_run
 from adaptive_scalper.backtest.types import BacktestConfig, BacktestResult, CandidateRecord
 from adaptive_scalper.backtest.walk_forward import _fold_ranges
-from adaptive_scalper.gateway.types import Bar, SymbolSpec
+
+# Research never imports the gateway package (tests/test_research_validation.py): bars are
+# gateway `Bar` records and the spec a `SymbolSpec`, passed through untouched.
+Bars = list
+Spec = object
 from adaptive_scalper.research.ledger import family_sharpe_variance, family_trial_count, record_trial
 from adaptive_scalper.research.stats import (
     deflated_sharpe_ratio,
@@ -154,8 +158,8 @@ def fold_index_ranges(n_bars: int, n_folds: int, feature_lookback: int) -> list[
 
 
 def _run_session(
-    session: str, strategy_keys: tuple[str, ...] | None, bars: list[Bar], ranges: list[tuple[int, int]],
-    canonical_symbol: str, resolution: str, spec: SymbolSpec, config: BacktestConfig, now: int,
+    session: str, strategy_keys: tuple[str, ...] | None, bars: Bars, ranges: list[tuple[int, int]],
+    canonical_symbol: str, resolution: str, spec: Spec, config: BacktestConfig, now: int,
     candidate_log: list[CandidateRecord] | None, bars_checksum: str,
 ) -> SessionResult:
     strategies = select_active_strategies(strategy_keys)
@@ -176,7 +180,7 @@ def _run_session(
 
 
 def run_independent_study(
-    bars: list[Bar], canonical_symbol: str, resolution: str, spec: SymbolSpec, *,
+    bars: Bars, canonical_symbol: str, resolution: str, spec: Spec, *,
     config: BacktestConfig, n_folds: int = 1, strategies: tuple[str, ...] | None = None,
     include_selector: bool = True, now_utc: int | None = None,
 ) -> IndependentStudy:
@@ -259,7 +263,7 @@ def trial_family(canonical_symbol: str, session: str) -> str:
 
 
 def persist_study(
-    conn: sqlite3.Connection, study: IndependentStudy, bars: list[Bar], *, run_tag: str,
+    conn: sqlite3.Connection, study: IndependentStudy, bars: Bars, *, run_tag: str,
     production_db_path: str | None, now_utc: int | None = None,
 ) -> dict[str, str]:
     """Records every session's folds (`backtest_runs`/`backtest_trades`,

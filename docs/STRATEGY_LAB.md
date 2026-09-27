@@ -49,6 +49,17 @@ Three independent tabs. **They are never pooled into one figure.**
   and cost provenance. It is a historical research evaluation, not evidence
   of current live performance. The reserved out-of-sample interval is never
   run from the dashboard.
+- **INDEPENDENT RESEARCH** (read-only, `/api/strategy-lab/research`): the latest
+  `independent-research` report per symbol from the `research/` folder next to
+  the database. Each active strategy simulated **on its own** over the same
+  historical bars (BACKTEST origin, separate research database, reserved OOS
+  never read), plus the selector session (the live logic). Shows trades,
+  W/L/BE, gross, costs, net, average gross/cost/net R, profit factor, holding
+  time, positive and risk-halted folds, PSR and DSR per session, the selector
+  study (share of selections, stated probability, share of confidence capped
+  at 1.0, expected versus realized net and cost R) and PBO. Nothing in it is
+  pooled, live evidence, or a promotion. See
+  `docs/research/INDEPENDENT_STRATEGY_RESEARCH_2026-09-27.md`.
 
 ## The DEMO deal population
 
@@ -166,7 +177,9 @@ size. Rows with few trades are an insufficient sample, not a result.
 
 Counted **only from runtime entry chains** (`entry:` prefix):
 
-- signals = `SIGNAL_CREATED`; rejected = `SIGNAL_REJECTED`;
+- signals = `SIGNAL_CREATED`; rejected = `SIGNAL_REJECTED` (a filter:
+  confidence, cost, expected edge) · `PROPOSAL_REJECTED` (qualified but lost
+  to a higher expected net edge), shown as "Rejected (filter · lost)";
   selected = `PROPOSAL_CREATED`;
 - allowed / blocked = chains with `ENTRY_ALLOWED` / `ENTRY_BLOCKED`
   (attributed through the chain's proposal);
@@ -195,7 +208,11 @@ same filtered set. Losing trades are never silently excluded.
 
 ## Views
 
-- **Comparison.** The winning/losing table (all six active strategies,
+- **Comparison.** First a gross-versus-net block for the selected evidence
+  (closed trades, gross, recorded costs = commission + fees + swap with their
+  recorded sign, net, |costs| ÷ |gross|). DEMO spread and slippage are inside
+  the broker price, so real friction exceeds the recorded costs; the note says
+  so. Then the winning/losing table (all six active strategies,
   always; unattributed row; retired strategies listed separately and never
   as candidates), then cumulative net per strategy, gross vs costs, and
   results by strategy/symbol/regime/direction/session/exit reason. Also

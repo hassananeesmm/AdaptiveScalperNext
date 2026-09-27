@@ -20,9 +20,15 @@ The PAPER or DEMO runtime must run separately on the Windows laptop.
   per-symbol quote (with age), signal, latest decision and its strategy, cost-evidence and news status,
   pairwise correlation (value or N/A, aligned
   sample count, threshold, ALLOW/BLOCK, reason) and one status per symbol explaining why a second trade has
-  not opened: NO SIGNAL, EXISTING POSITION, MARKET CLOSED, STALE QUOTE, COST BLOCK, CORRELATION BLOCK,
-  RISK BLOCK, PORTFOLIO BLOCK, NEWS BLOCK, BROKER BLOCK, RECONCILIATION BLOCK, UNKNOWN ORDER, KILL SWITCH,
-  RE-ENTRY RULE, NOT ENABLED or ELIGIBLE — AWAITING NATURAL SIGNAL. Gate blocks are named from the
+  not opened: NO SIGNAL, AWAITING COMPLETED BAR, EXISTING POSITION, STALE QUOTE, MARKET CLOSED,
+  BLOCKED BY CORRELATION, BLOCKED BY COST, BLOCKED BY NEWS, BLOCKED BY RISK (incl. portfolio heat and
+  max positions), BLOCKED BY MARGIN, BLOCKED BY RECONCILIATION, ELIGIBLE FOR A NATURAL SIGNAL, plus
+  UNKNOWN ORDER, KILL SWITCH, RE-ENTRY RULE, BROKER BLOCK and NOT ENABLED. Each symbol also shows its bar
+  status (AWAITING COMPLETED BAR while the runtime waits for the next close), the strategy signals of its
+  most recent decided bar, and the LAST ACTUAL BLOCK (the latest decision where a signal existed but a
+  gate stopped it, with its time). Each open position has a button that opens its DEMO trade lifecycle in
+  Strategy Lab. XAUUSD and BTCUSD are both USD-quoted, so one high-impact USD release blocks both at once
+  (tested). Gate blocks are named from the
   journal's `ENTRY_BLOCKED` decision code, not parsed from text. A free slot is shown as capacity, never
   as a forecast. Read-only: runtime_state + SQLite, no MT5 call, no order path.
 - At 1920x1080 the layout has a left navigation and two panel columns.

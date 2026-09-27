@@ -244,7 +244,8 @@ def cmd_research_snapshot(args: argparse.Namespace) -> int:
     try:
         src.backup(dst)
         checks = {name: c.execute("PRAGMA quick_check").fetchone()[0] for name, c in (("source", src), ("copy", dst))}
-        counts = {t: [c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for c in (src, dst)]
+        counts = {t: [c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]  # nosec B608 - fixed table names
+                      for c in (src, dst)]
                   for t in ("bars", "positions", "broker_account_deals", "backtest_trades", "research_trials")}
     finally:
         src.close()

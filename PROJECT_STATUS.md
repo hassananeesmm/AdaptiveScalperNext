@@ -35,6 +35,31 @@ Adaptive Scalper Next
 `dashboard/responsive-live-windows` (PR #2: responsive dashboard + Windows fixes
 W5-W6; local branch `dashboard-review`). Nothing is merged into `main`.
 
+## Current phase (2026-09-27 afternoon, branch `feature/independent-strategy-research`, release candidate 0.2.2)
+
+Running (unchanged, not interrupted): 0.2.0 (`7f604ab`) DEMO runtime and dashboard, restarted by the operator at
+03:06 GMT+4, schema 29, IC Markets DEMO account (trade mode DEMO), broker FLAT, balance = equity 9,609.01 USD,
+reconciliation CLEAN, kill switch DISENGAGED (operator-set, untouched), running symbols {BTCUSD}; XAUUSD excluded
+at startup (market closed) and, being 0.2.0, NOT re-admitted when its market reopens (ASN-016, fixed in 0.2.1+).
+
+This branch (on top of 0.2.1) adds, all TESTED-FAKE, NOT DEPLOYED:
+- Independent per-strategy research (`independent-research`, `research-snapshot`): one session per active
+  strategy plus the selector over identical bars, separate research DB, reserved-OOS and production-DB guards,
+  trial ledger, PSR/DSR/PBO, selector study, gross/net/cost loss classes. Report:
+  docs/research/INDEPENDENT_STRATEGY_RESEARCH_2026-09-27.md.
+- Strategy Lab: rejected proposals (filter · lost), recorded costs, gross-versus-net block, INDEPENDENT
+  RESEARCH tab. Readiness panel: operator taxonomy (BLOCKED BY ... / AWAITING COMPLETED BAR / ELIGIBLE FOR A
+  NATURAL SIGNAL), latest signals, last actual block, per-position link to its Strategy Lab trade.
+- Browser-verified on a scratch copy (1280x720, 1366x768, 1920x1080, 2560x1440; light and dark).
+
+Research result (development data, BACKTEST origin): every one of the 6 strategies is net-negative on its own on
+BTCUSD, XAUUSD and GBPJPY; no gross R covers its cost R; the selector's expected edge does not predict realized
+edge (ASN-018/019/020). DEMO: 70 attributed closed trades, net -98.84 USD (microstructure 68 trades -108.37,
+statistical_reversion 2 trades +9.53); 2,362 deals reconcile exactly to the broker balance. No strategy is
+profitable or promotable. No live parameter, selector or safety setting was changed.
+
+Deployment of 0.2.2 needs operator approval (flat controlled restart of runtime + dashboard; no migration).
+
 ## Current phase (2026-09-27 early, branch `fix/multi-position-readiness`, release candidate 0.2.1)
 
 Running: 0.2.0 (`7f604ab`), schema 29, broker FLAT (0 positions, 0 orders, balance = equity 9,642.07 USD), kill

@@ -2566,3 +2566,31 @@ check or order send occurred.
   1593 passed / 9 skipped). 0.2.0 artifacts untouched.
 - Not done (needs operator approval): stop/restart of the DEMO runtime + dashboard onto 0.2.1. Kill switch not
   touched.
+
+## Session: Strategy research, selector study, Strategy Lab and two-position verification (2026-09-27, 11:59- GMT+4)
+
+- Pre-work (read-only): main checkout clean at `7f604ab`; worktree `fix/multi-position-readiness` at `ccaaa1a`
+  (0.2.1 built, not deployed). DEMO runtime PIDs 1976/23700 and dashboard 31028/14324 started 03:06 GMT+4 from the
+  main checkout (0.2.0), schema 29; engine RUNNING, heartbeat fresh, symbols {BTCUSD} (XAUUSD stale_quote at
+  startup); broker flat; kill switch DISENGAGED; reconciliation CLEAN. Frequent `RECOVERED` reconciliation events
+  are SL/TP closes repaired from broker history (by design; one-cycle entry block).
+- Branch `feature/independent-strategy-research` from `ccaaa1a`. Research snapshot
+  `data/research/snapshot_20260927T080325Z.sqlite3` (online backup, source mode=ro, quick_check ok, counts equal).
+- Reproduced the earlier walk-forward findings exactly (1,505 trades; microstructure 91.5 %, +0.005 R gross,
+  0.227 R cost).
+- Implemented: strategy subset + causal candidate log in the engine/walk-forward/PAPER cycle; research modules
+  `independent`, `trade_analysis`, `selector_study`; CLI `research-snapshot`, `independent-research`; DSR variance
+  may exclude <30-trade trials (count unchanged); Strategy Lab rejected/costs/gross-net/research tab; readiness
+  taxonomy, latest signals, last actual block, Strategy Lab links. Fixed during tests: research must not import
+  `gateway` (architecture test), CLI command registry test updated for the two new commands; recorded-cost sign made
+  consistent in the Lab after browser review.
+- Research run r1 (12 folds, all 6 strategies + selector, BTCUSD/XAUUSD/GBPJPY dev ranges, research DB only): all
+  18 independent sessions net-negative; selector study shows uncalibrated confidence (ASN-018), cost under-estimate
+  (ASN-020). Report docs/research/INDEPENDENT_STRATEGY_RESEARCH_2026-09-27.md. 21 trials recorded (research DB).
+- DEMO evidence (snapshot 11:43 UTC): 70 attributed closed trades, -98.84 USD; 2,362 deals, SQL = ledger =
+  9,609.01 USD = broker balance.
+- Two-position: new tests (GBP news blocks GBPJPY only; one USD event blocks XAUUSD and BTCUSD together, ASN-021;
+  both positions carry their own broker SL/TP, stops only tighten).
+- Checks: `pip check` clean; pip-audit (throwaway venv, not the runtime venv): no known vulnerabilities; bandit
+  -ll: one new B608 (fixed table names) annotated, the rest pre-existing.
+- Runtime, dashboard, kill switch and live configuration untouched. Scratch dashboard (8766) stopped.

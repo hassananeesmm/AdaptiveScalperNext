@@ -150,3 +150,21 @@ Findings:
 No profitable strategy is claimed. Nothing here changes live configuration. Any change to
 the active set or to parameters requires a separately reviewed change evaluated without the
 reserved OOS interval, followed by the single untouched OOS run (section 7).
+
+## 9. Independent per-strategy research (2026-09-27)
+
+`independent-research` (CLI) evaluates every active strategy **on its own** plus the live
+selector over identical bars, in a separate research database, refusing the reserved OOS
+interval and the production database. Report: `docs/research/INDEPENDENT_STRATEGY_RESEARCH_2026-09-27.md`.
+
+Result on development data (BTCUSD, XAUUSD; GBPJPY with unverified costs): **all 18
+strategy/symbol sessions are net-negative**; no strategy's gross R covers its cost R; no PSR
+exceeds 0.11 and DSR is ≤ 0.01 everywhere. The selector's expected net edge (+0.1..+1.4 R by
+quintile) does not predict realized net R (flat −0.17..−0.30 R): `microstructure_acceleration`'s
+raw confidence is not a probability (realized gross hit rate 0.38–0.48 in every confidence
+bucket, including 1.00), so it wins 77–84 % of contested bars. No parameter or live
+configuration was changed. No strategy meets the first promotion requirement (§7).
+
+DSR note: `family_sharpe_variance(..., min_observations=30)` excludes trials whose Sharpe rests
+on fewer than 30 trades from the cross-trial variance only; every trial, FAILED ones included,
+still counts toward the number of trials.

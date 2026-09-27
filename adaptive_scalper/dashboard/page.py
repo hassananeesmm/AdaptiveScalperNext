@@ -796,7 +796,8 @@ const LAB_FILTERS=[["strategy","Strategy"],["symbol","Symbol"],["version","Versi
 const labRoot=()=>document.getElementById("lab");
 function labSave(key,val){try{localStorage.setItem(key,JSON.stringify(val));}catch(e){}}
 function labColor(key){
-  const keys=(LAB.summary&&LAB.summary.active_strategy_keys)||[];
+  const keys=(LAB.summary&&LAB.summary.active_strategy_keys)||["momentum_continuation","pullback_continuation",
+    "range_breakout","statistical_reversion","volatility_expansion","microstructure_acceleration"];
   const i=keys.indexOf(key);return i>=0&&i<6?"var(--s"+(i+1)+")":"var(--muted)";
 }
 function labQuery(extra){
@@ -1006,9 +1007,10 @@ function labControls(){
 }
 /* ---------- sections ---------- */
 function labCosts(r){
-  /* recorded transaction costs as a positive number; N/A when any component is unrecorded */
+  /* recorded transaction costs (commission + fees + swap) with their recorded sign: a cost is negative;
+     N/A when any component is unrecorded */
   if([r.commission,r.fee,r.swap].some(v=>typeof v!=="number"))return null;
-  return -((r.commission||0)+(r.fee||0)+(r.swap||0));
+  return (r.commission||0)+(r.fee||0)+(r.swap||0);
 }
 function labGrossNet(s){
   /* gross versus recorded costs versus net, totals of this evidence source only */
@@ -1018,10 +1020,10 @@ function labGrossNet(s){
   const box=el("div",null,"lab-grossnet");
   box.appendChild(el("div","Gross versus net · attributed "+s.evidence+" trades","mini-title"));
   const tr=el("tr");cell(tr,fmt(rows.reduce((a,r)=>a+r.closed_trades,0)),"num");cell(tr,signed(tot("gross_pnl")),"num");
-  cell(tr,signed(-costs),"num");cell(tr,signed(tot("net_pnl")),"num");
-  cell(tr,tot("gross_pnl")!==0?num(costs/Math.abs(tot("gross_pnl")))+" ×":"N/A","num");
+  cell(tr,signed(costs),"num");cell(tr,signed(tot("net_pnl")),"num");
+  cell(tr,tot("gross_pnl")!==0?num(Math.abs(costs)/Math.abs(tot("gross_pnl")))+" ×":"N/A","num");
   box.appendChild(gridTable([["Closed trades","num"],["Gross P&L","num"],["Recorded costs","num"],["Net P&L","num"],
-    ["Costs ÷ |gross|","num"]],[tr]));
+    ["|Costs| ÷ |gross|","num"]],[tr]));
   box.appendChild(el("p",s.evidence==="DEMO"?"DEMO gross is the broker's trade profit; recorded costs are broker commission, fees and swap. "+
     "Spread and slippage are already inside the broker price, so real friction is larger than the recorded costs shown.":
     "Simulated gross is mid-to-mid; costs include simulated spread, slippage, commission and swap.","lab-note"));

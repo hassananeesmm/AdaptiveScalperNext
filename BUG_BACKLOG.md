@@ -5,6 +5,26 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
+ASN-018 [HIGH, strategy/selector — research finding, not changed] The selector ranks candidates by
+`p·target − (1−p)·stop − cost` with `p = raw_confidence` taken at face value. `microstructure_acceleration`
+sets `raw_confidence = min(1, 2·|acceleration|/ATR)`; its realized gross hit rate is flat at 0.38–0.48 in
+every confidence bucket (including 1.00), so expected net edge overstates realized edge by about 1 R and the
+selector picks it for 89–93 % of selections. Expected net R does not predict realized net R (independent
+research, docs/research/INDEPENDENT_STRATEGY_RESEARCH_2026-09-27.md §5). A calibrated replacement needs
+independent validation and human review before any change to the live selector.
+
+ASN-019 [HIGH, strategy — research finding] On development data every active strategy is net-negative on
+its own after costs; no gross R exceeds its cost R (same report §3–4). The live system therefore has no
+demonstrated edge; DEMO results (70 attributed trades, −98.84 USD) agree in sign.
+
+ASN-020 [MEDIUM, research/costs] The selector's cost estimate is 28–36 % below realized simulated cost on
+BTCUSD/XAUUSD (expected cost R 0.14–0.17 vs realized 0.22–0.24). Smaller than ASN-018 but it biases toward
+short, frequent trades.
+
+ASN-021 [INFO, portfolio/news] XAUUSD and BTCUSD are both USD-quoted: a single high-impact USD event blocks
+both enabled symbols at once (tests/test_two_position_news_and_protection.py). Expected behaviour; it limits
+how often two positions can coexist around US releases.
+
 24. [SEVERITY: LOW, SUBSYSTEM: CLI/performance] On the 275 MB Windows
     database, `status` took 4.487 s and `health` 5.576 s because both run a
     synchronous full `PRAGMA integrity_check`. This does not delay the separate
