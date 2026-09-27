@@ -2594,3 +2594,9 @@ check or order send occurred.
 - Checks: `pip check` clean; pip-audit (throwaway venv, not the runtime venv): no known vulnerabilities; bandit
   -ll: one new B608 (fixed table names) annotated, the rest pre-existing.
 - Runtime, dashboard, kill switch and live configuration untouched. Scratch dashboard (8766) stopped.
+- Release: `scripts\build_release.ps1 -Version 0.2.2 -SkipTests` at `e551bc9` (full suite 1636 passed / 9 skipped on
+  that code), `dist\AdaptiveScalperNext-0.2.2.zip` (worktree `dist\`), 415 entries, sha256
+  8418c626ffb0bef53c3abc154cc858343f7f7e805280b7263a9ab8ba29583972. Zip audit: no databases, WAL, logs, keys, .env,
+  credentials or research data; 29 migrations (none new since 0029); research modules, report and tests present; the
+  DEMO login number only in the two historical WORKLOG lines (unchanged, flagged). `release_smoke_test.ps1`: PASSED
+  (fresh venv, MT5 disabled, packaged suite 1636 passed / 9 skipped). Not deployed: needs operator approval.
