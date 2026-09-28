@@ -125,10 +125,13 @@ def _deserialize_pending_entry(raw: str | None) -> PendingEntryState | None:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise TypeError("pending entry payload must be an object")
-        if payload.get("version") != PENDING_ENTRY_STATE_VERSION:
-            raise ValueError(
-                f"unsupported pending entry state version {payload.get('version')!r}"
-            )
+        version = payload.get("version")
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version != PENDING_ENTRY_STATE_VERSION
+        ):
+            raise ValueError(f"unsupported pending entry state version {version!r}")
         signal_payload = payload["signal"]
         if not isinstance(signal_payload, dict):
             raise TypeError("pending entry signal must be an object")

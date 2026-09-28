@@ -1,9 +1,6 @@
 name: P0 verification
 
 on:
-  push:
-    branches:
-      - fix/paper-pending-entry-persistence-20260928
   pull_request:
     branches:
       - main
@@ -15,6 +12,10 @@ jobs:
   windows-python313:
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      # Guardrail E2E tests intentionally model the canonical local
+      # Windows checkout boundary, independent of the runner's D:\a path.
+      CLAUDE_PROJECT_DIR: 'C:\AdaptiveScalperNext'
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

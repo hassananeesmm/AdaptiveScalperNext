@@ -266,3 +266,23 @@ def test_get_session_rejects_non_finite_pending_feature(db):
     )
     with pytest.raises(PaperStateError, match="must be finite"):
         get_session(db, "PAPER:XAUUSD:M5")
+
+
+def test_get_session_rejects_boolean_pending_state_version(db):
+    get_or_create_session(db, "PAPER:XAUUSD:M5", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
+    save_session_state(
+        db, "PAPER:XAUUSD:M5", equity=10_000.0, last_processed_bar_time_utc=5000,
+        open_position=None, pending_entry=_pending_entry(), now_utc=2000,
+    )
+    row = db.execute(
+        "SELECT pending_entry_json FROM paper_session_state WHERE session_key = ?",
+        ("PAPER:XAUUSD:M5",),
+    ).fetchone()
+    payload = json.loads(row["pending_entry_json"])
+    payload["version"] = True
+    db.execute(
+        "UPDATE paper_session_state SET pending_entry_json = ? WHERE session_key = ?",
+        (json.dumps(payload), "PAPER:XAUUSD:M5"),
+    )
+    with pytest.raises(PaperStateError, match="unsupported pending entry state version"):
+        get_session(db, "PAPER:XAUUSD:M5")
