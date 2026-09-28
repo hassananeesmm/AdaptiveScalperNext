@@ -33,7 +33,13 @@ import time
 from dataclasses import dataclass, replace
 
 from adaptive_scalper.backtest.engine import run_backtest
-from adaptive_scalper.backtest.types import BacktestConfig, OpenPositionState, RegimeTrackerState, SimulatedTrade
+from adaptive_scalper.backtest.types import (
+    BacktestConfig,
+    OpenPositionState,
+    PendingEntryState,
+    RegimeTrackerState,
+    SimulatedTrade,
+)
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
 from adaptive_scalper.paper.state import get_or_create_session, record_paper_trades, save_session_state
 
@@ -45,6 +51,7 @@ class PaperCycleResult:
     new_trades: tuple[SimulatedTrade, ...]
     equity: float
     open_position: OpenPositionState | None
+    pending_entry: PendingEntryState | None
     last_processed_bar_time_utc: int | None
 
 
@@ -87,7 +94,8 @@ def run_paper_cycle(
     if len(window) < config.feature_lookback + 3:
         return PaperCycleResult(
             ran=False, session_key=key, new_trades=(), equity=session.equity,
-            open_position=session.open_position, last_processed_bar_time_utc=session.last_processed_bar_time_utc,
+            open_position=session.open_position, pending_entry=session.pending_entry,
+            last_processed_bar_time_utc=session.last_processed_bar_time_utc,
         )
 
     # Continue from the REAL current simulated equity, never the config's
@@ -96,8 +104,8 @@ def run_paper_cycle(
     run_config = replace(config, initial_equity=session.equity)
     result = run_backtest(
         window, canonical_symbol, resolution, symbol_spec, config=run_config, now_utc=now,
-        resume_open_position=session.open_position, resume_regime_tracker=session.regime_tracker_state,
-        force_close_at_range_end=False,
+        resume_open_position=session.open_position, resume_pending_entry=session.pending_entry,
+        resume_regime_tracker=session.regime_tracker_state, force_close_at_range_end=False,
     )
 
     conn.execute("BEGIN IMMEDIATE")
@@ -105,8 +113,8 @@ def run_paper_cycle(
         record_paper_trades(conn, key, canonical_symbol, result.trades, now_utc=now)
         save_session_state(
             conn, key, equity=result.metrics.final_equity, last_processed_bar_time_utc=window[-1].time,
-            open_position=result.open_position, regime_tracker_state=result.final_regime_tracker_state,
-            now_utc=now,
+            open_position=result.open_position, pending_entry=result.pending_entry,
+            regime_tracker_state=result.final_regime_tracker_state, now_utc=now,
         )
         conn.execute("COMMIT")
     except sqlite3.Error:
@@ -115,5 +123,6 @@ def run_paper_cycle(
 
     return PaperCycleResult(
         ran=True, session_key=key, new_trades=result.trades, equity=result.metrics.final_equity,
-        open_position=result.open_position, last_processed_bar_time_utc=window[-1].time,
+        open_position=result.open_position, pending_entry=result.pending_entry,
+        last_processed_bar_time_utc=window[-1].time,
     )

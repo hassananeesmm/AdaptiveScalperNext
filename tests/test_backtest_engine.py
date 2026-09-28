@@ -311,3 +311,111 @@ def test_run_backtest_never_lets_a_trade_close_before_it_opens():
     result = run_backtest(bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(), config=_config(), now_utc=2_000_000_000)
     for trade in result.trades:
         assert trade.exit_time_utc >= trade.entry_time_utc
+
+
+def _first_pending_boundary(bars):
+    """Find a deterministic cycle boundary ending immediately after a
+    selected signal but before its next-bar-open fill."""
+    config = _config()
+    for cutoff in range(config.feature_lookback + 3, min(len(bars) - 2, 90)):
+        result = run_backtest(
+            bars[:cutoff], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+            config=config, now_utc=2_000_000_000, force_close_at_range_end=False,
+        )
+        if result.pending_entry is not None and result.open_position is None:
+            return cutoff, result
+    raise AssertionError("test series did not produce a pending-entry boundary")
+
+
+def test_run_backtest_resumes_pending_entry_at_the_next_bar_open():
+    bars = _trending_bars(120)
+    cutoff, first = _first_pending_boundary(bars)
+    pending = first.pending_entry
+    assert pending is not None
+    assert pending.signal_bar_time_utc == bars[cutoff - 1].time
+
+    lookback = _config().feature_lookback
+    resume_window = bars[cutoff - lookback - 1:cutoff + 2]
+    resume_config = replace(_config(), initial_equity=first.metrics.final_equity)
+    second = run_backtest(
+        resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=resume_config, now_utc=2_000_000_000,
+        resume_pending_entry=pending, resume_regime_tracker=first.final_regime_tracker_state,
+        force_close_at_range_end=False,
+    )
+
+    expected_fill_time = bars[cutoff].time
+    observed_entry_times = {t.entry_time_utc for t in second.trades}
+    if second.open_position is not None:
+        observed_entry_times.add(second.open_position.entry_time_utc)
+    assert expected_fill_time in observed_entry_times
+    assert all(t >= expected_fill_time for t in observed_entry_times)
+
+
+def test_run_backtest_expires_pending_entry_after_a_missing_bar_gap():
+    bars = _trending_bars(120)
+    cutoff, first = _first_pending_boundary(bars)
+    pending = first.pending_entry
+    assert pending is not None
+
+    # Expire exactly at the next supplied bar. The deferred setup must not
+    # fill there; after cancellation the engine may form a NEW setup from
+    # that bar, but it is a distinct later decision.
+    expired = replace(pending, expires_at_utc=bars[cutoff].time)
+    lookback = _config().feature_lookback
+    resume_window = bars[cutoff - lookback - 1:cutoff + 2]
+    second = run_backtest(
+        resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=replace(_config(), initial_equity=first.metrics.final_equity),
+        now_utc=2_000_000_000, resume_pending_entry=expired,
+        resume_regime_tracker=first.final_regime_tracker_state, force_close_at_range_end=False,
+    )
+    expired_fill_time = bars[cutoff].time
+    assert all(t.entry_time_utc != expired_fill_time for t in second.trades)
+    if second.open_position is not None:
+        assert second.open_position.entry_time_utc != expired_fill_time
+
+
+def test_run_backtest_consumes_pending_entry_when_risk_sizing_rejects_it():
+    bars = _trending_bars(120)
+    cutoff, first = _first_pending_boundary(bars)
+    pending = first.pending_entry
+    assert pending is not None
+
+    # An intentionally impossible broker minimum makes the deterministic
+    # risk governor reject the fill. The one-shot pending entry must be
+    # cancelled/consumed rather than retried on a later bar.
+    impossible_spec = _symbol_spec(volume_min=100.0, volume_step=100.0)
+    lookback = _config().feature_lookback
+    resume_window = bars[cutoff - lookback - 1:cutoff + 2]
+    second = run_backtest(
+        resume_window, CANONICAL_SYMBOL, RESOLUTION, impossible_spec,
+        config=replace(_config(), initial_equity=first.metrics.final_equity),
+        now_utc=2_000_000_000, resume_pending_entry=pending,
+        resume_regime_tracker=first.final_regime_tracker_state, force_close_at_range_end=False,
+    )
+    attempted_fill_time = bars[cutoff].time
+    assert all(t.entry_time_utc != attempted_fill_time for t in second.trades)
+    if second.open_position is not None:
+        assert second.open_position.entry_time_utc != attempted_fill_time
+    assert second.pending_entry != pending
+
+
+def test_run_backtest_rejects_simultaneous_resumed_position_and_pending_entry():
+    bars = _trending_bars(220)
+    with_position = run_backtest(
+        bars[:200], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_000_000, force_close_at_range_end=False,
+    )
+    cutoff, with_pending = _first_pending_boundary(bars)
+    assert with_position.open_position is not None
+    assert with_pending.pending_entry is not None
+
+    lookback = _config().feature_lookback
+    resume_window = bars[cutoff - lookback - 1:cutoff + 2]
+    with pytest.raises(ValueError, match="open position and a pending entry"):
+        run_backtest(
+            resume_window, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+            config=_config(), resume_open_position=with_position.open_position,
+            resume_pending_entry=with_pending.pending_entry, force_close_at_range_end=False,
+        )

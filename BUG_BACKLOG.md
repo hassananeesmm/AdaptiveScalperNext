@@ -5,6 +5,23 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
+0. [SEVERITY: HIGH, SUBSYSTEM: backtest/paper] **Pending PAPER entry
+   persistence across cycle/restart boundaries — FIX IMPLEMENTED,
+   CANONICAL VERIFICATION PENDING.** At baseline `8e67f771`,
+   `backtest.engine.run_backtest()` stored a selected deferred entry
+   only in local `pending_entry`/`pending_entry_features` variables.
+   If a PAPER cycle ended on the signal bar, that state vanished before
+   the next cycle could fill it at the causal next-bar open, so chunked/
+   restarted PAPER behavior could diverge from continuous processing.
+   Branch `fix/paper-pending-entry-persistence-20260928` adds typed
+   `PendingEntryState`, migration `0019_paper_pending_entry`,
+   versioned fail-closed serialization, restart recovery, deterministic
+   bar-time expiry, one-shot cancellation on expiry/risk rejection, and
+   regression tests for creation/persistence/reload/fill/restart/
+   duplicate prevention/malformed/stale/conflicting state. Do NOT strike
+   this item or merge it as complete until the canonical Windows
+   `.venv` compileall + focused suites + full pytest run are green.
+
 1. **security-guidance plugin's agent-sdk-venv is a machine-global,
    non-git-tracked resource.** `~/.claude/security/agent-sdk-venv`
    (Python 3.14) can independently go stale/broken (observed once this

@@ -128,6 +128,7 @@ def test_run_paper_cycle_incremental_feeding_matches_a_single_shot_backtest(db):
         assert last_result.open_position.entry_price == reference.open_position.entry_price
     else:
         assert last_result.open_position is None
+    assert last_result.pending_entry == reference.pending_entry
 
 
 def test_run_paper_cycle_tracks_running_equity_not_the_static_config_default(db):
@@ -143,3 +144,77 @@ def test_run_paper_cycle_tracks_running_equity_not_the_static_config_default(db)
     # The second cycle's starting point was the FIRST cycle's equity, not
     # the static default -- final equity keeps compounding forward.
     assert second.equity != _config().initial_equity
+
+
+def _first_pending_cutoff(bars):
+    config = _config()
+    for cutoff in range(config.feature_lookback + 3, min(len(bars) - 2, 90)):
+        result = run_backtest(
+            bars[:cutoff], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+            config=config, now_utc=2_000_000_000, force_close_at_range_end=False,
+        )
+        if result.pending_entry is not None and result.open_position is None:
+            return cutoff
+    raise AssertionError("test series did not produce a pending-entry boundary")
+
+
+def test_run_paper_cycle_preserves_pending_entry_on_identical_noop_cycle(db):
+    bars = _trending_bars(120)
+    cutoff = _first_pending_cutoff(bars)
+    first = run_paper_cycle(
+        db, bars[:cutoff], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_000_000,
+    )
+    assert first.pending_entry is not None
+
+    repeated = run_paper_cycle(
+        db, bars[:cutoff], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_001_000,
+    )
+    assert repeated.ran is False
+    assert repeated.pending_entry == first.pending_entry
+    assert repeated.equity == first.equity
+
+
+def test_run_paper_cycle_recovers_pending_entry_after_restart_and_fills_once(tmp_path):
+    bars = _trending_bars(120)
+    cutoff = _first_pending_cutoff(bars)
+    db_path = tmp_path / "paper-restart.sqlite3"
+
+    conn = connect(db_path)
+    migrate(conn)
+    first = run_paper_cycle(
+        conn, bars[:cutoff], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_000_000,
+    )
+    assert first.pending_entry is not None
+    pending = first.pending_entry
+    conn.close()
+
+    # Real process-style recovery: a fresh SQLite connection must reload
+    # the typed pending state, then consume it at the first genuinely-new
+    # bar's open. No in-memory object from the first cycle is supplied.
+    conn = connect(db_path)
+    recovered = get_session(conn, first.session_key)
+    assert recovered is not None
+    assert recovered.pending_entry == pending
+
+    second = run_paper_cycle(
+        conn, bars[:cutoff + 2], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_001_000,
+    )
+    expected_fill_time = bars[cutoff].time
+    observed_entry_times = {t.entry_time_utc for t in second.new_trades}
+    if second.open_position is not None:
+        observed_entry_times.add(second.open_position.entry_time_utc)
+    assert expected_fill_time in observed_entry_times
+
+    # Repeating exactly the same post-restart data is a no-op; the
+    # recovered deferred entry cannot fill a second time.
+    repeated = run_paper_cycle(
+        conn, bars[:cutoff + 2], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_002_000,
+    )
+    assert repeated.ran is False
+    assert repeated.equity == second.equity
+    conn.close()

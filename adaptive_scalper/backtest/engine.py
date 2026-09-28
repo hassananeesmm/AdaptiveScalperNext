@@ -49,6 +49,7 @@ from adaptive_scalper.backtest.types import (
     BacktestMetrics,
     BacktestResult,
     OpenPositionState,
+    PendingEntryState,
     RegimeTrackerState,
     SimulatedTrade,
 )
@@ -56,6 +57,7 @@ from adaptive_scalper.costs.edge import BLOCK_COST as _COST_BLOCK
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
+from adaptive_scalper.history.resolutions import resolution_seconds
 from adaptive_scalper.position_management.adaptive_exit import (
     FULL_CLOSE,
     HOLD,
@@ -124,11 +126,12 @@ def run_backtest(
     config: BacktestConfig = BacktestConfig(),
     now_utc: int | None = None,
     resume_open_position: OpenPositionState | None = None,
+    resume_pending_entry: PendingEntryState | None = None,
     resume_regime_tracker: RegimeTrackerState | None = None,
     force_close_at_range_end: bool = True,
 ) -> BacktestResult:
-    """`resume_open_position`/`resume_regime_tracker`/
-    `force_close_at_range_end=False` are for an
+    """`resume_open_position`/`resume_pending_entry`/
+    `resume_regime_tracker`/`force_close_at_range_end=False` are for an
     ONGOING incremental caller (PAPER mode, `adaptive_scalper/paper/`) that
     calls this repeatedly as new bars arrive, rather than once over a
     fixed historical range. CONTRACT the caller must uphold: `bars` on a
@@ -144,6 +147,13 @@ def run_backtest(
     if len(bars) < config.feature_lookback + 3:
         raise ValueError(
             f"need at least feature_lookback+3 ({config.feature_lookback + 3}) bars, got {len(bars)}"
+        )
+    if resume_open_position is not None and resume_pending_entry is not None:
+        raise ValueError("cannot resume an open position and a pending entry simultaneously")
+    if resume_pending_entry is not None and resume_pending_entry.signal.canonical_symbol != canonical_symbol:
+        raise ValueError(
+            "pending entry canonical symbol does not match this run "
+            f"({resume_pending_entry.signal.canonical_symbol!r} != {canonical_symbol!r})"
         )
     now = now_utc if now_utc is not None else int(time.time())
 
@@ -165,8 +175,7 @@ def run_backtest(
     open_trade: _OpenTrade | None = (
         _OpenTrade(**resume_open_position.__dict__) if resume_open_position is not None else None
     )
-    pending_entry: StrategySignal | None = None
-    pending_entry_features: dict[str, float | None] | None = None
+    pending_entry: PendingEntryState | None = resume_pending_entry
     trades: list[SimulatedTrade] = []
     equity_curve: list[tuple[int, float]] = []
 
@@ -178,31 +187,40 @@ def run_backtest(
         # 1. Execute a deferred entry from the PRIOR bar's signal, at
         # THIS bar's open -- the earliest causal fill.
         if pending_entry is not None and open_trade is None:
-            signal = pending_entry
-            signal_features = pending_entry_features
-            pending_entry = None
-            pending_entry_features = None
-            fill = simulate_fill(bar, signal.direction, symbol_spec.point, config.fill_assumptions)
-            safe_volume = calculate_safe_volume(
-                equity=equity, risk_per_trade_pct=config.risk_per_trade_pct,
-                stop_distance_price=signal.stop_distance, symbol_spec=symbol_spec,
-            )
-            if safe_volume.approved:
-                stop_price = fill.price - signal.stop_distance if signal.direction == "BUY" else fill.price + signal.stop_distance
-                target_price = fill.price + signal.target_distance if signal.direction == "BUY" else fill.price - signal.target_distance
-                entry_cost_price = fill.spread_cost_price / 2.0 + fill.slippage_cost_price
-                open_trade = _OpenTrade(
-                    strategy_key=signal.strategy_key, direction=signal.direction, entry_time_utc=bar.time,
-                    entry_price=fill.price, volume=safe_volume.volume, initial_monetary_risk=safe_volume.monetary_risk,
-                    entry_regime=signal.regime, stop_price=stop_price, target_price=target_price,
-                    initial_stop_distance_price=signal.stop_distance,
-                    total_cost=money_from_price_distance(
-                        entry_cost_price, safe_volume.volume,
-                        tick_size=symbol_spec.trade_tick_size, tick_value=symbol_spec.trade_tick_value,
-                    ),
-                    entry_features=signal_features, entry_raw_confidence=signal.raw_confidence,
+            # A deferred signal is valid only for its causal next-bar-open
+            # opportunity. If the feed jumped far enough to reach the
+            # deterministic expiry, cancel it rather than filling a stale
+            # scalping setup after a market/data gap.
+            if bar.time >= pending_entry.expires_at_utc:
+                pending_entry = None
+            else:
+                signal = pending_entry.signal
+                signal_features = pending_entry.entry_features
+                pending_entry = None
+                fill = simulate_fill(bar, signal.direction, symbol_spec.point, config.fill_assumptions)
+                safe_volume = calculate_safe_volume(
+                    equity=equity, risk_per_trade_pct=config.risk_per_trade_pct,
+                    stop_distance_price=signal.stop_distance, symbol_spec=symbol_spec,
                 )
-            continue  # this bar was "spent" on the entry decision
+                if safe_volume.approved:
+                    stop_price = fill.price - signal.stop_distance if signal.direction == "BUY" else fill.price + signal.stop_distance
+                    target_price = fill.price + signal.target_distance if signal.direction == "BUY" else fill.price - signal.target_distance
+                    entry_cost_price = fill.spread_cost_price / 2.0 + fill.slippage_cost_price
+                    open_trade = _OpenTrade(
+                        strategy_key=signal.strategy_key, direction=signal.direction, entry_time_utc=bar.time,
+                        entry_price=fill.price, volume=safe_volume.volume, initial_monetary_risk=safe_volume.monetary_risk,
+                        entry_regime=signal.regime, stop_price=stop_price, target_price=target_price,
+                        initial_stop_distance_price=signal.stop_distance,
+                        total_cost=money_from_price_distance(
+                            entry_cost_price, safe_volume.volume,
+                            tick_size=symbol_spec.trade_tick_size, tick_value=symbol_spec.trade_tick_value,
+                        ),
+                        entry_features=signal_features, entry_raw_confidence=signal.raw_confidence,
+                    )
+                # Whether filled or rejected by deterministic sizing, this
+                # one-shot deferred entry is consumed. It is never blindly
+                # retried on another bar.
+                continue
 
         # 2. Compute features/regime causally from bars[0:i+1] only.
         window = bars[: i + 1]
@@ -284,8 +302,16 @@ def run_backtest(
                     min_net_edge_price=config.min_net_edge_price, min_raw_confidence=config.min_raw_confidence,
                 )
                 if selection.selected is not None:
-                    pending_entry = selection.selected
-                    pending_entry_features = numeric_feature_vector(features)
+                    signal = selection.selected
+                    bar_seconds = resolution_seconds(resolution)
+                    pending_entry = PendingEntryState(
+                        signal=signal,
+                        entry_features=numeric_feature_vector(features),
+                        signal_bar_time_utc=bar.time,
+                        # Permit the expected next bar (t + one interval).
+                        # A feed gap reaching t + two intervals is stale.
+                        expires_at_utc=bar.time + 2 * bar_seconds,
+                    )
 
     # Force-close any still-open trade at the final bar's close so
     # metrics are never computed over an artificially-truncated position
@@ -321,6 +347,7 @@ def run_backtest(
         equity_curve=tuple(equity_curve),
         news_limitation_note=None if config.news_windows else NEWS_LIMITATION_NOTE,
         config=config, open_position=open_position_state,
+        pending_entry=pending_entry if not force_close_at_range_end else None,
         final_regime_tracker_state=RegimeTrackerState(final_confirmed, final_candidate, final_candidate_count),
     )
 

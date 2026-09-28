@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
 from adaptive_scalper.simulation.fill_model import FillAssumptions
 from adaptive_scalper.simulation.types import EvidenceOrigin
+from adaptive_scalper.strategies.base import StrategySignal
 
 # Directive section 20's exact initial research defaults -- starting
 # points for validation, never claimed optimal or profitable, and never
@@ -103,6 +104,39 @@ class RegimeTrackerState:
 
 
 @dataclass(frozen=True)
+class PendingEntryState:
+    """A selected entry that must fill, if still fresh, at the NEXT bar's
+    open.
+
+    The bounded backtest can keep this transiently, but an incremental
+    caller such as PAPER must persist it across cycle/restart boundaries.
+    Otherwise a signal created on the final bar of one cycle simply
+    disappears before the next bar arrives, which changes causal behavior.
+
+    expires_at_utc is deterministic market-data time, never wall-clock
+    time. A state produced on one bar remains eligible for the expected
+    next bar only; a missing-bar gap that reaches the expiry makes the
+    setup stale and it is cancelled rather than filled late.
+    """
+
+    signal: StrategySignal
+    entry_features: dict[str, float | None] | None
+    signal_bar_time_utc: int
+    expires_at_utc: int
+
+    def __post_init__(self) -> None:
+        if self.signal_bar_time_utc <= 0:
+            raise ValueError("signal_bar_time_utc must be positive")
+        if self.expires_at_utc <= self.signal_bar_time_utc:
+            raise ValueError("expires_at_utc must be after signal_bar_time_utc")
+        if self.signal.data_timestamp != self.signal_bar_time_utc:
+            raise ValueError(
+                "pending entry signal timestamp must equal signal_bar_time_utc "
+                f"({self.signal.data_timestamp} != {self.signal_bar_time_utc})"
+            )
+
+
+@dataclass(frozen=True)
 class OpenPositionState:
     """Resumable still-open-trade state (directive section 132: PAPER
     mode is an ONGOING process, not a bounded historical range, so a
@@ -144,6 +178,10 @@ class BacktestResult:
     # Set only when the caller passed `force_close_at_range_end=False` AND
     # a trade was still open at the final bar -- see OpenPositionState.
     open_position: OpenPositionState | None = None
+    # Set only for an ongoing/incremental run when a selected entry was
+    # created on the final processed bar and therefore has not yet had its
+    # causal next-bar-open fill opportunity.
+    pending_entry: PendingEntryState | None = None
     # Always populated: the regime tracker's hysteresis state at the end
     # of this run -- an incremental caller passes it back in as
     # `run_backtest(..., resume_regime_tracker=...)` next call.

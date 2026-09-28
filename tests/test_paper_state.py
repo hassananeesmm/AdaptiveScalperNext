@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from adaptive_scalper.backtest.types import OpenPositionState, SimulatedTrade
+from adaptive_scalper.backtest.types import OpenPositionState, PendingEntryState, SimulatedTrade
 from adaptive_scalper.paper.state import (
     get_or_create_session,
     get_paper_trades,
+    PaperStateError,
     get_session,
     record_paper_trades,
     save_session_state,
 )
 from adaptive_scalper.persistence import connect, migrate
+from adaptive_scalper.strategies.base import StrategySignal
 
 
 @pytest.fixture()
@@ -32,6 +34,23 @@ def _open_position(**overrides) -> OpenPositionState:
     )
     defaults.update(overrides)
     return OpenPositionState(**defaults)
+
+
+def _pending_entry(
+    *, signal_bar_time_utc: int = 5000, canonical_symbol: str = "XAUUSD",
+    expires_at_utc: int = 5600,
+) -> PendingEntryState:
+    signal = StrategySignal(
+        strategy_key="momentum_continuation", strategy_version=1,
+        canonical_symbol=canonical_symbol, direction="BUY", raw_confidence=0.8,
+        stop_distance=5.0, target_distance=10.0, expected_duration_seconds=600,
+        entry_method="MARKET", regime="TRENDING_UP", rationale="test",
+        feature_schema_version=1, data_timestamp=signal_bar_time_utc,
+    )
+    return PendingEntryState(
+        signal=signal, entry_features={"return_1": 0.5},
+        signal_bar_time_utc=signal_bar_time_utc, expires_at_utc=expires_at_utc,
+    )
 
 
 def _closed_trade(**overrides) -> SimulatedTrade:
@@ -118,3 +137,70 @@ def test_record_paper_trades_allows_distinct_trades_with_different_entry_times(d
     trade_b = _closed_trade(entry_time_utc=2000)
     inserted = record_paper_trades(db, "PAPER:XAUUSD:M5", "XAUUSD", (trade_a, trade_b), now_utc=3000)
     assert inserted == 2
+
+
+def test_save_session_state_persists_pending_entry_round_trip(db):
+    get_or_create_session(db, "PAPER:XAUUSD:M5", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
+    pending = _pending_entry()
+    save_session_state(
+        db, "PAPER:XAUUSD:M5", equity=10_000.0, last_processed_bar_time_utc=5000,
+        open_position=None, pending_entry=pending, now_utc=2000,
+    )
+    session = get_session(db, "PAPER:XAUUSD:M5")
+    assert session.pending_entry == pending
+    assert session.open_position is None
+
+
+def test_save_session_state_rejects_open_position_and_pending_entry_together(db):
+    get_or_create_session(db, "PAPER:XAUUSD:M5", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
+    with pytest.raises(PaperStateError, match="both an open position and a pending entry"):
+        save_session_state(
+            db, "PAPER:XAUUSD:M5", equity=10_000.0, last_processed_bar_time_utc=5000,
+            open_position=_open_position(), pending_entry=_pending_entry(), now_utc=2000,
+        )
+
+
+def test_save_session_state_rejects_stale_pending_entry_cursor_mismatch(db):
+    get_or_create_session(db, "PAPER:XAUUSD:M5", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
+    with pytest.raises(PaperStateError, match="stale pending entry"):
+        save_session_state(
+            db, "PAPER:XAUUSD:M5", equity=10_000.0, last_processed_bar_time_utc=5300,
+            open_position=None, pending_entry=_pending_entry(signal_bar_time_utc=5000), now_utc=2000,
+        )
+
+
+def test_save_session_state_rejects_pending_entry_for_another_symbol(db):
+    get_or_create_session(db, "PAPER:XAUUSD:M5", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
+    with pytest.raises(PaperStateError, match="canonical symbol"):
+        save_session_state(
+            db, "PAPER:XAUUSD:M5", equity=10_000.0, last_processed_bar_time_utc=5000,
+            open_position=None, pending_entry=_pending_entry(canonical_symbol="GBPJPY"), now_utc=2000,
+        )
+
+
+def test_get_session_fails_closed_on_malformed_pending_entry_json(db):
+    get_or_create_session(db, "PAPER:XAUUSD:M5", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
+    db.execute(
+        "UPDATE paper_session_state SET last_processed_bar_time_utc = ?, pending_entry_json = ? "
+        "WHERE session_key = ?",
+        (5000, "{not-json", "PAPER:XAUUSD:M5"),
+    )
+    with pytest.raises(PaperStateError, match="invalid pending PAPER entry state"):
+        get_session(db, "PAPER:XAUUSD:M5")
+
+
+def test_get_session_fails_closed_on_persisted_stale_pending_entry(db):
+    get_or_create_session(db, "PAPER:XAUUSD:M5", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
+    save_session_state(
+        db, "PAPER:XAUUSD:M5", equity=10_000.0, last_processed_bar_time_utc=5000,
+        open_position=None, pending_entry=_pending_entry(), now_utc=2000,
+    )
+    # Simulate a corrupted/crash-recovery state where the cursor advanced
+    # without consuming the deferred entry. Reload must fail closed rather
+    # than silently executing or dropping it.
+    db.execute(
+        "UPDATE paper_session_state SET last_processed_bar_time_utc = ? WHERE session_key = ?",
+        (5300, "PAPER:XAUUSD:M5"),
+    )
+    with pytest.raises(PaperStateError, match="stale pending PAPER entry"):
+        get_session(db, "PAPER:XAUUSD:M5")

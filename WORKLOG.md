@@ -1826,3 +1826,57 @@ directory scan).
 Full suite: 1104 passed, 0 failed, 0 skipped (up from 1083). No secrets,
 credentials, runtime DB, raw bars/ticks, logs, or model artifacts staged
 for commit (verified via `git status`/`git diff` before committing).
+
+
+## Session: 2026-09-28 — P0 pending PAPER-entry persistence
+
+Continued from remote `main` HEAD
+`8e67f7719914971d1ea25e8f6438d2b5985471a4` without redesigning the
+existing PAPER/backtest architecture. GitHub exposes committed repository
+state but not the user's uncommitted Windows working tree, so all work was
+isolated on `fix/paper-pending-entry-persistence-20260928`; `main` and
+the sibling `C:\AdaptiveScalper` project were left untouched.
+
+Root cause found: `run_backtest()` deferred a selected bar-close signal
+to the next bar open using local `pending_entry` and
+`pending_entry_features` variables only. The existing incremental resume
+contract persisted `OpenPositionState` and `RegimeTrackerState`, but
+not this third causal state. Ending a PAPER cycle immediately after signal
+selection therefore silently discarded a legitimate next-bar fill and
+made chunked/restarted PAPER processing diverge from one continuous run.
+
+Checkpoint implementation:
+
+- added typed `PendingEntryState` to `backtest/types.py`, carrying the
+  exact `StrategySignal`, causal feature vector, signal-bar timestamp and
+  deterministic market-time expiry;
+- `run_backtest()` now accepts/returns that state in incremental mode,
+  rejects an impossible simultaneous resumed open-position + pending-entry
+  state, consumes the entry exactly once, and expires it rather than
+  filling after a missing-bar gap;
+- migration `0019_paper_pending_entry.sql` adds PAPER-only durable state;
+  no broker order/deal/position schema or execution authority changed;
+- `paper/state.py` uses versioned JSON -> typed-state decoding and fails
+  closed on malformed JSON, unsupported/inconsistent state, cursor-stale
+  entries and symbol mismatches;
+- `paper/engine.py` threads pending state through the same atomic
+  `BEGIN IMMEDIATE` cycle transaction as trades/open-position/regime
+  state, including no-op cycles and fresh-process recovery;
+- regression coverage added across `test_backtest_engine.py`,
+  `test_paper_state.py` and `test_paper_engine.py` for persistence,
+  reload, restart/recovery, causal fill, expiry, risk-rejection
+  cancellation, duplicate/no-op replay, malformed/stale state, and
+  impossible conflicting state.
+
+Verification status: **NOT YET CANONICALLY RUN.** This session has GitHub
+repository access but cannot execute
+`C:\AdaptiveScalperNext\.venv\Scripts\python.exe` on the user's
+Windows machine, and the repository has no GitHub Actions workflow/status
+on the baseline SHA. The last verified historical result remains the
+baseline commit's 1104 passed / 0 failed / 0 skipped. The new checkpoint
+must remain unmerged/draft until canonical compileall, focused PAPER/
+backtest/persistence tests, and the full pytest suite are green.
+
+No LIVE mode, kill-switch clearing, strategy-threshold weakening, risk
+relaxation, broker send path, credentials, runtime DB, logs or generated
+market/model artifacts were introduced by this checkpoint.

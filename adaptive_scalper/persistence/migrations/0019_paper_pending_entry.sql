@@ -1,0 +1,11 @@
+-- 0019_paper_pending_entry: persist a causally-deferred PAPER entry
+-- across cycle/process boundaries.
+--
+-- A strategy signal created on the last processed bar may only fill at
+-- the NEXT bar's open. Before this migration that signal lived only in
+-- run_backtest() local variables, so ending/restarting a PAPER cycle
+-- silently discarded it and changed behavior relative to a continuous run.
+--
+-- JSON is versioned and decoded into the typed PendingEntryState. It stays
+-- in the PAPER-only session table and is never mixed with broker orders.
+ALTER TABLE paper_session_state ADD COLUMN pending_entry_json TEXT;

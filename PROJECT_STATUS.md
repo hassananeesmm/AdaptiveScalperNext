@@ -72,10 +72,13 @@ OBSERVER-STAGE machinery (`adaptive_scalper/learning/` — lifecycle,
 registry, promotion gate, drift response; no real model training yet)
 are both implemented and tested.
 
-NOT yet started: backtest/walk-forward/OOS, real ML training, the
-complete dashboard/CLI, the full end-to-end runtime engine, and release
-packaging. See "Schema version" below for the current schema number —
-not duplicated here to avoid exactly the staleness this note is fixing.
+Backtest/walk-forward/OOS/Monte Carlo infrastructure and real ML
+OBSERVER-stage training now exist (see their sections below). NOT yet
+built/wired: the complete dashboard/CLI, the full end-to-end runtime
+engine, formal challenger promotion/drift monitoring, PAPER burn-in, and
+release packaging. See "Schema version" below for the current schema
+number — not duplicated here to avoid exactly the staleness this note is
+fixing.
 See "Current next task" below for the authoritative list of what
 remains, and never infer completion of anything not explicitly marked
 IMPLEMENTED/CONNECTED/TESTED in this file.
@@ -1374,6 +1377,18 @@ and `orders_get()` both correctly return empty lists (0 open positions,
 
 ## Current next task
 
+**Immediate P0 checkpoint (2026-09-28): pending PAPER-entry persistence.**
+Implementation and regression tests are on
+`fix/paper-pending-entry-persistence-20260928`, deliberately not merged
+to `main` because this GitHub-only session cannot inspect the user's
+uncommitted Windows working tree or run
+`C:\AdaptiveScalperNext\.venv\Scripts\python.exe`. The checkpoint
+must not be marked TESTED/complete until canonical compileall + focused
+PAPER/backtest/persistence suites + the full pytest suite are green.
+After that verification, the user's next requested priority is
+deterministic broker-chaos testing, followed by the durable research
+trial ledger/validation hardening.
+
 Phase 3 (CORE TRADING) is complete and live-verified end to end. An
 external execution-safety review of the Phase 4 building blocks found 9
 issues (order-ticket-vs-position-ticket confusion, no dedicated safe
@@ -1498,10 +1513,10 @@ NOT yet done: no CLI command or dashboard panel surfaces any of this yet (tracke
 
 ## PAPER mode (directive section 132)
 
-`adaptive_scalper/paper/` — IMPLEMENTED, TESTED (fake, 13 tests: 7 state, 6 engine). No `Gateway` parameter anywhere in this package, no broker `order_send`/`order_check` — directive: "PAPER uses real MT5 market data when available. No broker order_send."
+`adaptive_scalper/paper/` — IMPLEMENTED. Baseline commit `8e67f771` was TESTED (fake, 13 tests: 7 state, 6 engine). The pending-entry persistence hardening on `fix/paper-pending-entry-persistence-20260928` adds dedicated regression coverage but remains **UNVERIFIED in the canonical Windows `.venv` until that suite is run locally**. No `Gateway` parameter exists anywhere in this package, no broker `order_send`/`order_check` — directive: "PAPER uses real MT5 market data when available. No broker order_send."
 
-- `paper/engine.py` — `run_paper_cycle()`, the ONLY entry point. Reuses `backtest.engine.run_backtest()`'s exact production decision cores via its incremental mode (see above), adding no decision logic of its own — its whole job is correct WINDOWING (computing exactly the bar slice the resume contract needs from whatever full bar history the caller supplies, so callers never have to get this right by hand) and STATE PERSISTENCE (newly-closed trades and the resumable position/regime-tracker state are recorded atomically — `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK` — so a crash between "decide" and "persist" is always safely retryable).
-- `paper/state.py` — `paper_session_state`/`paper_trades` persistence (migration `0018_paper`), deliberately SEPARATE tables from `positions`/`orders`/`deals` (real broker evidence) — directive section 82: "Evidence classes must not silently receive identical weight." A simulated PAPER position is never reachable by `execution/reconciliation.py`'s broker-truth recovery path, and vice versa. Every recorded trade carries `origin='PAPER_LIVE_DATA'`. `record_paper_trades()` is idempotent (`INSERT OR IGNORE` keyed on `(session_key, entry_time_utc, direction)`) — a retried cycle re-deriving the SAME deterministic trades from the SAME unprocessed window is a safe no-op.
+- `paper/engine.py` — `run_paper_cycle()`, the ONLY entry point. Reuses `backtest.engine.run_backtest()`'s exact production decision cores via its incremental mode (see above), adding no decision logic of its own — its whole job is correct WINDOWING and STATE PERSISTENCE. Newly-closed trades plus the resumable open-position, pending-entry and regime-tracker state are recorded atomically — `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK` — so a crash/restart cannot silently erase a deferred signal or duplicate its fill.
+- `paper/state.py` — `paper_session_state`/`paper_trades` persistence (migrations `0018_paper` + `0019_paper_pending_entry`), deliberately SEPARATE tables from `positions`/`orders`/`deals` (real broker evidence) — directive section 82: "Evidence classes must not silently receive identical weight." A simulated PAPER position is never reachable by `execution/reconciliation.py`'s broker-truth recovery path, and vice versa. Every recorded trade carries `origin='PAPER_LIVE_DATA'`. `record_paper_trades()` is idempotent (`INSERT OR IGNORE` keyed on `(session_key, entry_time_utc, direction)`). New typed `PendingEntryState` persistence closes the cycle-boundary defect where a signal selected on the final processed bar used to exist only in `run_backtest()` local variables and disappear before its causal next-bar-open fill. The JSON payload is versioned and reload is fail-closed for malformed, symbol-mismatched, mutually-inconsistent, or cursor-stale state. Pending entries are one-shot and expire deterministically in market-data time after a missing-bar gap; risk-rejected/expired entries are consumed, never blindly retried.
 - A real, non-trivial bug was caught and fixed while proving incremental correctness: `regimes.classifier.RegimeTracker`'s hysteresis state (confirmed/candidate/candidate_count) was NOT resumable across calls — an incremental PAPER cycle restarted it from `UNKNOWN` every time, genuinely diverging from what a continuously-running tracker would decide. Fixed by adding `RegimeTracker.state`/`initial_candidate`/`initial_candidate_count` and threading a new `RegimeTrackerState` through `run_backtest()`'s resume contract and `paper/state.py`'s persistence. Proven by `tests/test_paper_engine.py::test_run_paper_cycle_incremental_feeding_matches_a_single_shot_backtest`: cycling through the same bar range in growing chunks now produces IDENTICAL final state (equity, every trade, the still-open position) to one continuous `run_backtest()` call.
 
 NOT yet done: no `Gateway` is wired to this at all yet — a future runtime-engine caller (task: "wire full runtime engine") must fetch real bars from the live MT5 terminal via a `SynchronizedGateway` and pass them into `run_paper_cycle()` on a real schedule; no CLI command or dashboard panel surfaces PAPER state yet; PAPER burn-in itself (directive section 132: "Run PAPER burn-in before DEMO") hasn't run.
@@ -1518,12 +1533,13 @@ See `BUG_BACKLOG.md` for non-blocking known issues.
 
 ## Schema version
 
-18 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
+19 (`0001_initial`, `0002_symbol_mapping`, `0003_symbol_validation`,
 `0004_historical_data`, `0005_broker_account_history`, `0006_journal`,
 `0007_news`, `0008_costs`, `0009_execution`, `0010_rag`,
 `0011_learning`, `0012_position_management`,
 `0013_position_risk_quarantine`, `0014_backtest`, `0015_entry_fills`,
-`0016_order_magic`, `0017_incident_dedup`, `0018_paper`).
+`0016_order_magic`, `0017_incident_dedup`, `0018_paper`,
+`0019_paper_pending_entry`).
 
 ## Local RAG (advisory-only)
 
