@@ -96,6 +96,11 @@ BLOCK_UNKNOWN_ORDER = "BLOCK_UNKNOWN_ORDER"
 BLOCK_RECONCILIATION = "BLOCK_RECONCILIATION"
 BLOCK_RISK = "BLOCK_RISK"
 BLOCK_COST = "BLOCK_COST"
+# Persisted when run_reconciliation itself fails (broker snapshot unreadable).
+RECONCILIATION_ERROR = "ERROR"
+# A CLEAN verdict older than this no longer admits new entries.
+RECONCILIATION_MIN_MAX_AGE_SECONDS = 30
+
 _OPEN_EXPOSURE_ORDER_STATES = ("SUBMITTED", "ACCEPTED", "PENDING", "RESTING", "PARTIAL", "UNKNOWN", "PENDING_RECONCILIATION")
 
 
@@ -196,6 +201,9 @@ class DemoRuntime:
         blocking = [f for f in findings if f.finding_type != PROTECTIVE_CLOSE_IN_PROGRESS]
         return CLEAN if not blocking else "BLOCKING_MISMATCH"
 
+    def _reconciliation_max_age_seconds(self) -> int:
+        return int(max(RECONCILIATION_MIN_MAX_AGE_SECONDS, 10 * self.config.runtime.position_cycle_seconds))
+
     def global_entry_block(self, now: int) -> tuple[str, str] | None:
         """Directive section 45: when new entries are globally blocked,
         don't burn cycles evaluating strategies."""
@@ -207,9 +215,13 @@ class DemoRuntime:
             return demo.block_reason, demo.detail
         if has_dangerous_unresolved_unknown(self.conn):
             return BLOCK_UNKNOWN_ORDER, "a dangerous UNKNOWN order is unresolved"
-        last_recon = get_state(self.conn, "reconciliation", {}).get("status")
+        recon = get_state(self.conn, "reconciliation", {})
+        last_recon = recon.get("status")
         if last_recon != CLEAN:
             return BLOCK_RECONCILIATION, f"last reconciliation status={last_recon}"
+        recon_age = now - int(recon.get("at") or 0)
+        if recon_age > self._reconciliation_max_age_seconds():
+            return BLOCK_RECONCILIATION, f"last CLEAN reconciliation is {recon_age}s old (stale)"
         news_block = self.news.global_block(now)
         if news_block is not None:
             return news_block
@@ -264,8 +276,19 @@ class DemoRuntime:
 
     def position_cycle(self) -> None:
         now = self.now()
-        report = run_reconciliation(self.conn, self.gateway, f"reconcile:{now // 86400}", now_utc=now,
-                                    journal_clean=False, own_magic=self.config.runtime.magic)
+        try:
+            report = run_reconciliation(self.conn, self.gateway, f"reconcile:{now // 86400}", now_utc=now,
+                                        journal_clean=False, own_magic=self.config.runtime.magic)
+        except Exception as exc:
+            # A failed broker snapshot (e.g. Mt5QueryError) is never "still
+            # CLEAN": persist ERROR so global_entry_block fails closed.
+            put_state(self.conn, "reconciliation", {"status": RECONCILIATION_ERROR, "at": now,
+                                                    "error": f"{type(exc).__name__}: {exc}"}, now_utc=now)
+            record_event(self.conn, "BLOCKED", "reconciliation", "RECONCILIATION_FAILED",
+                         f"{type(exc).__name__}: {exc}", dedup_key="reconciliation:failed", now_utc=now)
+            raise
+        from adaptive_scalper.runtime.state import clear_event
+        clear_event(self.conn, "reconciliation:failed", now_utc=now)
         put_state(self.conn, "reconciliation", {"status": report.status, "at": now,
                                                 "unrepaired_positions": report.unrepaired_position_ids,
                                                 "unrepaired_orders": report.unrepaired_order_ids}, now_utc=now)
@@ -273,7 +296,6 @@ class DemoRuntime:
             record_event(self.conn, "BLOCKED", "reconciliation", "RECONCILIATION_MISMATCH",
                          f"status={report.status}", dedup_key="reconciliation:mismatch", now_utc=now)
         else:
-            from adaptive_scalper.runtime.state import clear_event
             clear_event(self.conn, "reconciliation:mismatch", now_utc=now)
 
         for outcome in apply_unknown_resolutions(self.conn, self.gateway, now_utc=now):
