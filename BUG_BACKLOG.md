@@ -20,8 +20,10 @@ delete) once fixed, with the fixing commit/date noted.
    immediate one-new-bar resume processing, immutable session identity, and
    regression tests for creation/persistence/reload/fill/restart/
    duplicate prevention/malformed/stale/conflicting state. Do NOT strike
-   this item or merge it as complete until the canonical Windows
-   `.venv` compileall + focused suites + full pytest run are green.
+   this item as locally verified until the canonical Windows `.venv`
+   compileall + focused suites + full pytest run are green. Secondary
+   Windows/Python-3.13 CI is green at `61ce1143`: 69 focused passed;
+   full suite 1118 passed, 7 expected MT5-live skips, 0 failed.
 
 1. **security-guidance plugin's agent-sdk-venv is a machine-global,
    non-git-tracked resource.** `~/.claude/security/agent-sdk-venv`
