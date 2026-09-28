@@ -320,6 +320,41 @@ def test_crash_after_acknowledgement_before_position_resolution_recovers(db):
     assert len(get_open_positions(db)) == 1
 
 
+def test_postsend_history_query_error_is_quarantined_unknown_immediately(db):
+    gw = chaos_gateway().on("history_deals_get", raise_(RuntimeError("MT5 history unavailable")), call=1)
+    outcome = _submit(db, gw)
+    assert outcome.status == UNKNOWN
+    assert outcome.order.state == OrderState.UNKNOWN
+    assert "accepted-order broker-truth resolution" in outcome.detail
+    assert has_dangerous_unresolved_unknown(db)
+    assert len(gw.order_send_calls) == 1
+
+    recovered = apply_unknown_resolutions(db, gw, now_utc=NOW + 10)
+    assert recovered[0].new_state == "FILLED"
+    assert len(get_open_positions(db)) == 1
+    assert len(gw.order_send_calls) == 1
+
+
+def test_partial_fill_history_query_error_is_quarantined_unknown_immediately(db):
+    partial = OrderSendResult(
+        retcode=10010, comment="partial", broker_order_id="5001", broker_deal_id="5002",
+        broker_position_id=None, volume_filled=0.02, price_filled=2001.0, raw={},
+    )
+    gw = chaos_gateway().on("order_send", returns(partial))
+    gw._historical_deals.append(HistoricalDeal(
+        ticket=5002, order=5001, time=NOW, type=0, entry=0, magic=0, position_id=5003, volume=0.02,
+        price=2001.0, commission=0.0, swap=0.0, profit=0.0, fee=0.0, symbol=BROKER_SYMBOL,
+        comment="", external_id="",
+    ))
+    gw.on("history_deals_get", raise_(RuntimeError("MT5 history unavailable")), call=1)
+    outcome = _submit(db, gw)
+    assert outcome.status == UNKNOWN
+    assert outcome.order.state == OrderState.UNKNOWN
+    assert "partial-fill broker-truth resolution" in outcome.detail
+    assert has_dangerous_unresolved_unknown(db)
+    assert len(gw.order_send_calls) == 1
+
+
 def test_crash_during_close_is_reconciled_from_broker_truth_after_restart(db):
     gw = chaos_gateway()
     gw.inject_open_position(_position())

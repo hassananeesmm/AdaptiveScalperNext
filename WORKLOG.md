@@ -2596,3 +2596,12 @@ check or order send occurred.
   code changed. Secret-pattern scan of the commit diff found no credential-like additions.
 - Deployment remains intentionally NOT performed from this session. The fix must first be verified with the
   canonical Windows venv and then loaded only through a controlled operator-approved restart, preferably flat.
+
+- Secondary-effect review of the fail-closed gateway change found one additional post-send edge before merge:
+  after a broker DONE/DONE_PARTIAL acknowledgement, `resolve_entry_fill_evidence()` can now raise
+  `Mt5QueryError` instead of returning empty evidence. Letting that normal exception bubble would leave the
+  local order in ACCEPTED/PARTIAL until a later reconciliation/restart. Hardened `execution/service.py` so
+  a normal exception during post-send broker-truth resolution immediately transitions the acknowledged order
+  to durable UNKNOWN, records an UNKNOWN_OUTCOME incident and returns without resending. New chaos regressions
+  cover DONE and DONE_PARTIAL acknowledgements plus later recovery/no-resend. Intentional process-crash
+  (`BaseException`) behavior is unchanged and remains covered by startup quarantine tests.

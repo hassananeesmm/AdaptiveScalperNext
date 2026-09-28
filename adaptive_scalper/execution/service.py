@@ -234,6 +234,39 @@ def _verify_critical_broker_state(
     return _CriticalStateCheck(None, symbol_spec=symbol_spec, margin_free=account.margin_free)
 
 
+def _unknown_after_postsend_truth_failure(
+    conn,
+    order: OrderRecord,
+    *,
+    chain_key: str,
+    canonical_symbol: str,
+    exc: Exception,
+    context: str,
+    now_utc: int,
+) -> SubmissionOutcome:
+    """Quarantine an acknowledged mutation whose broker truth cannot be read.
+
+    Once order_send has been acknowledged, a follow-up read failure means
+    exposure may exist. UNKNOWN is the only safe local state: record an
+    incident, block new exposure, and never resend this order.
+    """
+    detail = (
+        f"{context} raised {type(exc).__name__}: {exc} after order_send acknowledgement -- "
+        "broker exposure is unknown, never resent"
+    )
+    order = transition_order_state(
+        conn, order.id, OrderState.UNKNOWN, detail=detail, now_utc=now_utc,
+    )
+    append_event(
+        conn, chain_key, "ORDER_UNKNOWN", now_utc, canonical_symbol,
+        {"detail": detail, "context": context}, strategy_key=None,
+        broker_order_id=order.broker_order_id,
+    )
+    from adaptive_scalper.execution.reconciliation import record_incident
+    record_incident(conn, "UNKNOWN_OUTCOME", detail, order_id=order.id, now_utc=now_utc)
+    return SubmissionOutcome(UNKNOWN, order, detail)
+
+
 def submit_new_entry(
     conn,
     gateway: Gateway,
@@ -512,10 +545,16 @@ def submit_new_entry(
         # External review finding #8: never entry_price=0.0. Resolve REAL
         # entry-deal evidence (position id + a positive weighted-average
         # fill price) — never OrderSendResult.price_filled-or-0.0.
-        fill_evidence = resolve_entry_fill_evidence(
-            gateway, broker_deal_id=result.broker_deal_id, broker_order_id=result.broker_order_id,
-            window_from_utc=now - history_window_seconds, window_to_utc=now + history_window_seconds,
-        )
+        try:
+            fill_evidence = resolve_entry_fill_evidence(
+                gateway, broker_deal_id=result.broker_deal_id, broker_order_id=result.broker_order_id,
+                window_from_utc=now - history_window_seconds, window_to_utc=now + history_window_seconds,
+            )
+        except Exception as exc:
+            return _unknown_after_postsend_truth_failure(
+                conn, order, chain_key=chain_key, canonical_symbol=canonical_symbol, exc=exc,
+                context="partial-fill broker-truth resolution", now_utc=now,
+            )
         if not fill_evidence.resolved:
             # Broker truth for this real partial exposure cannot
             # currently be established -- this is exactly the dangerous
@@ -583,10 +622,16 @@ def submit_new_entry(
     # External review finding #8: never entry_price=0.0 -- resolve REAL
     # entry-deal evidence (position id + a positive weighted-average fill
     # price), never OrderSendResult.price_filled-or-0.0.
-    fill_evidence = resolve_entry_fill_evidence(
-        gateway, broker_deal_id=result.broker_deal_id, broker_order_id=result.broker_order_id,
-        window_from_utc=now - history_window_seconds, window_to_utc=now + history_window_seconds,
-    )
+    try:
+        fill_evidence = resolve_entry_fill_evidence(
+            gateway, broker_deal_id=result.broker_deal_id, broker_order_id=result.broker_order_id,
+            window_from_utc=now - history_window_seconds, window_to_utc=now + history_window_seconds,
+        )
+    except Exception as exc:
+        return _unknown_after_postsend_truth_failure(
+            conn, order, chain_key=chain_key, canonical_symbol=canonical_symbol, exc=exc,
+            context="accepted-order broker-truth resolution", now_utc=now,
+        )
     if not fill_evidence.resolved:
         order = transition_order_state(
             conn, order.id, OrderState.UNKNOWN, detail=fill_evidence.detail, now_utc=now,
