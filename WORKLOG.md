@@ -2617,3 +2617,18 @@ check or order send occurred.
   /api/health HEALTHY, /api/strategy-lab/research OK, readiness BTCUSD NO SIGNAL / AWAITING COMPLETED BAR, XAUUSD
   MARKET CLOSED; preflight READY_FOR_PAPER, DEMO blocker only "no fresh quote for: XAUUSD".
 - The old 03:06 launcher windows stay open at their final `pause` prompt; the operator may close them.
+
+## Session: live two-symbol verification after the gold reopen (2026-09-28, ~13:50 GMT+4, read-only)
+
+- Runtime 0.2.2 RUNNING (main checkout `eaa024c`), started 19:56 GMT+4 on 2026-09-27 by the operator via the launcher
+  (parent explorer.exe); the runtime started from this session at 18:52 ended without ENGINE_STOPPED (its windows were
+  closed) - flat at the time, startup recovery CLEAN. Lesson: runtimes started from an agent session should be started by
+  the operator from the desktop launcher.
+- SYMBOL_ADMITTED XAUUSD 2026-09-27 22:02:08 UTC: the ASN-016 fix works live. Active symbols {BTCUSD, XAUUSD}.
+- Since admission: 41 positions (BTCUSD 23, XAUUSD 18; microstructure 40, range_breakout 1), 6 cross-symbol overlaps
+  (two simultaneous DEMO positions, e.g. 33 s and 45 s; combined initial risk 46.94 / 44.96 USD, about 0.49 % / 0.47 %
+  of equity). Blocks: re-entry rule (BTCUSD 22, XAUUSD 21), correlation 1 (n=7 < minimum samples after the reopen).
+- Now: 1 open BTCUSD BUY (microstructure), balance 9,585.71, reconciliation CLEAN, kill switch DISENGAGED.
+- ASN-022 found: all 11 recorded ORPHAN_BROKER_ORDER findings are broker stop-loss execution orders of our own
+  positions seen transiently in orders_get(); one-cycle BLOCKING_MISMATCH each. Documented with a proposed fix; the
+  live reconciliation logic was not changed.

@@ -45,7 +45,13 @@ and `START DASHBOARD.bat`. Verified after restart: engine RUNNING, account trade
 0 positions / 0 orders, balance = equity 9,607.31 USD, symbols {BTCUSD}, XAUUSD `awaiting_market` (re-admitted
 automatically when its market reopens: ASN-016 fix now live), dashboard HEALTHY with the research and readiness
 endpoints, preflight READY_FOR_PAPER with the single DEMO blocker "no fresh quote for XAUUSD" (market closed).
-Live two-symbol DEMO operation: PENDING the XAUUSD reopen and natural signals.
+Live two-symbol DEMO operation: **VERIFIED WITH BROKER DEMO ORDERS** (2026-09-28): XAUUSD re-admitted automatically
+at 22:02 UTC on 2026-09-27 (SYMBOL_ADMITTED); since then 41 DEMO positions (BTCUSD 23, XAUUSD 18) with 6 cross-symbol
+overlaps, e.g. 33 s and 45 s, combined initial risk about 0.47-0.49 % of equity (each about 0.25 %, cap 0.75 %). One
+XAUUSD entry was correctly blocked by correlation (only 7 aligned samples just after the reopen); other blocks were the
+re-entry rule. The operator restarted the runtime with the launcher at 19:56 GMT+4 on 2026-09-27 (same 0.2.2 code;
+startup recovery CLEAN, no position open across the gap). New finding ASN-022 (false ORPHAN_BROKER_ORDER on broker
+stop-loss executions), recorded, not changed.
 
 ## Current phase (2026-09-27 afternoon, branch `feature/independent-strategy-research`, release 0.2.2 (see deployment above))
 

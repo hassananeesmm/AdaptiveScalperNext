@@ -21,6 +21,16 @@ ASN-020 [MEDIUM, research/costs] The selector's cost estimate is 28–36 % below
 BTCUSD/XAUUSD (expected cost R 0.14–0.17 vs realized 0.22–0.24). Smaller than ASN-018 but it biases toward
 short, frequent trades.
 
+ASN-022 [LOW, execution/reconciliation — found live 2026-09-28, NOT changed] Every recorded
+`ORPHAN_BROKER_ORDER` (11 since 2026-09-25, e.g. orders 1966998439, 1967283529, 1968707491) is the broker's OWN
+stop-loss execution order for one of our positions (deal comment `[sl ...]`, our magic, OUT deal in the same
+second). MT5 lists that market order in `orders_get()` for an instant; reconciliation classifies it as an orphan,
+reports BLOCKING_MISMATCH and blocks entries for one cycle, then the next pass is CLEAN. Fail-closed and harmless
+to exposure, but it records false incidents. Proposed fix (needs review; touches a safety control):
+`PendingOrderSnapshot` gains the MT5 order `type` and `position_id`; a broker order that is a MARKET type
+(not a pending type), references a locally OPEN position of ours and carries our magic is classified
+`PROTECTIVE_CLOSE_IN_PROGRESS` for at most N cycles instead of an orphan; anything else stays blocking.
+
 ASN-021 [INFO, portfolio/news] XAUUSD and BTCUSD are both USD-quoted: a single high-impact USD event blocks
 both enabled symbols at once (tests/test_two_position_news_and_protection.py). Expected behaviour; it limits
 how often two positions can coexist around US releases.
