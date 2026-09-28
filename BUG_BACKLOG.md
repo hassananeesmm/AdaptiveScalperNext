@@ -41,7 +41,11 @@ ASN-021 [INFO, portfolio/news] XAUUSD and BTCUSD are both USD-quoted: a single h
 both enabled symbols at once (tests/test_two_position_news_and_protection.py). Expected behaviour; it limits
 how often two positions can coexist around US releases.
 27. [SEVERITY: P0, SUBSYSTEM: gateway/runtime] **SOURCE FIXED ON
-    `fix/mt5-broker-truth-fail-closed-20260928`, NOT DEPLOYED.** MetaTrader5
+    `fix/mt5-broker-truth-fail-closed-20260928`; INTEGRATED 2026-09-28 into
+    `fix/integrated-demo-safety-20260928` (merge `749f3ce`, on top of 0.2.3). NOT DEPLOYED:
+    the running DEMO runtime (0.2.2, `eaa024c`) does not contain it.** Secondary effects found
+    during integration and fixed there: ASN-023 (reconciliation failure/staleness), ASN-025
+    (Strategy Lab crash on a failed positions sample). MetaTrader5
     collection queries return an empty sequence on a successful query with no
     rows, but `None` on an error. `Mt5Gateway` converted `None` to `[]`
     for broker positions, pending orders, account history and market-data
@@ -235,6 +239,9 @@ how often two positions can coexist around US releases.
    executed; LOCAL_MT5_HANDOFF.md step G / docs/WINDOWS_DEPLOYMENT.md list
    the one-time manual checks.
 
+~~26.~~ FIXED 2026-09-28 on `fix/integrated-demo-safety-20260928` (`1863942`, test
+   `test_runtime.py::test_startup_clears_a_previous_runs_stale_global_block_diagnostics`): runtime startup clears
+   both modes' `*:global_block` diagnostics; the first cycle re-records any current block. Original:
 26. [SEVERITY: LOW, SUBSYSTEM: CLI/diagnostics] `why-no-trade` lists every uncleared BLOCKED
    `runtime_events` row regardless of mode. A PAPER run that stopped while blocked left
    `paper:global_block` ("BLOCK_KILL_SWITCH: kill switch ENGAGED", last seen 2026-09-25 18:26 UTC) open
@@ -244,6 +251,28 @@ how often two positions can coexist around US releases.
    the running mode's key.
 
 ## Fixed
+
+ASN-023 [HIGH, runtime/reconciliation] FIXED 2026-09-28 on `fix/integrated-demo-safety-20260928` (`2f4c860`,
+tests/test_runtime_reconciliation_freshness.py). `DemoRuntime.position_cycle` let a `run_reconciliation` exception
+escape before persisting anything, so the `reconciliation` state kept its last CLEAN verdict indefinitely and
+`global_entry_block` never checked its age. With PR #4 every failed broker collection read raises, so this path
+became reachable on any MT5 query error. Impact was bounded (the pre-send fresh read of positions/orders would
+itself raise, and a vanished local position is a blocking finding), but a CLEAN verdict could outlive the evidence
+behind it. Fix: failure persists `status=ERROR` + a visible `RECONCILIATION_FAILED` event (own dedup key, cleared
+on the next successful pass); a CLEAN verdict older than max(30 s, 10 x `position_cycle_seconds`) blocks new
+entries. Position management unchanged.
+
+ASN-024 [MEDIUM, PAPER/state] FIXED 2026-09-28 on `fix/integrated-demo-safety-20260928` (`cef4beb`,
+tests/test_paper_pending_entry_validation.py, 20 tests; 19 fail on the previous code). The 0.2.x lineage already
+persisted pending PAPER entries (migration 0019, `856aa04`), so PR #3 (based on the old `main`, conflicting
+0019 migration) is superseded rather than merged; its still-missing guarantees were ported: typed
+`PaperStateError` for malformed/non-finite pending JSON, a pending entry must equal the session cursor and belong
+to the session's symbol, never beside an open position (load and save), and `run_paper_cycle` rolls back on it.
+All 6 production PAPER sessions load unchanged under the new rules (checked on the 2026-09-28 backup).
+
+ASN-025 [LOW, dashboard] FIXED 2026-09-28 (`b799d41`). When the runtime's `positions_get` failed while the terminal
+stayed connected, telemetry held `"positions": null` and Strategy Lab's `live_floating_pnl` raised `TypeError`.
+It now reports NO_FRESH_BROKER_SAMPLE (unknown), never a crash and never "flat".
 
 - ~~ASN-016 [HIGH, runtime/symbols] A symbol whose market was closed at startup (quote stale / missing)
   was excluded from `RuntimeEngine.symbols` for the whole life of the process and never re-admitted,

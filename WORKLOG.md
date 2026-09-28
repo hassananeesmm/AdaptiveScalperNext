@@ -2696,3 +2696,54 @@ check or order send occurred.
 - Requested a fresh Windows verification after the post-send UNKNOWN hardening; the focused gate now explicitly
   includes `tests/test_execution_service.py` in addition to MT5 gateway, broker-chaos, reconciliation and
   runtime/restart suites. This entry intentionally records the verification boundary before the result.
+
+## Session: Integrated DEMO safety audit and integration (2026-09-28, 22:11- GMT+4, Windows laptop)
+
+- Initial state (read-only): main checkout detached at `eaa024c` (0.2.2), clean. DEMO runtime PIDs 16772/16800 and
+  dashboard 17036/17060 started 22:07 GMT+4 from the main checkout, i.e. running 0.2.2 (without ASN-022, PR #4,
+  or this session's fixes). Engine RUNNING/HEALTHY on {XAUUSD, BTCUSD}; schema 29; DB quick_check ok; kill switch
+  DISENGAGED (operator-set 2026-09-26, untouched); reconciliation CLEAN; 0 unresolved incidents; local: 0 open
+  positions, 0 active orders. Broker (read-only MT5): ICMarketsSC-Demo, trade_mode DEMO, 0 positions, 0 pending
+  orders, balance = equity 9,572.53 USD. `preflight`: READY_FOR_DEMO. Two MT5 installs on disk ("MetaTrader 5",
+  "MetaTrader 5 IC Markets Global"); `[mt5] terminal_path` was NOT pinned. No PAPER process was running.
+- Live evidence for the P0 premise (read-only): `positions_get(symbol=<unknown>)` -> `None`, `last_error()`
+  `(-4, 'Terminal: Not found')`; `copy_rates_from_pos(<unknown>)` -> `None`, `(-1, 'Terminal: Call failed')`.
+- Branch `fix/integrated-demo-safety-20260928` (worktree `.worktrees/integrated`) from `5f8b208` (0.2.3, newest
+  lineage; contains 0.2.1 multi-position, Strategy Lab, research, ASN-022). Ancestry: `main`, PR #1, PR #2,
+  `windows-validation`, `codex/deep-audit-20260925`, `feature/strategy-lab-attribution`,
+  `fix/multi-position-readiness` are all ancestors of the result.
+- `749f3ce` merge of PR #4 (`6f0497c`). Conflict: `Mt5Gateway.orders_get` -- kept the newer `server_time_rule`
+  argument and PR #4's `_require_query_result`; BUG_BACKLOG/WORKLOG union. All eight collection calls raise
+  `Mt5QueryError` on None and return [] on a real empty sequence (tests for both, all eight).
+- Secondary effects audited: reconciliation aborts before resolving incidents on a partial snapshot (good);
+  recovery/UNKNOWN resolution reads every source before mutating (good); close/stop modification re-read the
+  broker position every round so an exception cannot cause a resend (good); daily-loss input
+  (`_daily_realized_pnl`) previously read a failed history query as 0 loss -> now raises -> entry cycle aborts.
+  Found and fixed:
+  - ASN-023 `2f4c860`: failed reconciliation left the last CLEAN verdict in place forever; now ERROR + visible
+    event, and a CLEAN verdict older than max(30 s, 10 x position cycle) blocks entries.
+  - ASN-025 `b799d41`: Strategy Lab `live_floating_pnl` TypeError on `"positions": null` telemetry.
+- PR #3 not merged (based on 2026-09-21 `main`, migration 0019 collides with the lineage's own 0019 that already
+  persists pending entries, `856aa04`). Audit of the lineage vs PR #3's requirements: persistence, one-new-bar
+  processing, deterministic stale expiry, one-shot consumption incl. risk rejection, revalidation at fill,
+  session identity mismatch already present. Ported the missing pieces as ASN-024 `cef4beb` (typed
+  `PaperStateError`, cursor/symbol/open-position consistency on load and save, rollback). All 6 production PAPER
+  sessions load unchanged under the new rules.
+- `21efa86` chaos test: post-send `Mt5QueryError` -> durable UNKNOWN + UNKNOWN_OUTCOME incident, blocks, resubmit
+  of the same client id never sends, recovery resolves once, second recovery is a no-op (no duplicate position).
+- `3b6c270` pinned `[mt5] terminal_path` to the IC Markets install; `0f3f4ab` identity tests (other install and
+  missing terminal_info refused and detached). `1863942` BUG_BACKLOG 26: startup clears both modes' stale
+  global-block diagnostics (diagnostics only).
+- Each new test was run against the pre-fix code: 19/20 pending-entry tests and 2/3 reconciliation tests fail
+  there (the passing ones are positive controls).
+- DB: online backup `data/backups/pre_integrated_demo_safety_20260928T184900Z.sqlite3` (275 MB) from a read-only
+  source connection; source and backup quick_check ok, backup integrity_check ok, foreign_key_check 0, schema 29,
+  equal row counts (orders 314, positions 158, deals 316, broker_account_deals 2,224, incidents 12, journal 9,649,
+  paper sessions 6). No migration in this branch.
+- Security: tracked-file scan -- no DB/WAL/log/env/key/pickle files, no credential patterns; the DEMO login number
+  appears only in the two historical WORKLOG lines (flagged earlier, not rewritten) and in none of this branch's
+  commits. `pip check` clean; pip-audit (throwaway venv): no known vulnerabilities; pyflakes: no errors; bandit
+  -ll: 10 medium / 0 high, all pre-existing (fixed-name SQL, localhost dashboard probe), none in changed files.
+- Hard risk ceilings, ALLOWED_MODES, kill switch, risk/core/config code: unchanged (`git diff 5f8b208..HEAD` of
+  config/risk/core is empty apart from the terminal pin). Strategies, selector, costs and OOS: untouched.
+- Runtime, dashboard, kill switch and broker state: NOT touched. Nothing deployed.
