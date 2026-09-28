@@ -496,3 +496,45 @@ def test_kill_switch_engage_under_a_lock_fails_loudly_and_leaves_state_intact(db
         blocker.close()
     assert kill_switch_state(db).status.value == "DISENGAGED"
     assert engage_kill_switch(db, "after lock", "engine").status.value == "ENGAGED"
+
+
+# ---------------------------------------------------------------------------
+# post-send broker-truth failure with the real gateway's typed query error
+# (integration of PR #4 on fix/integrated-demo-safety-20260928)
+# ---------------------------------------------------------------------------
+
+def _unresolved_incidents(db, incident_type):
+    return db.execute(
+        "SELECT order_id FROM execution_incidents WHERE incident_type = ? AND resolved_at_utc IS NULL",
+        (incident_type,),
+    ).fetchall()
+
+
+def test_postsend_mt5_query_error_is_durable_unknown_with_incident_and_never_resent(db):
+    from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
+
+    gw = chaos_gateway().on(
+        "history_deals_get", raise_(Mt5QueryError("history_deals_get returned None (MT5 query error -10004)")), call=1,
+    )
+    outcome = _submit(db, gw)
+    assert outcome.status == UNKNOWN
+    order = get_order_by_client_request_id(db, CLIENT_ID)
+    assert order.state == OrderState.UNKNOWN  # durable, not only in the returned outcome
+    assert [r["order_id"] for r in _unresolved_incidents(db, "UNKNOWN_OUTCOME")] == [order.id]
+    assert has_dangerous_unresolved_unknown(db)  # blocks new exposure
+    assert get_open_positions(db) == []  # nothing invented while truth is unknown
+
+    # A second submission attempt under the same client request id must not send again.
+    again = _submit(db, gw)
+    assert again.status != FILLED
+    assert len(gw.order_send_calls) == 1
+    assert get_order_by_client_request_id(db, CLIENT_ID).state == OrderState.UNKNOWN
+
+    # Broker truth becomes readable: recovery resolves from real deal evidence, once.
+    first = apply_unknown_resolutions(db, gw, now_utc=NOW + 10)
+    assert first[0].new_state == "FILLED"
+    assert len(get_open_positions(db)) == 1
+    assert apply_unknown_resolutions(db, gw, now_utc=NOW + 20) == []  # idempotent
+    assert len(get_open_positions(db)) == 1  # no duplicate position
+    assert not has_dangerous_unresolved_unknown(db)
+    assert len(gw.order_send_calls) == 1
