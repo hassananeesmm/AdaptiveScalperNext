@@ -2586,3 +2586,13 @@ check or order send occurred.
   collection-returning MT5 query raises on `None` with `last_error()` context; a real empty tuple/list
   remains a valid empty result. Regression tests cover every affected collection method in both cases.
 - Running 0.2.0 remains untouched. Verification is pending before any deployment recommendation.
+
+- Secondary branch verification completed on GitHub Actions Windows / Python 3.13 with `ASN_DISABLE_MT5=1`:
+  compileall PASS; focused gateway/chaos/reconciliation/runtime set **150 passed / 0 failed**; complete suite
+  **1610 passed / 8 skipped / 0 failed**, with one pre-existing third-party warning. The skips are environment-
+  dependent MT5/browser-style cases expected under the offline CI guard; no failure was hidden or removed.
+- Diff review after verification: only the MT5 gateway, focused regression tests, audit docs and branch-only CI
+  workflow changed relative to 0.2.1; no risk limit, strategy, kill-switch, final-permission or LIVE/REAL-mode
+  code changed. Secret-pattern scan of the commit diff found no credential-like additions.
+- Deployment remains intentionally NOT performed from this session. The fix must first be verified with the
+  canonical Windows venv and then loaded only through a controlled operator-approved restart, preferably flat.

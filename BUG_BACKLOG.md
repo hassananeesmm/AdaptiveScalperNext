@@ -14,8 +14,10 @@ delete) once fixed, with the fixing commit/date noted.
     "broker confirms flat/no losses", including reconciliation/exposure and
     daily-realized-loss inputs. Fix: `Mt5QueryError` now fails closed on
     `None`; genuine empty sequences still map to `[]`. Current running
-    DEMO 0.2.0 does NOT contain this fix. Do not deploy until branch tests are
-    green and a controlled flat restart is approved.
+    DEMO 0.2.0 does NOT contain this fix. Windows/Python-3.13 branch verification
+    is GREEN at `c90c22d`: 150 focused passed; full suite 1610 passed, 8 skipped,
+    0 failed. Deployment still requires canonical local verification and a
+    controlled flat restart approved by the operator.
 
 24. [SEVERITY: LOW, SUBSYSTEM: CLI/performance] On the 275 MB Windows
     database, `status` took 4.487 s and `health` 5.576 s because both run a
