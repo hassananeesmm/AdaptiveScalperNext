@@ -46,6 +46,10 @@ server_time_rule = "UTC+2/US_DST"
 # ASN-010: pin the terminal on a computer with several MT5 installations (the
 # gateway refuses a terminal whose install folder differs). Example:
 # terminal_path = 'C:\Program Files\MetaTrader 5 IC Markets Global\terminal64.exe'   # TOML literal string (single quotes)
+# Pinned 2026-09-28: this laptop has two installs ("MetaTrader 5" and "MetaTrader 5
+# IC Markets Global"); the IC Markets one is attached to the ICMarketsSC-Demo account
+# (verified read-only: terminal_info().path, trade_mode=DEMO).
+terminal_path = 'C:\Program Files\MetaTrader 5 IC Markets Global\terminal64.exe'
 
 [runtime]
 # Directive section 16 cadences. Position reviews always run at least as
