@@ -2,7 +2,8 @@
 
 `run_paper_cycle()` is the ONLY entry point: reuses `backtest.engine
 .run_backtest()`'s exact production decision cores in its incremental
-(`resume_open_position`/`force_close_at_range_end=False`) mode, adds no
+(`resume_open_position`/`resume_pending_entry`/
+`force_close_at_range_end=False`) mode, adds no
 decision logic of its own. Its whole job is correct, safe WINDOWING and
 STATE PERSISTENCE across repeated calls:
 
@@ -12,8 +13,8 @@ STATE PERSISTENCE across repeated calls:
   supplies -- callers never have to get this right by hand (see
   `backtest.engine.run_backtest()`'s docstring for why re-passing already-
   processed bars is a real, dangerous bug, not just wasted work).
-- Persists newly-closed trades and the (possibly still-open) resumable
-  position atomically, so a crash between "decide" and "persist" is
+- Persists newly-closed trades plus resumable open-position, pending-entry
+  and regime state atomically, so a crash between "decide" and "persist" is
   always safely retryable (the same unprocessed window is re-derived
   deterministically next call; `paper.state.record_paper_trades()`'s
   idempotent INSERT OR IGNORE makes a retry a safe no-op).
