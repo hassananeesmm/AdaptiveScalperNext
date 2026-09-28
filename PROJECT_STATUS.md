@@ -23,6 +23,18 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
+## Audit checkpoint (2026-09-28, branch `fix/mt5-broker-truth-fail-closed-20260928`)
+
+The latest 0.2.1 source lineage was re-audited against the deployed DEMO execution path. A P0 fail-closed defect
+was found in `Mt5Gateway`: MetaTrader5 collection APIs use `None` for query failure, but the gateway converted
+that to `[]`, making "broker truth unavailable" indistinguishable from a successful empty positions/orders/
+history result. Commit `c90c22d` introduces `Mt5QueryError` and preserves genuine empty sequences while
+raising on `None`. Secondary Windows/Python-3.13 verification is GREEN: compileall passed; focused
+gateway/chaos/reconciliation/runtime tests **150 passed / 0 failed**; full suite **1610 passed / 8 skipped /
+0 failed** (one existing third-party warning). This fix is NOT deployed and the live Windows runtime/database/
+kill switch were not touched by this remote audit. The last documented deployed source remains 0.2.0
+(`7f604ab`); controlled local verification and a flat operator-approved restart are required before deployment.
+
 ## Project
 
 Adaptive Scalper Next

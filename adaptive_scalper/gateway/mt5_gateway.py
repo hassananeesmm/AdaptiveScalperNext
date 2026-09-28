@@ -60,6 +60,17 @@ class Mt5NotAvailableError(RuntimeError):
     """Raised when the MetaTrader5 package cannot be imported."""
 
 
+class Mt5QueryError(RuntimeError):
+    """A broker-truth read failed.
+
+    MetaTrader5's collection-returning APIs distinguish an EMPTY successful
+    result from an ERROR: successful "nothing found" is an empty sequence,
+    while None means the query failed and last_error() carries the reason.
+    Collapsing None into [] can hide real broker exposure/history, so runtime
+    safety callers must see the failure and stop rather than infer "flat".
+    """
+
+
 def _import_mt5():
     if os.environ.get("ASN_DISABLE_MT5") == "1":
         raise Mt5NotAvailableError(
@@ -384,6 +395,15 @@ class Mt5Gateway:
     def _server_dt(self, utc_ts: int) -> datetime:
         return datetime.fromtimestamp(utc_to_server(self.server_time_rule, utc_ts), tz=timezone.utc)
 
+    def _require_query_result(self, operation: str, raw):
+        if raw is not None:
+            return raw
+        code, message = self.last_error()
+        raise Mt5QueryError(
+            f"{operation} returned None (MT5 query error {code}: {message}); "
+            "broker truth is unknown, never equivalent to an empty result"
+        )
+
     def initialize(self) -> bool:
         self._mt5 = _import_mt5()
         if not self.terminal_path:
@@ -406,8 +426,8 @@ class Mt5Gateway:
         return _terminal_snapshot(raw) if raw is not None else None
 
     def symbols_get(self) -> list[SymbolSpec]:
-        raw = self._mt5.symbols_get()
-        return [_symbol_spec(s) for s in raw] if raw is not None else []
+        raw = self._require_query_result("symbols_get", self._mt5.symbols_get())
+        return [_symbol_spec(s) for s in raw]
 
     def symbol_info(self, name: str) -> SymbolSpec | None:
         raw = self._mt5.symbol_info(name)
@@ -418,9 +438,9 @@ class Mt5Gateway:
         return _tick(raw, self.server_time_rule) if raw is not None else None
 
     def copy_rates_from_pos(self, name: str, timeframe: int, start_pos: int, count: int) -> list[Bar]:
-        raw = self._mt5.copy_rates_from_pos(name, timeframe, start_pos, count)
-        if raw is None:
-            return []
+        raw = self._require_query_result(
+            "copy_rates_from_pos", self._mt5.copy_rates_from_pos(name, timeframe, start_pos, count)
+        )
         return [_bar(row, self.server_time_rule) for row in self._convertible(raw, name, "bar")]
 
     def copy_rates_range(
@@ -435,45 +455,41 @@ class Mt5Gateway:
         timeframe = getattr(self._mt5, attr)
         date_from = self._server_dt(date_from_utc)
         date_to = self._server_dt(date_to_utc)
-        raw = self._mt5.copy_rates_range(name, timeframe, date_from, date_to)
-        if raw is None:
-            return []
+        raw = self._require_query_result(
+            "copy_rates_range", self._mt5.copy_rates_range(name, timeframe, date_from, date_to)
+        )
         return [_bar(row, self.server_time_rule) for row in self._convertible(raw, name, "bar")]
 
     def copy_ticks_range(self, name: str, date_from_utc: int, date_to_utc: int) -> list[Tick]:
         date_from = self._server_dt(date_from_utc)
         date_to = self._server_dt(date_to_utc)
-        raw = self._mt5.copy_ticks_range(name, date_from, date_to, self._mt5.COPY_TICKS_ALL)
-        if raw is None:
-            return []
+        raw = self._require_query_result(
+            "copy_ticks_range", self._mt5.copy_ticks_range(name, date_from, date_to, self._mt5.COPY_TICKS_ALL)
+        )
         return [_tick_row(row, self.server_time_rule) for row in self._convertible(raw, name, "tick")]
 
     def history_orders_get(self, date_from_utc: int, date_to_utc: int) -> list[HistoricalOrder]:
         date_from = self._server_dt(date_from_utc)
         date_to = self._server_dt(date_to_utc)
-        raw = self._mt5.history_orders_get(date_from, date_to)
-        if raw is None:
-            return []
+        raw = self._require_query_result(
+            "history_orders_get", self._mt5.history_orders_get(date_from, date_to)
+        )
         return [_historical_order(row, self.server_time_rule) for row in raw]
 
     def history_deals_get(self, date_from_utc: int, date_to_utc: int) -> list[HistoricalDeal]:
         date_from = self._server_dt(date_from_utc)
         date_to = self._server_dt(date_to_utc)
-        raw = self._mt5.history_deals_get(date_from, date_to)
-        if raw is None:
-            return []
+        raw = self._require_query_result(
+            "history_deals_get", self._mt5.history_deals_get(date_from, date_to)
+        )
         return [_historical_deal(row, self.server_time_rule) for row in raw]
 
     def positions_get(self) -> list[PositionSnapshot]:
-        raw = self._mt5.positions_get()
-        if raw is None:
-            return []
+        raw = self._require_query_result("positions_get", self._mt5.positions_get())
         return [_position_snapshot(p) for p in raw]
 
     def orders_get(self) -> list[PendingOrderSnapshot]:
-        raw = self._mt5.orders_get()
-        if raw is None:
-            return []
+        raw = self._require_query_result("orders_get", self._mt5.orders_get())
         return [_pending_order_snapshot(o, self.server_time_rule) for o in raw]
 
     def order_check(self, request: OrderRequest) -> OrderCheckResult:

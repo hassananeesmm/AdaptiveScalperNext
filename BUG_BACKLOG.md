@@ -40,6 +40,19 @@ to exposure, but it records false incidents. Proposed fix (needs review; touches
 ASN-021 [INFO, portfolio/news] XAUUSD and BTCUSD are both USD-quoted: a single high-impact USD event blocks
 both enabled symbols at once (tests/test_two_position_news_and_protection.py). Expected behaviour; it limits
 how often two positions can coexist around US releases.
+27. [SEVERITY: P0, SUBSYSTEM: gateway/runtime] **SOURCE FIXED ON
+    `fix/mt5-broker-truth-fail-closed-20260928`, NOT DEPLOYED.** MetaTrader5
+    collection queries return an empty sequence on a successful query with no
+    rows, but `None` on an error. `Mt5Gateway` converted `None` to `[]`
+    for broker positions, pending orders, account history and market-data
+    collection calls. That can make "broker truth could not be read" look like
+    "broker confirms flat/no losses", including reconciliation/exposure and
+    daily-realized-loss inputs. Fix: `Mt5QueryError` now fails closed on
+    `None`; genuine empty sequences still map to `[]`. Current running
+    DEMO 0.2.0 does NOT contain this fix. Windows/Python-3.13 branch verification
+    is GREEN at `c90c22d`: 150 focused passed; full suite 1610 passed, 8 skipped,
+    0 failed. Deployment still requires canonical local verification and a
+    controlled flat restart approved by the operator.
 
 24. [SEVERITY: LOW, SUBSYSTEM: CLI/performance] On the 275 MB Windows
     database, `status` took 4.487 s and `health` 5.576 s because both run a

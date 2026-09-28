@@ -2654,3 +2654,45 @@ check or order send occurred.
   credentials or research data; 29 migrations (none new); ASN-022 fix and tests present; the DEMO login number only in
   the two historical WORKLOG lines (unchanged, flagged). `release_smoke_test.ps1`: PASSED (fresh venv, MT5 disabled,
   packaged suite 1665 passed / 9 skipped). Not deployed. All local branches pushed (none to `main`, no force).
+
+## Session: DEMO runtime audit — MT5 broker-truth None/empty ambiguity (2026-09-28)
+
+- Scope: read-only audit of the recorded running 0.2.0 runtime (`7f604ab`) and latest 0.2.1 source branch
+  (`fix/multi-position-readiness`, `ccaaa1a`). The live Windows process, database and kill switch were not
+  touched from this remote session.
+- Confirmed existing safety: PAPER/DEMO are the only modes; DEMO account is re-verified before execution;
+  `order_check` exceptions block before send; `order_send` exceptions become durable UNKNOWN with an
+  incident and are never blindly resent; operator kill switch is not auto-cleared.
+- New P0 finding: MetaTrader5 documents its collection APIs as returning `None` on error, while a successful
+  query with no rows is an empty sequence. The gateway collapsed both cases to `[]` for `positions_get`,
+  `orders_get`, `history_orders_get`, `history_deals_get` and market-data collection methods. This can
+  erase the distinction between "broker confirms no exposure/history" and "broker truth unavailable"; in
+  particular it can hide orphan exposure from reconciliation or make a failed daily-deal query look like zero
+  realized loss.
+- Fix isolated on `fix/mt5-broker-truth-fail-closed-20260928`: new typed `Mt5QueryError`; every
+  collection-returning MT5 query raises on `None` with `last_error()` context; a real empty tuple/list
+  remains a valid empty result. Regression tests cover every affected collection method in both cases.
+- Running 0.2.0 remains untouched. Verification is pending before any deployment recommendation.
+
+- Secondary branch verification completed on GitHub Actions Windows / Python 3.13 with `ASN_DISABLE_MT5=1`:
+  compileall PASS; focused gateway/chaos/reconciliation/runtime set **150 passed / 0 failed**; complete suite
+  **1610 passed / 8 skipped / 0 failed**, with one pre-existing third-party warning. The skips are environment-
+  dependent MT5/browser-style cases expected under the offline CI guard; no failure was hidden or removed.
+- Diff review after verification: only the MT5 gateway, focused regression tests, audit docs and branch-only CI
+  workflow changed relative to 0.2.1; no risk limit, strategy, kill-switch, final-permission or LIVE/REAL-mode
+  code changed. Secret-pattern scan of the commit diff found no credential-like additions.
+- Deployment remains intentionally NOT performed from this session. The fix must first be verified with the
+  canonical Windows venv and then loaded only through a controlled operator-approved restart, preferably flat.
+
+- Secondary-effect review of the fail-closed gateway change found one additional post-send edge before merge:
+  after a broker DONE/DONE_PARTIAL acknowledgement, `resolve_entry_fill_evidence()` can now raise
+  `Mt5QueryError` instead of returning empty evidence. Letting that normal exception bubble would leave the
+  local order in ACCEPTED/PARTIAL until a later reconciliation/restart. Hardened `execution/service.py` so
+  a normal exception during post-send broker-truth resolution immediately transitions the acknowledged order
+  to durable UNKNOWN, records an UNKNOWN_OUTCOME incident and returns without resending. New chaos regressions
+  cover DONE and DONE_PARTIAL acknowledgements plus later recovery/no-resend. Intentional process-crash
+  (`BaseException`) behavior is unchanged and remains covered by startup quarantine tests.
+
+- Requested a fresh Windows verification after the post-send UNKNOWN hardening; the focused gate now explicitly
+  includes `tests/test_execution_service.py` in addition to MT5 gateway, broker-chaos, reconciliation and
+  runtime/restart suites. This entry intentionally records the verification boundary before the result.
