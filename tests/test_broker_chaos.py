@@ -352,7 +352,9 @@ def test_partial_fill_history_query_error_is_quarantined_unknown_immediately(db)
     assert outcome.order.state == OrderState.UNKNOWN
     assert "partial-fill broker-truth resolution" in outcome.detail
     assert has_dangerous_unresolved_unknown(db)
-    assert len(gw.order_send_calls) == 1
+    # This path scripts the send result, so ChaosGateway's protocol-call
+    # counter is the authoritative "sent exactly once" observation.
+    assert gw.calls["order_send"] == 1
 
 
 def test_crash_during_close_is_reconciled_from_broker_truth_after_restart(db):
