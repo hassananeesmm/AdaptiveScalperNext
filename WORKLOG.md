@@ -2648,3 +2648,9 @@ check or order send occurred.
   + SL order) = RECOVERED, MT5 mapping incl. UTC+3 server time, DEMO pre-send check. Mutation check: forcing the
   predicate True fails 22 tests, forcing it False fails 9. Full suite 1665 passed, 9 skipped.
 - Not deployed; the live runtime (0.2.2) was not touched.
+- Release: `scripts\build_release.ps1 -Version 0.2.3 -SkipTests` at `b9e779a` (full suite 1665 passed / 9 skipped on
+  that code), `dist\AdaptiveScalperNext-0.2.3.zip` (worktree `dist\`), 416 entries, sha256
+  b2fbc4edabe60bf0f7fd072b0ec5e0f2d309c1ba6c3a3a9a67ccdf4de3c89936. Zip audit: no databases, WAL, logs, keys, .env,
+  credentials or research data; 29 migrations (none new); ASN-022 fix and tests present; the DEMO login number only in
+  the two historical WORKLOG lines (unchanged, flagged). `release_smoke_test.ps1`: PASSED (fresh venv, MT5 disabled,
+  packaged suite 1665 passed / 9 skipped). Not deployed. All local branches pushed (none to `main`, no force).

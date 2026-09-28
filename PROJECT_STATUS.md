@@ -52,7 +52,7 @@ XAUUSD entry was correctly blocked by correlation (only 7 aligned samples just a
 re-entry rule. The operator restarted the runtime with the launcher at 19:56 GMT+4 on 2026-09-27 (same 0.2.2 code;
 startup recovery CLEAN, no position open across the gap). New finding ASN-022 (false ORPHAN_BROKER_ORDER on broker
 stop-loss executions): FIXED on the branch 2026-09-28 (TESTED-FAKE, 29 tests, full suite 1665 passed / 9 skipped),
-NOT DEPLOYED (the running 0.2.2 still shows the one-cycle false block; deploying needs a flat, operator-approved restart).
+Built as release 0.2.3 (`b9e779a`, smoke test PASSED), NOT DEPLOYED (the running 0.2.2 still shows the one-cycle false block; deploying needs a flat, operator-approved restart, started from the operator's own launcher).
 
 ## Current phase (2026-09-27 afternoon, branch `feature/independent-strategy-research`, release 0.2.2 (see deployment above))
 
