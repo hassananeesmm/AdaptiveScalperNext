@@ -2605,3 +2605,7 @@ check or order send occurred.
   to durable UNKNOWN, records an UNKNOWN_OUTCOME incident and returns without resending. New chaos regressions
   cover DONE and DONE_PARTIAL acknowledgements plus later recovery/no-resend. Intentional process-crash
   (`BaseException`) behavior is unchanged and remains covered by startup quarantine tests.
+
+- Requested a fresh Windows verification after the post-send UNKNOWN hardening; the focused gate now explicitly
+  includes `tests/test_execution_service.py` in addition to MT5 gateway, broker-chaos, reconciliation and
+  runtime/restart suites. This entry intentionally records the verification boundary before the result.
