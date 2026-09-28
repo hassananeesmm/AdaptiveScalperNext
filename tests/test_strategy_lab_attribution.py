@@ -261,6 +261,8 @@ def test_unrealized_pnl_is_live_broker_floating_and_never_realized(db):
     (60, True, [{"broker_position_id": "12", "floating_pnl": 1.0}], "NO_FRESH_BROKER_SAMPLE"),
     (0, False, [{"broker_position_id": "12", "floating_pnl": 1.0}], "NO_FRESH_BROKER_SAMPLE"),
     (0, True, [{"broker_position_id": "99", "floating_pnl": 1.0}], "POSITION_NOT_IN_BROKER_SAMPLE"),
+    # positions_get failed (Mt5QueryError) while the terminal stayed connected: unknown, never a crash or "flat"
+    (0, True, None, "NO_FRESH_BROKER_SAMPLE"),
 ])
 def test_unrealized_pnl_is_not_available_rather_than_guessed(db, age, connected, positions, note):
     runtime_trade(db, position=12, status="OPEN")

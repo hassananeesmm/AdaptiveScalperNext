@@ -139,7 +139,8 @@ def live_floating_pnl(conn: sqlite3.Connection, now: int | None = None) -> dict[
     now = int(time.time()) if now is None else now
     telemetry = _json(row[0])
     if (not isinstance(telemetry, dict) or now - int(row[1]) > LIVE_FLOATING_MAX_AGE_SECONDS
-            or not (telemetry.get("terminal") or {}).get("connected") or "positions" not in telemetry):
+            or not (telemetry.get("terminal") or {}).get("connected")
+            or not isinstance(telemetry.get("positions"), list)):  # None = the broker query failed: unknown
         return None
     return {str(p["broker_position_id"]): p["floating_pnl"] for p in telemetry["positions"]
             if isinstance(p.get("floating_pnl"), (int, float))}
