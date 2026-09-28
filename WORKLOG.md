@@ -1880,3 +1880,14 @@ backtest/persistence tests, and the full pytest suite are green.
 No LIVE mode, kill-switch clearing, strategy-threshold weakening, risk
 relaxation, broker send path, credentials, runtime DB, logs or generated
 market/model artifacts were introduced by this checkpoint.
+
+
+Follow-up diff review before merge found and corrected one transactional
+edge case introduced by the new typed validation: `run_paper_cycle()`
+previously rolled back only `sqlite3.Error`, while
+`save_session_state()` can now fail closed with `PaperStateError`.
+The PAPER transaction now rolls back on either exception class. A
+regression test deliberately raises `PaperStateError` after
+`record_paper_trades()` and verifies both that the connection is no
+longer in a transaction and that the earlier trade writes were rolled
+back. This remains verification-pending in the canonical Windows suite.

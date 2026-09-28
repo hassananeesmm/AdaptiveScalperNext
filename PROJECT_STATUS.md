@@ -69,8 +69,9 @@ itself.
 
 Local RAG (`adaptive_scalper/rag/`, advisory-only) and ML/self-learning
 OBSERVER-STAGE machinery (`adaptive_scalper/learning/` — lifecycle,
-registry, promotion gate, drift response; no real model training yet)
-are both implemented and tested.
+registry, temporal/purged training, promotion gate and drift response)
+are both implemented and tested. ML remains observer-only and has no
+execution authority.
 
 Backtest/walk-forward/OOS/Monte Carlo infrastructure and real ML
 OBSERVER-stage training now exist (see their sections below). NOT yet

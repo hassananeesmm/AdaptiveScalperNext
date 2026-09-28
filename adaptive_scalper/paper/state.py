@@ -1,4 +1,4 @@
-"""PAPER session persistence (migration `0018_paper`).
+"""PAPER session persistence (migrations `0018_paper` + `0019_paper_pending_entry`).
 
 A "session" is one (canonical_symbol, resolution) PAPER run, identified
 by a caller-chosen `session_key` (default `f"PAPER:{symbol}:{resolution}"`).
@@ -31,7 +31,6 @@ class PaperStateError(ValueError):
     and replaced by a fresh decision, because that would change causal
     behavior after restart.
     """
-
 
 
 @dataclass(frozen=True)

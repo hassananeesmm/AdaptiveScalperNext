@@ -41,7 +41,12 @@ from adaptive_scalper.backtest.types import (
     SimulatedTrade,
 )
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
-from adaptive_scalper.paper.state import get_or_create_session, record_paper_trades, save_session_state
+from adaptive_scalper.paper.state import (
+    PaperStateError,
+    get_or_create_session,
+    record_paper_trades,
+    save_session_state,
+)
 
 
 @dataclass(frozen=True)
@@ -117,7 +122,7 @@ def run_paper_cycle(
             regime_tracker_state=result.final_regime_tracker_state, now_utc=now,
         )
         conn.execute("COMMIT")
-    except sqlite3.Error:
+    except (sqlite3.Error, PaperStateError):
         conn.execute("ROLLBACK")
         raise
 

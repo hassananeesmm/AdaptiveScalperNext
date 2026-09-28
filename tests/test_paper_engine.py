@@ -8,7 +8,7 @@ from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.types import BacktestConfig
 from adaptive_scalper.gateway.types import Bar, SymbolSpec, SymbolTradeMode
 from adaptive_scalper.paper.engine import run_paper_cycle
-from adaptive_scalper.paper.state import get_paper_trades, get_session
+from adaptive_scalper.paper.state import PaperStateError, get_paper_trades, get_session
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.simulation.fill_model import FillAssumptions
 
@@ -218,3 +218,25 @@ def test_run_paper_cycle_recovers_pending_entry_after_restart_and_fills_once(tmp
     assert repeated.ran is False
     assert repeated.equity == second.equity
     conn.close()
+
+
+def test_run_paper_cycle_rolls_back_transaction_on_paper_state_error(db, monkeypatch):
+    import adaptive_scalper.paper.engine as paper_engine
+
+    bars = _trending_bars(200)
+
+    def fail_state_save(*args, **kwargs):
+        raise PaperStateError("synthetic fail-closed persistence validation")
+
+    monkeypatch.setattr(paper_engine, "save_session_state", fail_state_save)
+    with pytest.raises(PaperStateError, match="synthetic fail-closed"):
+        paper_engine.run_paper_cycle(
+            db, bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+            config=_config(), now_utc=2_000_000_000,
+        )
+
+    assert db.in_transaction is False
+    # record_paper_trades() runs before save_session_state(); rollback must
+    # undo those writes too, proving the cycle is atomic on typed state
+    # validation failures as well as sqlite3 failures.
+    assert get_paper_trades(db, f"PAPER:{CANONICAL_SYMBOL}:{RESOLUTION}") == []
