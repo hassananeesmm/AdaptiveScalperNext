@@ -23,7 +23,40 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Audit checkpoint (2026-09-28, branch `fix/mt5-broker-truth-fail-closed-20260928`)
+## Current phase (2026-09-28 night, branch `fix/integrated-demo-safety-20260928`) -- NOT DEPLOYED
+
+**Running (untouched):** release 0.2.2 (`eaa024c`) DEMO runtime + dashboard, started 22:07 GMT+4 from the main
+checkout; schema 29; kill switch DISENGAGED (operator-set 2026-09-26); reconciliation CLEAN; 0 unresolved
+incidents. At 18:55 UTC the runtime opened a natural DEMO position (BTCUSD BUY 0.16, initial risk 23.12 USD
+~0.24 % of equity, `microstructure_acceleration`), which it is managing. The running 0.2.2 does NOT contain PR #4,
+ASN-022, or ASN-023/024/025.
+
+**Integration branch** `fix/integrated-demo-safety-20260928` = 0.2.3 (`5f8b208`) + PR #4 (`6f0497c`, merged
+`749f3ce`) + this session's fixes. Contains every earlier lineage (PR #1, PR #2, windows-validation,
+deep audit, Strategy Lab, 0.2.1 multi-position ASN-016/017, research, ASN-022). PR #3 is superseded: the lineage
+already persisted pending PAPER entries; its missing guarantees were ported (ASN-024).
+
+| Item | Evidence level |
+|---|---|
+| P0 `Mt5QueryError` on every MT5 collection query (None != empty) | source reviewed; fake tests (both cases x 8 calls); **live MT5 read-only** (unknown-symbol query -> `Mt5QueryError`, real empty history -> `[]`) |
+| Post-send broker-truth failure -> durable UNKNOWN + incident, never resent, idempotent recovery | source reviewed; fake/chaos tests |
+| ASN-023 failed/stale reconciliation blocks new entries | source reviewed; fake runtime tests (fail on old code) |
+| ASN-024 pending PAPER entry typed validation + rollback | source reviewed; fake tests (fail on old code); 6 production sessions load (DB copy) |
+| ASN-025 Strategy Lab on a failed positions sample | fake test |
+| BUG_BACKLOG 26 stale global-block diagnostics cleared at startup | fake test |
+| `[mt5] terminal_path` pinned to the IC Markets install; other install refused | fake tests; **live read-only** (pinned accepted, the other install refused) |
+| Everything above | **NOT live-DEMO-verified** (no order sent in this session); NOT DEPLOYED |
+
+Verification at `b9cc0cb`: **1716 passed / 9 skipped / 0 failed** (compileall OK; skips: 8 opt-in live-MT5 tests -- run separately with `ASN_LIVE_MT5=1`: **8 passed**, read-only -- and 1 symlink test this Windows user lacks the privilege for). Focused critical set (21 listed suites + 3 new) at `0f3f4ab`:
+502 passed / 0 failed.
+
+Deployment (operator decision): only when the broker is flat (the current BTCUSD position closes by its own
+SL/TP/management), then a controlled restart of runtime + dashboard onto this branch's release; no migration.
+
+## Audit checkpoint (2026-09-28, branch `fix/mt5-broker-truth-fail-closed-20260928`) -- historical
+
+(Superseded by the section above. Its "deployed source remains 0.2.0" was already stale: 0.2.2 was deployed
+2026-09-27 evening, see below.)
 
 The latest 0.2.1 source lineage was re-audited against the deployed DEMO execution path. A P0 fail-closed defect
 was found in `Mt5Gateway`: MetaTrader5 collection APIs use `None` for query failure, but the gateway converted

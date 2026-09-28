@@ -2747,3 +2747,13 @@ check or order send occurred.
 - Hard risk ceilings, ALLOWED_MODES, kill switch, risk/core/config code: unchanged (`git diff 5f8b208..HEAD` of
   config/risk/core is empty apart from the terminal pin). Strategies, selector, costs and OOS: untouched.
 - Runtime, dashboard, kill switch and broker state: NOT touched. Nothing deployed.
+- Verification at `b9cc0cb` (canonical venv): compileall OK; full suite **1716 passed / 9 skipped / 0 failed**
+  (14 min; was 1665/9 at 0.2.3; +51 tests incl. PR #4's). Skips: 8 opt-in live-MT5 tests, then run with
+  `ASN_LIVE_MT5=1`: 8 passed (read-only); 1 symlink test (no privilege). Focused critical set at `0f3f4ab`: 502
+  passed. An earlier full run started mid-change was stopped and is not counted.
+- Live MT5 read-only with the integrated code: pinned terminal accepted, other install refused (its initialize
+  failed with IPC error and no second terminal was launched); DEMO; positions/orders/history queries work; quotes
+  fresh under UTC+2/US_DST; unknown-symbol query -> `Mt5QueryError`; empty history range -> `[]`.
+- During the session the running 0.2.2 runtime opened a natural DEMO position (BTCUSD BUY 0.16, 18:55:02 UTC,
+  risk 23.12 USD, `microstructure_acceleration`, reconciliation CLEAN). Not touched. Deployment must wait until
+  the broker is flat and the operator approves.

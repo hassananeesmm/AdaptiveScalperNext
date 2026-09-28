@@ -1,6 +1,27 @@
 # QA report
 
-## Windows laptop QA (2026-09-25) -- current
+## Integrated DEMO safety verification (2026-09-28) -- current
+
+Branch `fix/integrated-demo-safety-20260928`, canonical Windows venv (`C:\AdaptiveScalperNext\.venv`, Python 3.13).
+Evidence levels are kept separate: (1) source reviewed, (2) deterministic/fake tests, (3) Windows local,
+(4) live MT5 DEMO.
+
+- compileall: OK.
+- Focused critical set (the 21 suites named in the audit brief + 3 new): **502 passed / 0 failed** at `0f3f4ab`.
+- Full suite: **1716 passed / 9 skipped / 0 failed** (compileall OK; skips: 8 opt-in live-MT5 tests -- run separately with `ASN_LIVE_MT5=1`: **8 passed**, read-only -- and 1 symlink test this Windows user lacks the privilege for) at `b9cc0cb`.
+- New regression tests were run against the pre-fix code and fail there (19/20 pending-entry, 2/3
+  reconciliation-freshness; the passing ones are positive controls).
+- Live MT5, read-only (level 3, not level 4 -- no order was sent): pinned IC Markets terminal initialises;
+  the other install is refused; account trade_mode DEMO; terminal/account trading permitted; positions_get,
+  orders_get, history_deals_get, history_orders_get work; XAUUSD/BTCUSD/GBPJPY quotes fresh under
+  `UTC+2/US_DST` (age ~ -0.9 s, i.e. within tolerance); an unknown-symbol `copy_rates_from_pos` raises
+  `Mt5QueryError` (MT5 `(-1, 'Terminal: Call failed')`) and a genuinely empty history range returns `[]`.
+- DB: online backup of the production DB, quick_check/integrity ok, 0 FK violations, schema 29, equal counts; no
+  migration pending.
+- Security: tracked-file secret scan clean; pip check clean; pip-audit no known vulnerabilities; pyflakes no
+  errors; bandit -ll 10 medium / 0 high, all pre-existing.
+
+## Windows laptop QA (2026-09-25) -- historical
 
 - **Machine:** Windows 11 Home 10.0.26200, `.venv` Python 3.13.15, SQLite 3.50.4,
   MetaTrader5 5.0.6180, terminal build 6191 (IC Markets Global), account ICMarketsSC-Demo

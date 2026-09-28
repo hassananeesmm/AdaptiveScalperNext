@@ -129,6 +129,11 @@ cloud verified the launchers statically only.
 Start the MetaTrader 5 terminal yourself and log in to the **DEMO** account. Enable
 **Algo Trading** in the terminal only when you reach step U; PAPER does not need it.
 
+Since 2026-09-28 `config/default.toml` pins `[mt5] terminal_path` to
+`C:\Program Files\MetaTrader 5 IC Markets Global\terminal64.exe` (this laptop also has a plain
+"MetaTrader 5" install). Start **that** terminal; the runtime, `doctor` and `preflight` refuse any
+other attached terminal. If the IC Markets terminal is moved or reinstalled, update the pin first.
+
 ## I. Verify that the connected account is DEMO
 
 ```bat
