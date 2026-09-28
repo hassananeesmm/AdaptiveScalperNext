@@ -9,6 +9,7 @@ in `backtest.engine.run_backtest()`, reused unchanged by `paper/engine.py`.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import time
 from dataclasses import asdict, dataclass
@@ -61,6 +62,62 @@ def _serialize_pending_entry(state: PendingEntryState | None) -> str | None:
     )
 
 
+def _require_json_int(payload: dict, key: str) -> int:
+    value = payload[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{key} must be an integer")
+    return value
+
+
+def _validate_entry_features(features) -> dict[str, float | None] | None:
+    if features is None:
+        return None
+    if not isinstance(features, dict):
+        raise TypeError("pending entry entry_features must be an object or null")
+    validated: dict[str, float | None] = {}
+    for key, value in features.items():
+        if not isinstance(key, str):
+            raise TypeError("pending entry feature names must be strings")
+        if value is None:
+            validated[key] = None
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"pending entry feature {key!r} must be numeric or null")
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError(f"pending entry feature {key!r} must be finite")
+        validated[key] = numeric
+    return validated
+
+
+def _validate_signal(signal: StrategySignal) -> None:
+    if not isinstance(signal.strategy_key, str) or not signal.strategy_key:
+        raise TypeError("pending entry strategy_key must be a non-empty string")
+    if isinstance(signal.strategy_version, bool) or not isinstance(signal.strategy_version, int) or signal.strategy_version <= 0:
+        raise TypeError("pending entry strategy_version must be a positive integer")
+    if not isinstance(signal.canonical_symbol, str) or not signal.canonical_symbol:
+        raise TypeError("pending entry canonical_symbol must be a non-empty string")
+    for name in ("raw_confidence", "stop_distance", "target_distance"):
+        value = getattr(signal, name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            raise TypeError(f"pending entry signal {name} must be a finite number")
+    if isinstance(signal.expected_duration_seconds, bool) or not isinstance(signal.expected_duration_seconds, int):
+        raise TypeError("pending entry expected_duration_seconds must be an integer")
+    if signal.expected_duration_seconds <= 0:
+        raise ValueError("pending entry expected_duration_seconds must be positive")
+    for name in ("entry_method", "regime", "rationale"):
+        if not isinstance(getattr(signal, name), str):
+            raise TypeError(f"pending entry signal {name} must be a string")
+    if isinstance(signal.feature_schema_version, bool) or not isinstance(signal.feature_schema_version, int):
+        raise TypeError("pending entry feature_schema_version must be an integer")
+    if signal.feature_schema_version <= 0:
+        raise ValueError("pending entry feature_schema_version must be positive")
+    if isinstance(signal.data_timestamp, bool) or not isinstance(signal.data_timestamp, int):
+        raise TypeError("pending entry signal data_timestamp must be an integer")
+    if signal.data_timestamp <= 0:
+        raise ValueError("pending entry signal data_timestamp must be positive")
+
+
 def _deserialize_pending_entry(raw: str | None) -> PendingEntryState | None:
     if raw is None:
         return None
@@ -75,14 +132,14 @@ def _deserialize_pending_entry(raw: str | None) -> PendingEntryState | None:
         signal_payload = payload["signal"]
         if not isinstance(signal_payload, dict):
             raise TypeError("pending entry signal must be an object")
-        features = payload.get("entry_features")
-        if features is not None and not isinstance(features, dict):
-            raise TypeError("pending entry entry_features must be an object or null")
+        signal = StrategySignal(**signal_payload)
+        _validate_signal(signal)
+        features = _validate_entry_features(payload.get("entry_features"))
         return PendingEntryState(
-            signal=StrategySignal(**signal_payload),
+            signal=signal,
             entry_features=features,
-            signal_bar_time_utc=int(payload["signal_bar_time_utc"]),
-            expires_at_utc=int(payload["expires_at_utc"]),
+            signal_bar_time_utc=_require_json_int(payload, "signal_bar_time_utc"),
+            expires_at_utc=_require_json_int(payload, "expires_at_utc"),
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise PaperStateError(f"invalid pending PAPER entry state: {exc}") from exc

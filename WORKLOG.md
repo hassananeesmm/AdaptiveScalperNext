@@ -1898,3 +1898,6 @@ Additional analysis on 2026-09-28 found two P0-adjacent correctness gaps before 
 Second, `get_or_create_session()` previously reused an existing custom `session_key` even when the caller supplied a different canonical symbol or resolution. That is unsafe for durable pending state because a signal/time-expiry created for one market/timeframe could be resumed under another. Existing PAPER session identity is now immutable/fail-closed: symbol or resolution mismatch raises `PaperStateError`. Regression tests cover both mismatch dimensions.
 
 These corrections remain on the draft P0 branch and remain canonically unverified until the Windows virtual-environment suite is run.
+
+
+Malformed pending-state decoding was tightened further during the same review: persisted timestamps are no longer coerced with `int(...)`, and feature/signal numeric fields must be correctly typed and finite. This prevents corrupted values such as string timestamps, fractional timestamps, booleans-as-numbers, or NaN/Infinity feature values from being silently accepted or reaching deterministic sizing. New persistence tests exercise string-timestamp and non-finite-feature rejection. Canonical Windows verification remains pending.
