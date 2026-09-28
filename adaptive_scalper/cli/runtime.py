@@ -163,7 +163,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     gw = open_gateway(cfg)
     now = int(time.time())
     try:
-        report = run_reconciliation(conn, gw, f"cli-reconcile:{now}", now_utc=now)
+        report = run_reconciliation(conn, gw, f"cli-reconcile:{now}", now_utc=now, own_magic=cfg.runtime.magic)
         resolutions = apply_unknown_resolutions(conn, gw, now_utc=now)
     finally:
         gw.shutdown()

@@ -21,7 +21,13 @@ ASN-020 [MEDIUM, research/costs] The selector's cost estimate is 28–36 % below
 BTCUSD/XAUUSD (expected cost R 0.14–0.17 vs realized 0.22–0.24). Smaller than ASN-018 but it biases toward
 short, frequent trades.
 
-ASN-022 [LOW, execution/reconciliation — found live 2026-09-28, NOT changed] Every recorded
+~~ASN-022 [LOW, execution/reconciliation — found live 2026-09-28]~~ FIXED 2026-09-28 on
+`feature/independent-strategy-research` (tests/test_asn022_protective_close.py, 29 tests; not yet deployed). The
+broker's own SL/TP execution order is now `PROTECTIVE_CLOSE_IN_PROGRESS` (non-blocking, journaled) only when ALL hold:
+MT5 market order type (0/1), `position_id` = one of our locally OPEN positions, opposite direction, volume <= the
+position, magic = our runtime magic, comment `[sl`/`[tp` (a stop-out `[so` stays blocking), created <= 30 s ago
+(-5 s clock skew). Anything else, or any missing field, is still a blocking ORPHAN_BROKER_ORDER; callers without our
+magic (execution/close.py) keep the strict behaviour. Original finding: every recorded
 `ORPHAN_BROKER_ORDER` (11 since 2026-09-25, e.g. orders 1966998439, 1967283529, 1968707491) is the broker's OWN
 stop-loss execution order for one of our positions (deal comment `[sl ...]`, our magic, OUT deal in the same
 second). MT5 lists that market order in `orders_get()` for an instant; reconciliation classifies it as an orphan,

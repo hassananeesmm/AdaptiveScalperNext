@@ -63,6 +63,18 @@ ORPHAN_BROKER_ORDER = "ORPHAN_BROKER_ORDER"
 MISSING_LOCAL_ORDER = "MISSING_LOCAL_ORDER"
 PENDING_MISMATCH = "PENDING_MISMATCH"
 
+# ASN-022: when a broker-side SL/TP triggers, MT5 creates a MARKET order that
+# closes our position and lists it in orders_get() for an instant. It is not an
+# unknown pending order; it is informational and non-blocking, but ONLY while
+# every condition in `is_protective_close_in_progress()` holds and only for
+# PROTECTIVE_CLOSE_GRACE_SECONDS after its creation -- after that it is an
+# ordinary orphan again and blocks.
+PROTECTIVE_CLOSE_IN_PROGRESS = "PROTECTIVE_CLOSE_IN_PROGRESS"
+PROTECTIVE_CLOSE_GRACE_SECONDS = 30
+_CLOCK_SKEW_TOLERANCE_SECONDS = 5
+_MT5_MARKET_ORDER_TYPES = frozenset({0, 1})           # ORDER_TYPE_BUY, ORDER_TYPE_SELL
+_PROTECTIVE_CLOSE_COMMENT_PREFIXES = ("[sl", "[tp")   # broker-generated; a stop-out "[so" stays blocking
+
 CLEAN = "CLEAN"
 BLOCKING_MISMATCH = "BLOCKING_MISMATCH"
 RECOVERED = "RECOVERED"
@@ -210,10 +222,50 @@ def reconcile_positions(
     return findings
 
 
+def is_protective_close_in_progress(
+    order: PendingOrderSnapshot,
+    local_open_positions: dict[str, LocalPositionRecord],
+    *,
+    now_utc: int | None,
+    own_magic: int | None,
+) -> bool:
+    """True only for the broker's own SL/TP execution order of one of OUR
+    open positions, seen within its grace window. Every condition must hold;
+    anything unknown (missing field, no magic to compare, no clock) is False,
+    so the order stays a blocking orphan (fail closed)."""
+    if own_magic is None or now_utc is None:
+        return False
+    if order.order_type not in _MT5_MARKET_ORDER_TYPES:
+        return False
+    if not order.position_id or order.time_setup_utc is None:
+        return False
+    position = local_open_positions.get(str(order.position_id))
+    if position is None:
+        return False
+    if order.direction == position.direction:        # a close runs opposite to the position
+        return False
+    if order.volume > position.volume + 1e-9:
+        return False
+    if order.magic != own_magic:
+        return False
+    if not (order.comment or "").strip().lower().startswith(_PROTECTIVE_CLOSE_COMMENT_PREFIXES):
+        return False
+    age = now_utc - order.time_setup_utc
+    return -_CLOCK_SKEW_TOLERANCE_SECONDS <= age <= PROTECTIVE_CLOSE_GRACE_SECONDS
+
+
 def reconcile_pending_orders(
     local_active_orders: list[OrderRecord],
     broker_pending: list[PendingOrderSnapshot],
+    *,
+    local_open_positions: dict[str, LocalPositionRecord] | None = None,
+    now_utc: int | None = None,
+    own_magic: int | None = None,
 ) -> list[ReconciliationFinding]:
+    """`local_open_positions` (broker position id -> record), `now_utc` and
+    `own_magic` enable the ASN-022 classification of the broker's own SL/TP
+    execution order as `PROTECTIVE_CLOSE_IN_PROGRESS` (non-blocking). Without
+    them every unknown broker order is an `ORPHAN_BROKER_ORDER`, as before."""
     """External review finding #12: broker truth wins for PENDING
     (RESTING) orders too, exactly like open positions. `local_active_orders`
     is every locally-tracked order still in a non-terminal state with a
@@ -230,6 +282,14 @@ def reconcile_pending_orders(
 
     for oid, bp in broker_by_id.items():
         if oid not in local_by_id:
+            if is_protective_close_in_progress(bp, local_open_positions or {}, now_utc=now_utc, own_magic=own_magic):
+                findings.append(ReconciliationFinding(
+                    PROTECTIVE_CLOSE_IN_PROGRESS, oid,
+                    f"broker-side protective close of our position {bp.position_id} in progress "
+                    f"({bp.symbol} {bp.direction} vol={bp.volume}, comment {bp.comment!r}); non-blocking for "
+                    f"{PROTECTIVE_CLOSE_GRACE_SECONDS}s after creation",
+                ))
+                continue
             findings.append(ReconciliationFinding(
                 ORPHAN_BROKER_ORDER, oid,
                 f"broker reports a pending order ({bp.symbol} {bp.direction} vol={bp.volume}) with no "
@@ -618,6 +678,7 @@ def run_reconciliation(
     now_utc: int | None = None,
     history_lookback_seconds: int = 7 * 24 * 3600,
     journal_clean: bool = True,
+    own_magic: int | None = None,
 ) -> ReconciliationReport:
     """The real reconciliation entry point (execution-safety review
     finding #4, upgraded in round 2 to perform ACTUAL repair). Meant to
@@ -684,13 +745,21 @@ def run_reconciliation(
     # -- broker truth via orders_get() against every local active order.
     broker_pending = gateway.orders_get()
     local_active_orders = {str(o.broker_order_id): o for o in get_active_orders(conn)}
-    order_findings = reconcile_pending_orders(list(local_active_orders.values()), broker_pending)
+    # ASN-022: `local_positions` is this run's snapshot taken BEFORE any
+    # recovery above, i.e. the positions that were ours and open at the
+    # start of the run -- the only positions a protective close may act on.
+    order_findings = reconcile_pending_orders(
+        list(local_active_orders.values()), broker_pending,
+        local_open_positions=local_positions, now_utc=now, own_magic=own_magic,
+    )
 
     recovered_order_ids: list[str] = []
     unrepaired_order_ids: list[str] = []
     blocking_order_findings: list[ReconciliationFinding] = []
 
     for f in order_findings:
+        if f.finding_type == PROTECTIVE_CLOSE_IN_PROGRESS:
+            continue  # informational only; journaled below, never an incident
         if f.finding_type != MISSING_LOCAL_ORDER:
             blocking_order_findings.append(f)
             continue
@@ -723,7 +792,8 @@ def run_reconciliation(
     else:
         status = CLEAN
 
-    if status == CLEAN and not journal_clean:
+    protective_seen = any(f.finding_type == PROTECTIVE_CLOSE_IN_PROGRESS for f in order_findings)
+    if status == CLEAN and not journal_clean and not protective_seen:
         # The runtime reconciles every ~1s; a CLEAN pass with nothing found
         # is not a decision worth an immutable journal row each time.
         return ReconciliationReport(

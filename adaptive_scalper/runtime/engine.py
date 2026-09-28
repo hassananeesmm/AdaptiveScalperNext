@@ -238,7 +238,8 @@ class RuntimeEngine:
         recovery = {}
         if self.mode == "DEMO":
             recovery["quarantined_orders"] = quarantine_interrupted_submissions(self.conn, now_utc=now)
-            report = run_reconciliation(self.conn, self.gateway, f"startup-reconcile:{now}", now_utc=now)
+            report = run_reconciliation(self.conn, self.gateway, f"startup-reconcile:{now}", now_utc=now,
+                                        own_magic=self.config.runtime.magic)
             put_state(self.conn, "reconciliation", {"status": report.status, "at": now,
                                                     "unrepaired_positions": report.unrepaired_position_ids,
                                                     "unrepaired_orders": report.unrepaired_order_ids}, now_utc=now)

@@ -2632,3 +2632,19 @@ check or order send occurred.
 - ASN-022 found: all 11 recorded ORPHAN_BROKER_ORDER findings are broker stop-loss execution orders of our own
   positions seen transiently in orders_get(); one-cycle BLOCKING_MISMATCH each. Documented with a proposed fix; the
   live reconciliation logic was not changed.
+
+## Session: ASN-022 fix (2026-09-28, operator request "implement the ASN-022 fix with tests")
+
+- `PendingOrderSnapshot` gains optional `order_type`, `position_id`, `time_setup_utc` (Mt5Gateway maps MT5 `type`,
+  `position_id`, `time_setup` via the server-time rule; older positional constructors unchanged and never qualify).
+- `execution/reconciliation.py`: `is_protective_close_in_progress()` + `PROTECTIVE_CLOSE_IN_PROGRESS` (non-blocking,
+  no incident, journaled even on CLEAN runs); bounded by `PROTECTIVE_CLOSE_GRACE_SECONDS = 30`, after which the order is
+  a blocking orphan again. Positions considered are this run's pre-recovery OPEN snapshot. `run_reconciliation(...,
+  own_magic=)` passed by the DEMO position cycle, engine startup and CLI `reconcile`; the DEMO pre-send read-only check
+  uses the same rule; `execution/close.py` (no magic) keeps the strict behaviour.
+- Tests: tests/test_asn022_protective_close.py (29): the live pattern, every condition individually required (15
+  negative cases), grace boundary and skew, genuine orphan beside a protective close, run_reconciliation CLEAN + audit
+  journal, lingering order blocks then clears, strict callers unchanged, the live race (position gone + closing deal
+  + SL order) = RECOVERED, MT5 mapping incl. UTC+3 server time, DEMO pre-send check. Mutation check: forcing the
+  predicate True fails 22 tests, forcing it False fails 9. Full suite 1665 passed, 9 skipped.
+- Not deployed; the live runtime (0.2.2) was not touched.

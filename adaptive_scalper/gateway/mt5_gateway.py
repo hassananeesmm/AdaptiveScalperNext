@@ -241,7 +241,9 @@ def _position_snapshot(raw) -> PositionSnapshot:
     )
 
 
-def _pending_order_snapshot(raw) -> PendingOrderSnapshot:
+def _pending_order_snapshot(raw, rule: str) -> PendingOrderSnapshot:
+    position_id = getattr(raw, "position_id", 0)
+    time_setup = getattr(raw, "time_setup", 0)
     return PendingOrderSnapshot(
         broker_order_id=str(raw.ticket),
         symbol=raw.symbol,
@@ -250,6 +252,9 @@ def _pending_order_snapshot(raw) -> PendingOrderSnapshot:
         price=raw.price_open,
         magic=raw.magic,
         comment=raw.comment,
+        order_type=raw.type,
+        position_id=str(position_id) if position_id else None,
+        time_setup_utc=server_to_utc(rule, time_setup) if time_setup else None,
     )
 
 
@@ -469,7 +474,7 @@ class Mt5Gateway:
         raw = self._mt5.orders_get()
         if raw is None:
             return []
-        return [_pending_order_snapshot(o) for o in raw]
+        return [_pending_order_snapshot(o, self.server_time_rule) for o in raw]
 
     def order_check(self, request: OrderRequest) -> OrderCheckResult:
         mt5_request = _build_mt5_request(self._mt5, request)

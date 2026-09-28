@@ -41,6 +41,7 @@ from adaptive_scalper.execution.reconciliation import (
     CLEAN,
     get_open_positions,
     has_dangerous_unresolved_unknown,
+    PROTECTIVE_CLOSE_IN_PROGRESS,
     reconcile_pending_orders,
     reconcile_positions,
     run_reconciliation,
@@ -184,9 +185,16 @@ class DemoRuntime:
         journaling -- used inside the pre-send evidence builder."""
         broker = [BrokerPositionSnapshot(p.broker_position_id, p.symbol, p.direction, p.volume)
                   for p in self.gateway.positions_get()]
-        findings = reconcile_positions(get_open_positions(self.conn), broker)
-        findings += reconcile_pending_orders(get_active_orders(self.conn), self.gateway.orders_get())
-        return CLEAN if not findings else "BLOCKING_MISMATCH"
+        local_open = get_open_positions(self.conn)
+        findings = reconcile_positions(local_open, broker)
+        findings += reconcile_pending_orders(
+            get_active_orders(self.conn), self.gateway.orders_get(),
+            local_open_positions={p.broker_position_id: p for p in local_open}, now_utc=self.now(),
+            own_magic=self.config.runtime.magic,
+        )
+        # ASN-022: a broker SL/TP execution of our own position is informational, never a block
+        blocking = [f for f in findings if f.finding_type != PROTECTIVE_CLOSE_IN_PROGRESS]
+        return CLEAN if not blocking else "BLOCKING_MISMATCH"
 
     def global_entry_block(self, now: int) -> tuple[str, str] | None:
         """Directive section 45: when new entries are globally blocked,
@@ -257,7 +265,7 @@ class DemoRuntime:
     def position_cycle(self) -> None:
         now = self.now()
         report = run_reconciliation(self.conn, self.gateway, f"reconcile:{now // 86400}", now_utc=now,
-                                    journal_clean=False)
+                                    journal_clean=False, own_magic=self.config.runtime.magic)
         put_state(self.conn, "reconciliation", {"status": report.status, "at": now,
                                                 "unrepaired_positions": report.unrepaired_position_ids,
                                                 "unrepaired_orders": report.unrepaired_order_ids}, now_utc=now)

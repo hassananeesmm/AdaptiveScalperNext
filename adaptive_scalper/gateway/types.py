@@ -288,3 +288,9 @@ class PendingOrderSnapshot:
     price: float
     magic: int
     comment: str
+    # ASN-022: what reconciliation needs to recognise the broker's own SL/TP
+    # execution order for one of our positions. None = not reported, which
+    # never qualifies for any exception (fail closed).
+    order_type: int | None = None          # raw MT5 ENUM_ORDER_TYPE (0 BUY / 1 SELL = market)
+    position_id: str | None = None         # the position this order acts on, if any
+    time_setup_utc: int | None = None      # order creation, real UTC
