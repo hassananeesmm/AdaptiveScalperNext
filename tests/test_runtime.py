@@ -350,3 +350,21 @@ def test_scheduler_runs_due_tasks_in_priority_order_and_isolates_failures():
     now[0] = 4.0
     scheduler.run_due()
     assert order[-2:] == ["position", "entry"]
+
+
+def test_startup_clears_a_previous_runs_stale_global_block_diagnostics(tmp_path):
+    """BUG_BACKLOG 26: a PAPER run that stopped while blocked must not show
+    its kill-switch block as the current DEMO block after a restart."""
+    from adaptive_scalper.runtime.state import record_event
+
+    clock = FakeClock(START_AT)
+    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
+    _operator_bootstrap(conn)
+    record_event(conn, "BLOCKED", "entry", "GLOBAL_BLOCK", "BLOCK_KILL_SWITCH: kill switch ENGAGED",
+                 dedup_key="paper:global_block", now_utc=START_AT - 86400)
+    open_blocks = ("SELECT COUNT(*) FROM runtime_events WHERE dedup_key = 'paper:global_block' "
+                   "AND cleared_at_utc IS NULL")
+    assert conn.execute(open_blocks).fetchone()[0] == 1
+    engine.startup()
+    assert conn.execute(open_blocks).fetchone()[0] == 0
+    assert kill_switch_state(conn).status.value == "DISENGAGED"  # diagnostics only; the switch is untouched

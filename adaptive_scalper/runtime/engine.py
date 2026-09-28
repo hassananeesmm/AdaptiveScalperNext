@@ -189,6 +189,12 @@ class RuntimeEngine:
         if integrity != "ok":
             raise RuntimeStartupError(f"database integrity check failed: {integrity}")
         kill = get_kill_switch_state(self.conn)  # READ only -- never bootstrapped or cleared here
+        # BUG_BACKLOG 26: a previous run's global-block diagnostics (either mode)
+        # describe that run, not this one; the first cycle re-records any current
+        # block. Diagnostics only -- entry decisions never read these rows.
+        from adaptive_scalper.runtime.state import clear_event
+        for stale_key in ("paper:global_block", "entry:global_block"):
+            clear_event(self.conn, stale_key, now_utc=now)
         try:
             require_utc_time_basis(self.conn)
         except TimeBasisError as exc:
