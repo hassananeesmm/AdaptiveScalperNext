@@ -10,6 +10,7 @@ here is plain SQLite CRUD -- the actual decision logic lives in
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import time
 from dataclasses import asdict, dataclass
@@ -22,6 +23,60 @@ from adaptive_scalper.backtest.types import (
     RiskState,
     SimulatedTrade,
 )
+
+
+class PaperStateError(ValueError):
+    """Durable PAPER state is malformed or internally inconsistent.
+
+    Fail closed: a corrupt deferred entry is never silently dropped or
+    re-decided, because that would change causal behaviour after a restart
+    (ported from PR #3, fix/paper-pending-entry-persistence-20260928)."""
+
+
+_PENDING_NUMERIC_FIELDS = ("stop_distance", "target_distance", "raw_confidence")
+
+
+def _load_pending_entry(raw: str | None) -> PendingEntryState | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise TypeError("pending entry payload must be a JSON object")
+        pending = PendingEntryState(**payload)
+        if pending.direction not in ("BUY", "SELL"):
+            raise ValueError(f"direction must be BUY or SELL, got {pending.direction!r}")
+        if not isinstance(pending.strategy_key, str) or not pending.strategy_key:
+            raise TypeError("strategy_key must be a non-empty string")
+        for name in _PENDING_NUMERIC_FIELDS:
+            value = getattr(pending, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise TypeError(f"{name} must be a finite number")
+        if pending.stop_distance <= 0 or pending.target_distance <= 0:
+            raise ValueError("stop_distance and target_distance must be positive")
+        if isinstance(pending.signal_time_utc, bool) or not isinstance(pending.signal_time_utc, int):
+            raise TypeError("signal_time_utc must be an integer")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise PaperStateError(f"invalid pending PAPER entry state: {exc}") from exc
+    return pending
+
+
+def _check_pending_consistency(
+    pending: PendingEntryState | None, open_position: OpenPositionState | None, *,
+    cursor: int | None, canonical_symbol: str | None,
+) -> None:
+    if pending is None:
+        return
+    if open_position is not None:
+        raise PaperStateError("a PAPER session cannot hold both an open position and a pending entry")
+    if cursor is None or pending.signal_time_utc != cursor:
+        raise PaperStateError(
+            f"stale pending PAPER entry: signal bar {pending.signal_time_utc} != session cursor {cursor}"
+        )
+    if pending.canonical_symbol is not None and canonical_symbol is not None             and pending.canonical_symbol != canonical_symbol:
+        raise PaperStateError(
+            f"pending PAPER entry is for {pending.canonical_symbol!r}, session is {canonical_symbol!r}"
+        )
 
 
 @dataclass(frozen=True)
@@ -47,11 +102,17 @@ def _row_to_session(row: sqlite3.Row) -> PaperSessionState:
         RegimeTrackerState(row["regime_confirmed"], row["regime_candidate"], row["regime_candidate_count"])
         if row["regime_confirmed"] is not None else None
     )
+    open_position = load("open_position_json", OpenPositionState)
+    pending_entry = _load_pending_entry(row["pending_entry_json"])
+    _check_pending_consistency(
+        pending_entry, open_position, cursor=row["last_processed_bar_time_utc"],
+        canonical_symbol=row["canonical_symbol"],
+    )
     return PaperSessionState(
         session_key=row["session_key"], canonical_symbol=row["canonical_symbol"], resolution=row["resolution"],
         equity=row["equity"], last_processed_bar_time_utc=row["last_processed_bar_time_utc"],
-        open_position=load("open_position_json", OpenPositionState), regime_tracker_state=regime_tracker_state,
-        pending_entry=load("pending_entry_json", PendingEntryState), risk_state=load("risk_state_json", RiskState),
+        open_position=open_position, regime_tracker_state=regime_tracker_state,
+        pending_entry=pending_entry, risk_state=load("risk_state_json", RiskState),
         config_fingerprint=row["config_fingerprint"], config_json=row["config_json"],
     )
 
@@ -110,6 +171,16 @@ def save_session_state(
     now_utc: int | None = None,
 ) -> None:
     now = now_utc if now_utc is not None else int(time.time())
+    if pending_entry is not None:
+        row = conn.execute(
+            "SELECT canonical_symbol FROM paper_session_state WHERE session_key = ?", (session_key,)
+        ).fetchone()
+        if row is None:
+            raise PaperStateError(f"unknown PAPER session {session_key!r}")
+        _check_pending_consistency(
+            pending_entry, open_position, cursor=last_processed_bar_time_utc,
+            canonical_symbol=row["canonical_symbol"],
+        )
 
     def dump(value) -> str | None:
         return json.dumps(asdict(value)) if value is not None else None

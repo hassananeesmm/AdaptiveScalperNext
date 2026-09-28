@@ -46,6 +46,7 @@ from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
 from adaptive_scalper.backtest.types import BacktestConfig, EntryRejection, OpenPositionState, SimulatedTrade
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
 from adaptive_scalper.paper.state import (
+    PaperStateError,
     bind_session_config,
     get_or_create_session,
     record_paper_trades,
@@ -180,7 +181,7 @@ def run_paper_cycle(
             pending_entry=result.pending_entry, risk_state=result.final_risk_state, now_utc=now,
         )
         conn.execute("COMMIT")
-    except sqlite3.Error:
+    except (sqlite3.Error, PaperStateError):
         conn.execute("ROLLBACK")
         raise
 
