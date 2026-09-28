@@ -129,6 +129,12 @@ def get_or_create_session(
 ) -> PaperSessionState:
     existing = get_session(conn, session_key)
     if existing is not None:
+        if existing.canonical_symbol != canonical_symbol or existing.resolution != resolution:
+            raise PaperStateError(
+                "PAPER session identity mismatch: existing session "
+                f"{session_key!r} is {existing.canonical_symbol}/{existing.resolution}, "
+                f"requested {canonical_symbol}/{resolution}"
+            )
         return existing
     now = now_utc if now_utc is not None else int(time.time())
     conn.execute(

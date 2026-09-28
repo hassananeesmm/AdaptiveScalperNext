@@ -240,3 +240,28 @@ def test_run_paper_cycle_rolls_back_transaction_on_paper_state_error(db, monkeyp
     # undo those writes too, proving the cycle is atomic on typed state
     # validation failures as well as sqlite3 failures.
     assert get_paper_trades(db, f"PAPER:{CANONICAL_SYMBOL}:{RESOLUTION}") == []
+
+
+def test_run_paper_cycle_consumes_persisted_pending_entry_with_exactly_one_new_bar(db):
+    bars = _trending_bars(120)
+    cutoff = _first_pending_cutoff(bars)
+    first = run_paper_cycle(
+        db, bars[:cutoff], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_000_000,
+    )
+    assert first.pending_entry is not None
+
+    # Only ONE genuinely-new M5 bar is now available. The PAPER engine
+    # must process it immediately; waiting for a second bar would leave
+    # simulated exposure wrong for a full bar interval.
+    second = run_paper_cycle(
+        db, bars[:cutoff + 1], CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=_config(), now_utc=2_000_000_300,
+    )
+    assert second.ran is True
+    expected_fill_time = bars[cutoff].time
+    observed_entry_times = {t.entry_time_utc for t in second.new_trades}
+    if second.open_position is not None:
+        observed_entry_times.add(second.open_position.entry_time_utc)
+    assert expected_fill_time in observed_entry_times
+    assert second.pending_entry is None or second.pending_entry.signal_bar_time_utc >= expected_fill_time

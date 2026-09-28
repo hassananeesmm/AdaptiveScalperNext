@@ -204,3 +204,23 @@ def test_get_session_fails_closed_on_persisted_stale_pending_entry(db):
     )
     with pytest.raises(PaperStateError, match="stale pending PAPER entry"):
         get_session(db, "PAPER:XAUUSD:M5")
+
+
+def test_get_or_create_session_rejects_reusing_key_for_a_different_symbol(db):
+    get_or_create_session(
+        db, "PAPER:shared", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000,
+    )
+    with pytest.raises(PaperStateError, match="identity mismatch"):
+        get_or_create_session(
+            db, "PAPER:shared", "GBPJPY", "M5", initial_equity=10_000.0, now_utc=2000,
+        )
+
+
+def test_get_or_create_session_rejects_reusing_key_for_a_different_resolution(db):
+    get_or_create_session(
+        db, "PAPER:shared", "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000,
+    )
+    with pytest.raises(PaperStateError, match="identity mismatch"):
+        get_or_create_session(
+            db, "PAPER:shared", "XAUUSD", "M1", initial_equity=10_000.0, now_utc=2000,
+        )

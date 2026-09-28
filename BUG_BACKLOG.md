@@ -16,7 +16,8 @@ delete) once fixed, with the fixing commit/date noted.
    Branch `fix/paper-pending-entry-persistence-20260928` adds typed
    `PendingEntryState`, migration `0019_paper_pending_entry`,
    versioned fail-closed serialization, restart recovery, deterministic
-   bar-time expiry, one-shot cancellation on expiry/risk rejection, and
+   bar-time expiry, one-shot cancellation on expiry/risk rejection,
+   immediate one-new-bar resume processing, immutable session identity, and
    regression tests for creation/persistence/reload/fill/restart/
    duplicate prevention/malformed/stale/conflicting state. Do NOT strike
    this item or merge it as complete until the canonical Windows

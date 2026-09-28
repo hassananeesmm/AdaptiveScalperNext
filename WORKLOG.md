@@ -1891,3 +1891,10 @@ regression test deliberately raises `PaperStateError` after
 `record_paper_trades()` and verifies both that the connection is no
 longer in a transaction and that the earlier trade writes were rolled
 back. This remains verification-pending in the canonical Windows suite.
+
+
+Additional analysis on 2026-09-28 found two P0-adjacent correctness gaps before merge. First, the legacy `feature_lookback + 3` minimum-window guard meant a resumed PAPER session with exactly one genuinely-new bar still no-op'd until a SECOND bar arrived. A persisted pending entry would eventually be filled retrospectively at the correct first-new-bar open, but PAPER exposure/state was one full bar late (for example about 5 minutes on M5). Now that final-bar decisions are durable, the causal minimum is `feature_lookback + 2`: trailing context plus one decision/management bar. Both `run_backtest()` and `run_paper_cycle()` use that minimum, with a regression proving a persisted pending entry is consumed immediately when exactly one new bar arrives.
+
+Second, `get_or_create_session()` previously reused an existing custom `session_key` even when the caller supplied a different canonical symbol or resolution. That is unsafe for durable pending state because a signal/time-expiry created for one market/timeframe could be resumed under another. Existing PAPER session identity is now immutable/fail-closed: symbol or resolution mismatch raises `PaperStateError`. Regression tests cover both mismatch dimensions.
+
+These corrections remain on the draft P0 branch and remain canonically unverified until the Windows virtual-environment suite is run.

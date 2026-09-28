@@ -419,3 +419,23 @@ def test_run_backtest_rejects_simultaneous_resumed_position_and_pending_entry():
             config=_config(), resume_open_position=with_position.open_position,
             resume_pending_entry=with_pending.pending_entry, force_close_at_range_end=False,
         )
+
+
+def test_run_backtest_accepts_exactly_one_decision_bar_after_context():
+    config = _config()
+    bars = _flat_bars(config.feature_lookback + 2)
+    result = run_backtest(
+        bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+        config=config, now_utc=2_000_000_000, force_close_at_range_end=False,
+    )
+    assert result.range_end_utc == bars[-1].time
+
+
+def test_run_backtest_rejects_when_no_decision_bar_exists_after_context():
+    config = _config()
+    bars = _flat_bars(config.feature_lookback + 1)
+    with pytest.raises(ValueError, match=r"feature_lookback\+2"):
+        run_backtest(
+            bars, CANONICAL_SYMBOL, RESOLUTION, _symbol_spec(),
+            config=config, now_utc=2_000_000_000,
+        )

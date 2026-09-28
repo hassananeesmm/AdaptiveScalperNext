@@ -97,7 +97,7 @@ def run_paper_cycle(
         bars, last_processed_bar_time_utc=session.last_processed_bar_time_utc,
         feature_lookback=config.feature_lookback,
     )
-    if len(window) < config.feature_lookback + 3:
+    if len(window) < config.feature_lookback + 2:
         return PaperCycleResult(
             ran=False, session_key=key, new_trades=(), equity=session.equity,
             open_position=session.open_position, pending_entry=session.pending_entry,

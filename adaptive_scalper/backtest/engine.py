@@ -144,9 +144,16 @@ def run_backtest(
     target using OLD price action, which is nonsensical. `adaptive_scalper
     .paper.engine` owns this windowing so callers never have to get it
     right by hand."""
-    if len(bars) < config.feature_lookback + 3:
+    # With resumable pending-entry state, the final processed bar no
+    # longer needs an in-range successor just to preserve its decision:
+    # one decision bar after the trailing context is sufficient. This is
+    # also required by PAPER mode so the very first genuinely-new bar can
+    # manage a resumed position or consume a deferred entry immediately,
+    # rather than waiting for a second new bar.
+    minimum_bars = config.feature_lookback + 2
+    if len(bars) < minimum_bars:
         raise ValueError(
-            f"need at least feature_lookback+3 ({config.feature_lookback + 3}) bars, got {len(bars)}"
+            f"need at least feature_lookback+2 ({minimum_bars}) bars, got {len(bars)}"
         )
     if resume_open_position is not None and resume_pending_entry is not None:
         raise ValueError("cannot resume an open position and a pending entry simultaneously")
