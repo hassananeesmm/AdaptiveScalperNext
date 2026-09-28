@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaptive_scalper.gateway.mt5_gateway import _build_mt5_request, _order_send_result
+from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway, Mt5QueryError, _build_mt5_request, _order_send_result
 from adaptive_scalper.gateway.types import OrderAction, OrderRequest
 
 
@@ -192,3 +192,85 @@ def test_order_send_result_never_invents_a_position_id():
     assert result.broker_position_id is None
     assert result.broker_order_id == "777"
     assert result.broker_deal_id == "555"
+
+
+# --------------------------------------------------------------------------
+# Broker-truth query failures must never masquerade as "empty"
+# --------------------------------------------------------------------------
+
+class _QueryStub:
+    TIMEFRAME_M5 = 5
+    COPY_TICKS_ALL = 0
+
+    def __init__(self, result):
+        self.result = result
+
+    def last_error(self):
+        return (-10004, "No IPC connection")
+
+    def symbols_get(self):
+        return self.result
+
+    def copy_rates_from_pos(self, *args):
+        return self.result
+
+    def copy_rates_range(self, *args):
+        return self.result
+
+    def copy_ticks_range(self, *args):
+        return self.result
+
+    def history_orders_get(self, *args):
+        return self.result
+
+    def history_deals_get(self, *args):
+        return self.result
+
+    def positions_get(self):
+        return self.result
+
+    def orders_get(self):
+        return self.result
+
+
+def _gateway_with_query_result(result):
+    gateway = Mt5Gateway()
+    gateway._mt5 = _QueryStub(result)
+    return gateway
+
+
+@pytest.mark.parametrize(
+    ("operation", "call"),
+    [
+        ("symbols_get", lambda gw: gw.symbols_get()),
+        ("copy_rates_from_pos", lambda gw: gw.copy_rates_from_pos("XAUUSD", 5, 0, 10)),
+        ("copy_rates_range", lambda gw: gw.copy_rates_range("XAUUSD", "M5", 1000, 2000)),
+        ("copy_ticks_range", lambda gw: gw.copy_ticks_range("XAUUSD", 1000, 2000)),
+        ("history_orders_get", lambda gw: gw.history_orders_get(1000, 2000)),
+        ("history_deals_get", lambda gw: gw.history_deals_get(1000, 2000)),
+        ("positions_get", lambda gw: gw.positions_get()),
+        ("orders_get", lambda gw: gw.orders_get()),
+    ],
+)
+def test_collection_query_none_raises_fail_closed(operation, call):
+    gateway = _gateway_with_query_result(None)
+    with pytest.raises(Mt5QueryError, match=operation):
+        call(gateway)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda gw: gw.symbols_get(),
+        lambda gw: gw.copy_rates_from_pos("XAUUSD", 5, 0, 10),
+        lambda gw: gw.copy_rates_range("XAUUSD", "M5", 1000, 2000),
+        lambda gw: gw.copy_ticks_range("XAUUSD", 1000, 2000),
+        lambda gw: gw.history_orders_get(1000, 2000),
+        lambda gw: gw.history_deals_get(1000, 2000),
+        lambda gw: gw.positions_get(),
+        lambda gw: gw.orders_get(),
+    ],
+)
+def test_collection_query_real_empty_result_remains_empty(call):
+    gateway = _gateway_with_query_result(())
+    assert call(gateway) == []

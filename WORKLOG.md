@@ -2566,3 +2566,23 @@ check or order send occurred.
   1593 passed / 9 skipped). 0.2.0 artifacts untouched.
 - Not done (needs operator approval): stop/restart of the DEMO runtime + dashboard onto 0.2.1. Kill switch not
   touched.
+
+
+## Session: DEMO runtime audit — MT5 broker-truth None/empty ambiguity (2026-09-28)
+
+- Scope: read-only audit of the recorded running 0.2.0 runtime (`7f604ab`) and latest 0.2.1 source branch
+  (`fix/multi-position-readiness`, `ccaaa1a`). The live Windows process, database and kill switch were not
+  touched from this remote session.
+- Confirmed existing safety: PAPER/DEMO are the only modes; DEMO account is re-verified before execution;
+  `order_check` exceptions block before send; `order_send` exceptions become durable UNKNOWN with an
+  incident and are never blindly resent; operator kill switch is not auto-cleared.
+- New P0 finding: MetaTrader5 documents its collection APIs as returning `None` on error, while a successful
+  query with no rows is an empty sequence. The gateway collapsed both cases to `[]` for `positions_get`,
+  `orders_get`, `history_orders_get`, `history_deals_get` and market-data collection methods. This can
+  erase the distinction between "broker confirms no exposure/history" and "broker truth unavailable"; in
+  particular it can hide orphan exposure from reconciliation or make a failed daily-deal query look like zero
+  realized loss.
+- Fix isolated on `fix/mt5-broker-truth-fail-closed-20260928`: new typed `Mt5QueryError`; every
+  collection-returning MT5 query raises on `None` with `last_error()` context; a real empty tuple/list
+  remains a valid empty result. Regression tests cover every affected collection method in both cases.
+- Running 0.2.0 remains untouched. Verification is pending before any deployment recommendation.
