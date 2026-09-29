@@ -2839,3 +2839,35 @@ check or order send occurred.
   retired strategies listed as `retired_permanently`; packaged suite 1767 passed / 9 skipped). NOT DEPLOYED.
   Supersedes 0.2.5 (never deployed). Deployment needs operator approval (flat broker, verified backup -- migration
   0030 --, launcher restart).
+
+## 2026-09-29 -- release 0.2.6 DEPLOYED to the IC Markets DEMO runtime (operator-approved)
+
+- Pre-deployment (read-only): main checkout clean at `eaa024c` (0.2.2); runtime and dashboard already stopped
+  (ENGINE_STOPPED 10:18:23 UTC, not by this session); kill switch DISENGAGED (untouched throughout). Broker flat
+  (live read-only query 10:25:54 and again 10:28:53 UTC: 0 positions, 0 orders, balance = equity 9,642.29 USD);
+  local: 0 open positions, 0 active/UNKNOWN orders, 0 unresolved incidents, last reconciliation CLEAN.
+- TESTED-LIVE-MT5-READONLY on the 0.2.6 code: `ASN_LIVE_MT5=1` live tests **8 passed** (account/terminal snapshots,
+  DEMO account, DEMO gate, symbols_get, canonical resolution, live tick, server-time rule); pinned-terminal identity
+  (ASN-010) accepted the IC Markets install; server ICMarketsSC-Demo; XAUUSD/BTCUSD resolved (GBPJPY resolves at the
+  broker but is not in `market.symbols`: not executable).
+- Package re-hashed: `dist\AdaptiveScalperNext-0.2.6.zip` sha256 66bcac8d...60d2 (match).
+- Backup: `data\backups\pre_0_2_6_deploy_20260929T102622Z.sqlite3` (sqlite3 online backup API from a read-only
+  source connection, 10:26:22 UTC): integrity_check ok, schema 29, 275,210,240 bytes, sha256
+  6ec861f62df60e0de9a6c5f2175dbdc3ebe4d5709caa56ef2d6eb0c3b4d7bb0f; WAL empty. Re-checked (quick_check ok) before
+  the switch.
+- Migration rehearsal on a disposable copy with the 0.2.6 code: applied [30] only, schema 30, integrity ok,
+  `close_requests` + partial unique index present, all 44 pre-existing tables row-for-row identical (fingerprint over
+  every row); 0.2.6 `doctor` in DEMO mode on the migrated copy: OK (DEMO, clock VERIFIED, real-money DISABLED).
+- Deployment (operator approval in session): main checkout `git checkout --detach e3b1250` (clean); the operator
+  started `START DEMO + DASHBOARD.bat` (runtime and dashboard started 10:30:13 UTC); migration 0030 applied by the
+  normal machinery.
+- Post-start gate (10:31 UTC, read from the runtime DB/dashboard): schema 30, quick_check ok; engine RUNNING (DEMO,
+  heartbeat 1 s, no degraded components); broker_truth AVAILABLE; reconciliation CLEAN (no unrepaired
+  positions/orders); startup recovery: 0 quarantined orders, 0 UNKNOWN resolutions, 0 close resolutions; account
+  trade mode DEMO, server ICMarketsSC-Demo, terminal "MetaTrader 5 IC Markets Global" build 6230 connected; kill
+  switch DISENGAGED; server clock VERIFIED; active symbols BTCUSD + XAUUSD (none excluded/awaiting); risk limits
+  0.25 / 0.75 / 2.0 / 5.0 %, 2 positions, 1 per symbol; 0 open positions, 0 active/UNKNOWN orders, 0 unresolved
+  incidents, 0 close_requests; no global entry block (both symbols waiting for a closed bar); dashboard HTTP 200;
+  `test_v1_strategy_freeze.py` + `test_config.py` 42 passed at `e3b1250`.
+- Evidence classes: ASN-026/027 remain TESTED-FAKE for their failure paths; no natural DEMO trade, close, broker-truth
+  outage or UNKNOWN has occurred yet under 0.2.6 (TESTED-LIVE-DEMO evidence pending natural operation).

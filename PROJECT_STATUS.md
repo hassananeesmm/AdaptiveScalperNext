@@ -23,7 +23,16 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-09-29, release 0.2.6 BUILT and smoke-tested) -- NOT DEPLOYED
+## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
+
+**Running: 0.2.6 (`e3b1250`)**, DEMO runtime + dashboard started by the operator's launcher 10:30:13 UTC after a
+verified online backup (`dataackups\pre_0_2_6_deploy_20260929T102622Z.sqlite3`, integrity ok) and a successful
+migration rehearsal; production schema **30**. Post-start: engine RUNNING, broker_truth AVAILABLE, reconciliation
+CLEAN, account DEMO (ICMarketsSC-Demo, pinned IC Markets terminal), symbols BTCUSD + XAUUSD, kill switch DISENGAGED
+(untouched), 0 positions / orders / UNKNOWN / unresolved incidents / close_requests. Live read-only MT5 tests 8/8.
+ASN-026/027 failure paths: TESTED-FAKE; TESTED-LIVE-DEMO evidence pending natural operation (see WORKLOG).
+
+## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
 
 **Release 0.2.6** = `e3b1250` (branch `fix/0.2.6-broker-truth-degradation`, PR #5): `dist\AdaptiveScalperNext-0.2.6.zip`,
 428 entries, sha256 66bcac8dfbc02b371a6db07883812367aae958e882fadeb2cdaa149c89bd60d2; build gate 1767 passed /
