@@ -34,6 +34,67 @@ class PaperStateError(ValueError):
 
 
 _PENDING_NUMERIC_FIELDS = ("stop_distance", "target_distance", "raw_confidence")
+_PENDING_OPTIONAL_NUMERIC_FIELDS = ("estimated_cost_price", "expected_net_edge_price")
+_PENDING_OPTIONAL_STRING_FIELDS = ("canonical_symbol", "entry_method", "fingerprint")
+_PENDING_OPTIONAL_POSITIVE_INT_FIELDS = ("strategy_version", "expected_duration_seconds")
+
+# Serialization version of `pending_entry_json`. Rows written before the
+# version existed carry no `state_version` key and are decoded as version 1
+# (their field set is identical); any OTHER explicit value -- including a
+# JSON boolean, which Python would otherwise accept as int 1 -- fails closed.
+PENDING_ENTRY_STATE_VERSION = 1
+_VERSION_KEY = "state_version"
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_finite_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
+def _dump_pending_entry(pending: PendingEntryState | None) -> str | None:
+    if pending is None:
+        return None
+    return json.dumps({_VERSION_KEY: PENDING_ENTRY_STATE_VERSION, **asdict(pending)}, allow_nan=False)
+
+
+def _validate_pending_entry(pending: PendingEntryState) -> None:
+    if pending.direction not in ("BUY", "SELL"):
+        raise ValueError(f"direction must be BUY or SELL, got {pending.direction!r}")
+    if not isinstance(pending.strategy_key, str) or not pending.strategy_key:
+        raise TypeError("strategy_key must be a non-empty string")
+    if not isinstance(pending.regime, str) or not pending.regime:
+        raise TypeError("regime must be a non-empty string")
+    for name in _PENDING_NUMERIC_FIELDS:
+        if not _is_finite_number(getattr(pending, name)):
+            raise TypeError(f"{name} must be a finite number")
+    if pending.stop_distance <= 0 or pending.target_distance <= 0:
+        raise ValueError("stop_distance and target_distance must be positive")
+    if not _is_int(pending.signal_time_utc):
+        raise TypeError("signal_time_utc must be an integer")
+    for name in _PENDING_OPTIONAL_NUMERIC_FIELDS:
+        value = getattr(pending, name)
+        if value is not None and not _is_finite_number(value):
+            raise TypeError(f"{name} must be a finite number or null")
+    for name in _PENDING_OPTIONAL_STRING_FIELDS:
+        value = getattr(pending, name)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise TypeError(f"{name} must be a non-empty string or null")
+    for name in _PENDING_OPTIONAL_POSITIVE_INT_FIELDS:
+        value = getattr(pending, name)
+        if value is not None and (not _is_int(value) or value <= 0):
+            raise TypeError(f"{name} must be a positive integer or null")
+    features = pending.entry_features
+    if features is not None:
+        if not isinstance(features, dict):
+            raise TypeError("entry_features must be an object or null")
+        for key, value in features.items():
+            if not isinstance(key, str):
+                raise TypeError("entry_features names must be strings")
+            if value is not None and not _is_finite_number(value):
+                raise TypeError(f"entry feature {key!r} must be a finite number or null")
 
 
 def _load_pending_entry(raw: str | None) -> PendingEntryState | None:
@@ -43,19 +104,11 @@ def _load_pending_entry(raw: str | None) -> PendingEntryState | None:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise TypeError("pending entry payload must be a JSON object")
+        version = payload.pop(_VERSION_KEY, PENDING_ENTRY_STATE_VERSION)
+        if not _is_int(version) or version != PENDING_ENTRY_STATE_VERSION:
+            raise ValueError(f"unsupported pending entry state version {version!r}")
         pending = PendingEntryState(**payload)
-        if pending.direction not in ("BUY", "SELL"):
-            raise ValueError(f"direction must be BUY or SELL, got {pending.direction!r}")
-        if not isinstance(pending.strategy_key, str) or not pending.strategy_key:
-            raise TypeError("strategy_key must be a non-empty string")
-        for name in _PENDING_NUMERIC_FIELDS:
-            value = getattr(pending, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
-                raise TypeError(f"{name} must be a finite number")
-        if pending.stop_distance <= 0 or pending.target_distance <= 0:
-            raise ValueError("stop_distance and target_distance must be positive")
-        if isinstance(pending.signal_time_utc, bool) or not isinstance(pending.signal_time_utc, int):
-            raise TypeError("signal_time_utc must be an integer")
+        _validate_pending_entry(pending)
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise PaperStateError(f"invalid pending PAPER entry state: {exc}") from exc
     return pending
@@ -172,6 +225,10 @@ def save_session_state(
 ) -> None:
     now = now_utc if now_utc is not None else int(time.time())
     if pending_entry is not None:
+        try:
+            _validate_pending_entry(pending_entry)
+        except (TypeError, ValueError) as exc:
+            raise PaperStateError(f"refusing to persist an invalid pending PAPER entry: {exc}") from exc
         row = conn.execute(
             "SELECT canonical_symbol FROM paper_session_state WHERE session_key = ?", (session_key,)
         ).fetchone()
@@ -194,7 +251,7 @@ def save_session_state(
         "pending_entry_json = ?, risk_state_json = ?, updated_at_utc = ? WHERE session_key = ?",
         (
             equity, last_processed_bar_time_utc, dump(open_position), regime_confirmed, regime_candidate,
-            regime_candidate_count, dump(pending_entry), dump(risk_state), now, session_key,
+            regime_candidate_count, _dump_pending_entry(pending_entry), dump(risk_state), now, session_key,
         ),
     )
 
