@@ -71,6 +71,7 @@ class FoldContext:
     start_index: int
     regimes: list            # confirmed regime per bar (None before start_index)
     features: dict = field(default_factory=dict)   # bar index -> features (only where a review needs them)
+    atr: list = field(default_factory=list)        # causal `atr` feature per bar (None before start_index)
 
     def features_at(self, i: int):
         if i not in self.features:
@@ -86,15 +87,17 @@ def build_fold_context(fold_bars, canonical_symbol: str, resolution: str, symbol
     start = config.feature_lookback + 1
     tracker = RegimeTracker(min_confirmations=config.regime_min_confirmations)
     regimes: list = [None] * len(fold_bars)
+    atr: list = [None] * len(fold_bars)
     kept: dict = {}
     for i in range(start, len(fold_bars)):
         feats = compute_bar_features(canonical_symbol, resolution, fold_bars[: i + 1],
                                      lookback=config.feature_lookback, point_size=symbol_spec.point,
                                      now=fold_bars[i].time)
         regimes[i] = tracker.update(classify_regime(feats))
+        atr[i] = feats.atr
         if keep_features_for is None or i in keep_features_for:
             kept[i] = feats
-    return FoldContext(index=index, bars=list(fold_bars), start_index=start, regimes=regimes, features=kept)
+    return FoldContext(index=index, bars=list(fold_bars), start_index=start, regimes=regimes, features=kept, atr=atr)
 
 
 # --------------------------------------------------------------------------
