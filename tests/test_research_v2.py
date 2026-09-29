@@ -198,3 +198,30 @@ def test_friction_filter_and_cooldown():
     assert thin.selected is None and thin.candidates[0].rejection_reason == REJECTED_FRICTION
     cooling = select([_signal(target=5.0)], {SYMBOL: cost}, bar_time_utc=10_000, last_exit_time_utc=10_000 - 300, **kw)
     assert cooling.selected is None and cooling.candidates[0].rejection_reason == REJECTED_COOLDOWN
+
+
+# --- cost diagnostics --------------------------------------------------------------
+
+def test_cost_diagnostics_report_signed_slippage_and_never_add_spread_to_pnl():
+    from adaptive_scalper.research.v2.costs import cost_diagnostics
+
+    base = dict(canonical_symbol="XAUUSD", direction="BUY", session="LONDON", atr=1.0, requested_volume=0.1,
+                filled_volume=0.1, estimated_spread_price=0.08, spread_price=0.08, estimated_slippage_price=0.41,
+                estimated_commission_price=0.07, entry_commission=-0.35, exit_commission=-0.35, swap=0.0,
+                exit_recorded_at_utc=1)
+    rows = [dict(base, slippage_price=s, atr=a) for s, a in ((0.1, 1.0), (-0.1, 2.0), (0.0, 3.0))]
+    report = cost_diagnostics(rows)["symbols"]["XAUUSD"]["all"]
+    assert report["slippage_realized_signed"]["mean"] == pytest.approx(0.0)
+    assert report["slippage_realized_adverse_share"] == pytest.approx(1 / 3)
+    assert report["slippage_prediction_error"]["mean"] == pytest.approx(-0.41)
+    assert report["commission_money_per_lot_round_trip"]["mean"] == pytest.approx(7.0)
+    assert "pnl" not in json_keys(report)
+
+
+def json_keys(obj) -> set[str]:
+    keys = set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            keys.add(k)
+            keys |= json_keys(v)
+    return keys
