@@ -2899,3 +2899,12 @@ check or order send occurred.
   remaining-edge test never binds); cost 0.10-0.24 R/trade is dominated by the configured slippage, which is 2-4x the
   DEMO-observed ENTRY p90 (exit-side slippage unrecorded) -- a POST-HOC sensitivity with observed entry slippage leaves
   every session negative; the calibrated selector correctly abstains. OOS untouched.
+- Verification at `5d37055` (research branch): compileall OK; full suite **1818 passed / 9 skipped / 0 failed**
+  (398 s; skips = opt-in live-MT5 tests + symlink privilege, as before).
+- Natural 0.2.6 DEMO evidence (read-only look at the production DB, `mode=ro`, 13:58 UTC): 8 positions opened since
+  the 10:30 deploy (all entry orders FILLED), 7 closed; 7 `close_requests`, each write-ahead -> send_outcome
+  FULLY_CLOSED -> RESOLVED_CLOSED within 0-1 s, attempt_count 0, no UNKNOWN, no duplicate close (ASN-027 normal
+  lifecycle: TESTED-LIVE-DEMO). Close settlement well inside the 10 s assumption on this sample. broker_truth
+  AVAILABLE, reconciliation CLEAN, engine heartbeat current, 0 unresolved incidents, kill switch DISENGAGED, 1 open
+  XAUUSD position under management. ASN-026 degradation and close-side UNKNOWN: not occurred naturally (still
+  TESTED-FAKE only); not provoked.
