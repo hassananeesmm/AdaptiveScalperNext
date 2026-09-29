@@ -96,6 +96,44 @@ def test_donchian_refuses_oos_bars():
         build_fold_context(oos_bars, SYMBOL, RES, spec(), CONFIG, index=0)
 
 
+def _h7_module():
+    import importlib.util
+
+    spec_ = importlib.util.spec_from_file_location("research_v2_h7", ROOT / "scripts" / "research_v2_h7.py")
+    module = importlib.util.module_from_spec(spec_)
+    spec_.loader.exec_module(module)
+    return module
+
+
+def test_h7_acceptance_requires_every_criterion_and_beating_the_control():
+    h7 = _h7_module()
+    good = {"net_r": 0.1, "gross_r": 0.3, "cost_r": 0.1, "positive_folds": 9, "trades": 150,
+            "statistics": {"psr_vs_zero": 0.97}, "stress_net_r": {"cost_x1.2": 0.05}}
+    assert h7._acceptance(good, {"net_r": 0.02})["passes"]
+    assert not h7._acceptance(good, {"net_r": 0.2})["passes"]
+    assert not h7._acceptance(dict(good, positive_folds=7), {"net_r": 0.0})["passes"]
+    assert not h7._acceptance(dict(good, trades=99), {"net_r": 0.0})["passes"]
+
+
+def test_h7_is_one_shot_it_refuses_once_the_family_has_a_trial(tmp_path):
+    from adaptive_scalper.persistence import connect, migrate
+    from adaptive_scalper.research.ledger import record_trial
+
+    db = tmp_path / "research.sqlite3"
+    conn = connect(str(db))
+    migrate(conn)
+    record_trial(conn, trial_id="v2h7:XAUUSD:H7-SESSION", family="v2-H7:XAUUSD", kind="X", strategy_versions={},
+                 params={}, status="COMPLETED", now_utc=1)
+    conn.close()
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "research_v2_h7.py"), "--config",
+                           str(ROOT / "config" / "default.toml"), "--research-db", str(db), "--out",
+                           str(tmp_path / "x.json")], capture_output=True, text=True, cwd=ROOT)
+    output = proc.stdout + proc.stderr
+    if "tracked files are modified" in output:
+        pytest.skip("working tree is dirty; the one-shot guard is only reachable on a clean tree")
+    assert proc.returncode != 0 and "holdout is consumed" in output
+
+
 @pytest.mark.parametrize("start, end, needle", [
     ("2022-06-23", "2024-12-31", "H7 holdout"),
     ("2026-06-01", "2026-07-15", "reserved untouched OOS"),
