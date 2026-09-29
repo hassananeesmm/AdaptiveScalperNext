@@ -2757,3 +2757,28 @@ check or order send occurred.
 - During the session the running 0.2.2 runtime opened a natural DEMO position (BTCUSD BUY 0.16, 18:55:02 UTC,
   risk 23.12 USD, `microstructure_acceleration`, reconciliation CLEAN). Not touched. Deployment must wait until
   the broker is flat and the operator approves.
+
+## 2026-09-28/29 night -- priority safety integration pass 2, V1 freeze, release 0.2.4 prep
+
+- Read-only audit first: main checkout `eaa024c` (0.2.2) runs `cli demo` (PID 16772/16800, started 22:07 GMT+4) and
+  `cli dashboard` (17036/17060); schema 29; heartbeat fresh; reconciliation CLEAN; kill switch DISENGAGED
+  (operator-set 2026-09-26, untouched); 161 closed positions, the runtime keeps trading BTCUSD+XAUUSD naturally.
+  Integration branch unpushed at `9aed106`; a peer agent session was idle and wrote nothing during this pass.
+- P0 re-audit on this branch: all 8 MT5 collection calls go through `_require_query_result` (None ->
+  `Mt5QueryError`, empty -> `[]`); no caller collapses None to empty; every broad `except` on the send/close/
+  modify/reconcile path is fail-closed (pre-send -> blocked "nothing was sent", post-send -> UNKNOWN + incident,
+  reconciliation snapshot failure -> ERROR state that blocks entries).
+- `f1d79f1` PAPER pending-entry hardening (remaining PR #3 guarantees on the modern model, no migration):
+  `state_version` envelope (legacy unversioned rows load; bool/other versions fail closed); typed + finite
+  validation of `entry_features`, `strategy_version`, `canonical_symbol`, `regime`, optional cost fields on load
+  and save. New `tests/test_paper_pending_entry_hardening.py` (28): resolution reuse refused, sizing-rejected
+  pending entry consumed once, reconnect -> exactly one fill, identical retried cycle is a no-op, one-bar-per-cycle
+  with a reconnect after every cycle == continuous. Negative control: 14/28 fail on the old `state.py` (the rest
+  pin behaviour that was already correct).
+- `40aba67` V1 baseline freeze: sha256 of the six strategies, `strategies/__init__.py`, `base.py` and
+  `selector/selector.py` (byte-identical to deployed 0.2.2) + active key/version set pinned in
+  `tests/test_v1_strategy_freeze.py`.
+- Verification (worktree venv, content of `40aba67` minus the freeze file): compileall OK; full suite **1744 passed /
+  9 skipped / 0 failed** (6 min 54 s); freeze + registry tests 29 passed.
+- GateGuard blocked the first edit of a 3-edit batch on `paper/state.py` and applied the dependent two, leaving the
+  module briefly referencing undefined helpers; repaired immediately (not committed in the broken state).
