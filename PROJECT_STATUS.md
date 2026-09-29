@@ -26,7 +26,7 @@ real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.m
 ## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
 
 **Running: 0.2.6 (`e3b1250`)**, DEMO runtime + dashboard started by the operator's launcher 10:30:13 UTC after a
-verified online backup (`dataackups\pre_0_2_6_deploy_20260929T102622Z.sqlite3`, integrity ok) and a successful
+verified online backup (`data/backups/pre_0_2_6_deploy_20260929T102622Z.sqlite3`, integrity ok) and a successful
 migration rehearsal; production schema **30**. Post-start: engine RUNNING, broker_truth AVAILABLE, reconciliation
 CLEAN, account DEMO (ICMarketsSC-Demo, pinned IC Markets terminal), symbols BTCUSD + XAUUSD, kill switch DISENGAGED
 (untouched), 0 positions / orders / UNKNOWN / unresolved incidents / close_requests. Live read-only MT5 tests 8/8.
