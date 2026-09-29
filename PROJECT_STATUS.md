@@ -23,7 +23,18 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-09-29, release 0.2.5 built) -- NOT DEPLOYED
+## Current phase (2026-09-29, branch `fix/0.2.6-broker-truth-degradation`) -- NOT DEPLOYED
+
+0.2.6 = 0.2.5 (`d18a5b0` lineage) + safety only: ASN-026 explicit `broker_truth` degradation (UNAVAILABLE /
+CYCLE_FAILED, `reconciliation=BROKER_TRUTH_UNAVAILABLE` keeping `last_known`, engine DEGRADED, SAFETY_CRITICAL vs
+ADVISORY task health, entry block until a full cycle succeeds) and ASN-027 durable close requests (migration
+**0030**, write-ahead before `order_send`, UNRESOLVED blocks entries and any second close, resolved only from fresh
+broker truth). Evidence: TESTED-FAKE (full suite 1767 passed / 9 skipped / 0 failed on Windows at `90e7584`; new
+chaos tests; negative control on `d18a5b0`). NOT live-DEMO-verified. **Deploying 0.2.6 applies migration 0030 to
+the production DB** (additive; take and verify a backup first). Running: still 0.2.2 (`eaa024c`). No strategy,
+selector, risk, symbol or cost change.
+
+## Previous phase (2026-09-29, release 0.2.5 built) -- NOT DEPLOYED, superseded by 0.2.6 once built
 
 **Release 0.2.5** = `3a8df17` (this branch): P0 `Mt5QueryError` fail-closed broker truth, post-send UNKNOWN
 quarantine, ASN-022..026, ASN-010 terminal pin, pending PAPER entry hardening (`f1d79f1`), V1 strategy freeze
