@@ -181,7 +181,7 @@ Chronological, factual record of initialization events. Append only.
 - Pre-commit safety audit (user-requested, before any GitHub push):
   reviewed every untracked/modified file's diff for credentials/secrets.
   Found and fixed one real issue: `tests/test_demo_gate.py` had hardcoded
-  the REAL MT5 account login number (`53044952`) and real server name
+  the REAL MT5 account login number (`<DEMO-LOGIN-REDACTED>`) and real server name
   observed from this machine's live terminal as a test fixture value —
   not a password/secret, but account-identifying information that should
   not be committed. Replaced with an obviously-fake placeholder
@@ -401,7 +401,7 @@ Chronological, factual record of initialization events. Append only.
   history implementation from the prior session. Ran the full suite
   (191 passed), reviewed the diff for secrets, found and fixed one real
   issue before committing — `PROJECT_STATUS.md` had picked up the real
-  DEMO account login number (`53044952`) in a "TESTED (live)" note,
+  DEMO account login number (`<DEMO-LOGIN-REDACTED>`) in a "TESTED (live)" note,
   account-identifying info not yet in git history. Replaced with a
   pointer to the existing precedent instead of the raw number. Committed
   as `16ff74c` ("Implement Phase 2 historical bootstrap and broker
