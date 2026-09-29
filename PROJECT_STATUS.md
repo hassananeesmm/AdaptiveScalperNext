@@ -23,7 +23,14 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-09-29, branch `fix/0.2.6-broker-truth-degradation`) -- NOT DEPLOYED
+## Current phase (2026-09-29, release 0.2.6 BUILT and smoke-tested) -- NOT DEPLOYED
+
+**Release 0.2.6** = `e3b1250` (branch `fix/0.2.6-broker-truth-degradation`, PR #5): `dist\AdaptiveScalperNext-0.2.6.zip`,
+428 entries, sha256 66bcac8dfbc02b371a6db07883812367aae958e882fadeb2cdaa149c89bd60d2; build gate 1767 passed /
+9 skipped / 0 failed; content audit clean; smoke PASSED (schema 30). Supersedes 0.2.5 (never deployed).
+**Running: still 0.2.2 (`eaa024c`).** Deploy only with operator approval: broker flat, verified online backup +
+integrity check (migration 0030 will be applied), operator Ctrl+C, checkout `e3b1250`, launcher restart, kill
+switch untouched.
 
 0.2.6 = 0.2.5 (`d18a5b0` lineage) + safety only: ASN-026 explicit `broker_truth` degradation (UNAVAILABLE /
 CYCLE_FAILED, `reconciliation=BROKER_TRUTH_UNAVAILABLE` keeping `last_known`, engine DEGRADED, SAFETY_CRITICAL vs
