@@ -23,13 +23,49 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-09-29, release 0.2.5 built) -- NOT DEPLOYED
+## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
+
+**Running: 0.2.6 (`e3b1250`)**, DEMO runtime + dashboard started by the operator's launcher 10:30:13 UTC after a
+verified online backup (`data/backups/pre_0_2_6_deploy_20260929T102622Z.sqlite3`, integrity ok) and a successful
+migration rehearsal; production schema **30**. Post-start: engine RUNNING, broker_truth AVAILABLE, reconciliation
+CLEAN, account DEMO (ICMarketsSC-Demo, pinned IC Markets terminal), symbols BTCUSD + XAUUSD, kill switch DISENGAGED
+(untouched), 0 positions / orders / UNKNOWN / unresolved incidents / close_requests. Live read-only MT5 tests 8/8.
+ASN-026/027 failure paths: TESTED-FAKE; TESTED-LIVE-DEMO evidence pending natural operation (see WORKLOG).
+
+**Repository governance (2026-09-29).** The executable release is exactly `e3b1250`, tagged **`v0.2.6`**
+(annotated, pushed). Later commits on `fix/0.2.6-broker-truth-degradation` (`4e8f8e5`..) are documentation only and
+are NOT the tested executable; a merge of PR #5 produces a new SHA that must be rebuilt and retested before it
+could ever be called a release. `main` (`8e67f77`) is a strict ancestor of `e3b1250`, so it can be fast-forwarded
+without rewriting history (plan: fast-forward `main` to the PR #5 head once the operator approves; no force push).
+PR #3 and PR #4 are SUPERSEDED (their work is in the 0.2.5/0.2.6 lineage: ASN-024 port, `Mt5QueryError`); close
+them without merging. Strategy research happens on `research/*` branches in `.worktrees/`, never in the main
+checkout that the running DEMO process uses.
+
+## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
+
+**Release 0.2.6** = `e3b1250` (branch `fix/0.2.6-broker-truth-degradation`, PR #5): `dist\AdaptiveScalperNext-0.2.6.zip`,
+428 entries, sha256 66bcac8dfbc02b371a6db07883812367aae958e882fadeb2cdaa149c89bd60d2; build gate 1767 passed /
+9 skipped / 0 failed; content audit clean; smoke PASSED (schema 30). Supersedes 0.2.5 (never deployed).
+At that time (before the 10:30 UTC deploy) the runtime was still 0.2.2 (`eaa024c`); deploy only with operator approval: broker flat, verified online backup +
+integrity check (migration 0030 will be applied), operator Ctrl+C, checkout `e3b1250`, launcher restart, kill
+switch untouched.
+
+0.2.6 = 0.2.5 (`d18a5b0` lineage) + safety only: ASN-026 explicit `broker_truth` degradation (UNAVAILABLE /
+CYCLE_FAILED, `reconciliation=BROKER_TRUTH_UNAVAILABLE` keeping `last_known`, engine DEGRADED, SAFETY_CRITICAL vs
+ADVISORY task health, entry block until a full cycle succeeds) and ASN-027 durable close requests (migration
+**0030**, write-ahead before `order_send`, UNRESOLVED blocks entries and any second close, resolved only from fresh
+broker truth). Evidence: TESTED-FAKE (full suite 1767 passed / 9 skipped / 0 failed on Windows at `90e7584`; new
+chaos tests; negative control on `d18a5b0`). NOT live-DEMO-verified. **Deploying 0.2.6 applies migration 0030 to
+the production DB** (additive; take and verify a backup first). At that time the runtime was still 0.2.2 (`eaa024c`). No strategy,
+selector, risk, symbol or cost change.
+
+## Previous phase (2026-09-29, release 0.2.5 built) -- NOT DEPLOYED, superseded by 0.2.6 once built
 
 **Release 0.2.5** = `3a8df17` (this branch): P0 `Mt5QueryError` fail-closed broker truth, post-send UNKNOWN
 quarantine, ASN-022..026, ASN-010 terminal pin, pending PAPER entry hardening (`f1d79f1`), V1 strategy freeze
 test (`40aba67`). Full suite 1754 passed / 9 skipped / 0 failed; smoke PASSED; zip sha256
 a14b75420ec2269e4d5ba21246ec665168f169bbc1cba1820d215c428f10d830. 0.2.4 (`9aed106`, peer build) was never
-deployed and is superseded. **Running: still 0.2.2 (`eaa024c`) WITHOUT the P0 fix.** Operator decision: deploy
+deployed and is superseded. At that time the runtime was still 0.2.2 (`eaa024c`), WITHOUT the P0 fix. Operator decision: deploy
 at the next flat (operator Ctrl+C, verified online backup, checkout `3a8df17`, launcher restart). Schema 29, no
 migration. Research-only Strategy V2 work lives on `research/strategy-v2-20260929` (never in a release).
 

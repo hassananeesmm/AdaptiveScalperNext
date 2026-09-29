@@ -106,8 +106,16 @@ def orders(conn: sqlite3.Connection, now: int) -> dict:
                    OPEN_ORDER_STATES)
     dangerous = [o for o in active if o["state"] in ("UNKNOWN", "PENDING_RECONCILIATION")]
     reconciliation, age = _state(conn, "reconciliation", now)
+    broker_truth, truth_age = _state(conn, "broker_truth", now)
+    has_close_requests = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'close_requests'").fetchone() is not None
+    unresolved_closes = _rows(
+        conn, "SELECT broker_position_id, broker_symbol, position_direction, requested_volume, requested_at_utc, "
+              "send_outcome, attempt_count, last_attempt_at_utc, last_attempt_detail FROM close_requests "
+              "WHERE status = 'UNRESOLVED' ORDER BY requested_at_utc", ()) if has_close_requests else []
     return {"active_orders": active, "dangerous_unknown": dangerous, "reconciliation": reconciliation,
-            "reconciliation_age_seconds": age}
+            "reconciliation_age_seconds": age, "broker_truth": broker_truth, "broker_truth_age_seconds": truth_age,
+            "unresolved_closes": unresolved_closes}
 
 
 def decisions(conn: sqlite3.Connection, now: int) -> dict:

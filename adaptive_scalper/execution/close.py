@@ -38,6 +38,14 @@ closed the position); `CANCELLED`/`PLACED`(->`RESTING`)/ambiguous
 categories each get their own distinct, honest outcome — never silently
 reported as success.
 
+**Durable close requests** (0.2.6, ASN-027): with a `conn`, the exact
+request is recorded in `close_requests` BEFORE `order_send` and settled
+only from positive evidence (`execution.close_requests`). An unproven
+outcome -- including a post-send reconciliation that cannot read broker
+truth, reported in `CloseOutcome.broker_truth_error` instead of raising --
+stays UNRESOLVED: new exposure blocked and any further close of that
+position refused pre-send (`CLOSE_UNRESOLVED`) until broker truth decides.
+
 Per directive: a close must NOT be blocked merely because the NEW-ENTRY
 kill switch is engaged — risk reduction stays available even when new
 exposure is blocked. This module therefore never checks the kill switch
@@ -55,6 +63,16 @@ import typing
 from dataclasses import dataclass
 from typing import Callable
 
+from adaptive_scalper.execution.close_requests import (
+    RESOLVED_CLOSED,
+    RESOLVED_NOT_EXECUTED,
+    RESOLVED_PARTIALLY_CLOSED,
+    CloseRequestConflict,
+    has_unresolved_close,
+    record_close_intent,
+    settle_close_request,
+)
+from adaptive_scalper.execution.close_requests import UNRESOLVED as CLOSE_REQUEST_UNRESOLVED
 from adaptive_scalper.gateway.broker_constraints import derive_filling_type
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.protocol import Gateway
@@ -79,6 +97,9 @@ CANCELLED = "CANCELLED"
 RESTING = "RESTING"
 PARTIAL_CLOSE = "PARTIAL_CLOSE"
 FULLY_CLOSED = "FULLY_CLOSED"
+# Pre-send refusal: an earlier close of this position is still unproven
+# (`close_requests` UNRESOLVED) -- never a second send on top of it.
+CLOSE_UNRESOLVED = "CLOSE_UNRESOLVED"
 
 # Outcomes reached ONLY after order_send() was actually called — a real
 # request reached the broker (whether it filled, partially filled, was
@@ -103,6 +124,10 @@ class CloseOutcome:
     detail: str
     result: OrderSendResult | None = None
     reconciliation: "ReconciliationReport | None" = None
+    # Set when the post-send reconciliation could not read broker truth:
+    # the send outcome stands, the durable close request stays UNRESOLVED.
+    broker_truth_error: str | None = None
+    close_request_id: int | None = None
 
 
 def _opposite_direction(direction: str) -> str:
@@ -257,6 +282,9 @@ def close_position_safely(
     `conn`/`reconciliation_chain_key`: when both are supplied, a real
     reconciliation pass runs immediately after a real-exposure-changing
     outcome — pass neither in tests that don't need a DB."""
+    if conn is not None and has_unresolved_close(conn, broker_position_id):
+        return CloseOutcome(CLOSE_UNRESOLVED, f"position {broker_position_id!r} has an unresolved close request -- "
+                                              f"its outcome must be proven from broker truth before any new close")
     round_kwargs = dict(
         broker_position_id=broker_position_id, expected_direction=expected_direction,
         expected_volume=expected_volume, broker_symbol=broker_symbol,
@@ -310,6 +338,20 @@ def close_position_safely(
                 f"order_check of the rebuilt request failed: retcode={recheck.retcode} comment={recheck.comment!r}",
             )
 
+    close_request_id = None
+    if conn is not None:
+        # Write-ahead (master prompt section 13): durable BEFORE the send, so
+        # a crash, a lost acknowledgement or unreadable broker truth after it
+        # can never make this request disappear.
+        try:
+            close_request_id = record_close_intent(
+                conn, broker_position_id=str(broker_position_id), broker_symbol=final_request.symbol,
+                position_direction=round2.live.direction, requested_volume=final_request.volume,
+                magic=magic, comment=comment, now_utc=int(clock()),
+            )
+        except CloseRequestConflict as exc:
+            return CloseOutcome(CLOSE_UNRESOLVED, f"{exc} -- nothing was sent")
+
     try:
         result = gateway.order_send(final_request)
     except Exception as exc:
@@ -320,13 +362,46 @@ def close_position_safely(
     else:
         interpretation = interpret_retcode(result.retcode)
         outcome = _classify_close_result(interpretation, result, final_request.volume)
+    outcome = dataclasses.replace(outcome, close_request_id=close_request_id)
 
     if conn is not None and result is not None and outcome.status == PARTIAL_CLOSE and result.volume_filled:
         _apply_partial_close_to_local_state(conn, broker_position_id, result.volume_filled)
 
     if conn is not None and reconciliation_chain_key is not None and outcome.status in REAL_EXPOSURE_CHANGE_STATUSES:
         from adaptive_scalper.execution.reconciliation import run_reconciliation
-        report = run_reconciliation(conn, gateway, reconciliation_chain_key)
-        outcome = dataclasses.replace(outcome, reconciliation=report)
+        try:
+            report = run_reconciliation(conn, gateway, reconciliation_chain_key)
+        except Exception as exc:
+            # Broker truth unavailable right after a send that may have
+            # changed exposure: keep the send outcome, never raise it away.
+            outcome = dataclasses.replace(outcome, broker_truth_error=f"{type(exc).__name__}: {exc}")
+        else:
+            outcome = dataclasses.replace(outcome, reconciliation=report)
 
+    if close_request_id is not None:
+        _settle(conn, close_request_id, broker_position_id, outcome, int(clock()))
     return outcome
+
+
+def _settle(conn: sqlite3.Connection, close_request_id: int, broker_position_id: str, outcome: CloseOutcome,
+            now: int) -> None:
+    """Only positive evidence resolves the durable request; everything else
+    stays UNRESOLVED for `close_requests.resolve_unresolved_closes`."""
+    status = CLOSE_REQUEST_UNRESOLVED
+    detail = outcome.detail
+    if outcome.status in (REJECTED, CANCELLED):
+        status = RESOLVED_NOT_EXECUTED
+    elif outcome.status == PARTIAL_CLOSE and outcome.result is not None and outcome.result.volume_filled:
+        status = RESOLVED_PARTIALLY_CLOSED
+    elif outcome.status == FULLY_CLOSED and outcome.reconciliation is not None:
+        local = conn.execute("SELECT status FROM positions WHERE broker_position_id = ? ORDER BY id DESC LIMIT 1",
+                             (str(broker_position_id),)).fetchone()
+        if local is not None and local["status"] != "OPEN":
+            status = RESOLVED_CLOSED
+        else:
+            detail += " -- broker reported the close done; local recovery from history is still pending"
+    if outcome.broker_truth_error is not None:
+        detail += f" -- broker truth unavailable after the send: {outcome.broker_truth_error}"
+    settle_close_request(conn, close_request_id, send_outcome=outcome.status, send_detail=detail,
+                         retcode=outcome.result.retcode if outcome.result is not None else None,
+                         status=status, now_utc=now)

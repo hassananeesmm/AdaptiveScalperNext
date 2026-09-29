@@ -755,6 +755,14 @@ function paintSummary(){
   if(!live)issues.push("Fresh verified MT5 DEMO telemetry is unavailable; displayed figures may be old.");
   if(Array.isArray(ord.dangerous_unknown)&&ord.dangerous_unknown.length)
     issues.push(String(ord.dangerous_unknown.length)+" dangerous UNKNOWN/PENDING_RECONCILIATION orders require investigation.");
+  const truth=ord.broker_truth||{};
+  if(rt.mode==="DEMO"&&truth.status&&truth.status!=="AVAILABLE")
+    issues.push("BROKER TRUTH "+String(truth.status)+" since "+fmt(truth.since)+": "+String(truth.error||"")+
+      ". Reconciliation shows the last proven verdict only; new exposure is blocked until a full position cycle succeeds.");
+  if(Array.isArray(ord.unresolved_closes)&&ord.unresolved_closes.length)
+    issues.push(String(ord.unresolved_closes.length)+" close request(s) with an UNPROVEN outcome (position "+
+      ord.unresolved_closes.map(c=>String(c.broker_position_id)).join(", ")+"): never resent; new exposure blocked "+
+      "until broker truth resolves them.");
   if(acct.trade_mode&&acct.trade_mode!=="DEMO")issues.push("NON-DEMO ACCOUNT DETECTED: broker mutations must remain blocked.");
   if(rt.mode==="DEMO"&&mk.status==="OK"&&mk.terminal&&
     (!mk.terminal.trade_allowed||acct.trade_allowed===false||acct.trade_expert===false))

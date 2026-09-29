@@ -2795,3 +2795,79 @@ check or order send occurred.
   `release_smoke_test.ps1`: PASSED (fresh venv, MT5 disabled, own smoke DB, packaged suite 1754 passed / 9 skipped).
   NOT DEPLOYED. Operator decision 2026-09-29: deploy at the next flat via Ctrl+C + launcher restart.
 - Branches pushed (operator-approved): `fix/integrated-demo-safety-20260928`, `research/strategy-v2-20260929`.
+
+## 2026-09-29 -- 0.2.6 safety integration (branch `fix/0.2.6-broker-truth-degradation`, from `d18a5b0`)
+
+- Session start: fetched all remotes. `fix/integrated-demo-safety-20260928` (`d18a5b0`) already contained PR #4
+  (merged `749f3ce`), ASN-022..025, the PR #3 port and the V1 freeze; 0.2.4 (superseded) and 0.2.5 (`3a8df17`) were
+  built and smoke-tested. Confirmed read-only by the peer session: the running DEMO runtime is still 0.2.2
+  (`eaa024c`); 0.2.5 NOT DEPLOYED. So the next safety increment is 0.2.6 (master prompt sections 13-15, which
+  0.2.5 did not cover).
+- ASN-026 (runtime degradation): a broker query failing after a CLEAN reconciliation in the same position cycle
+  left engine RUNNING and a fresh CLEAN verdict admitting entries. Now: `broker_truth` state (AVAILABLE only after
+  a complete cycle; UNAVAILABLE on `Mt5QueryError`, CYCLE_FAILED otherwise), `reconciliation.status=
+  BROKER_TRUTH_UNAVAILABLE` with the last proven verdict under `last_known`, entry block on non-AVAILABLE/stale
+  broker truth, SAFETY_CRITICAL vs ADVISORY task health, `engine.safety_critical_degraded`, dashboard alert.
+  Cleared only by a later successful cycle (tested: 120 s of failure does not clear it).
+- ASN-027 (close-side UNKNOWN durability): migration 0030 `close_requests` (additive). Write-ahead row before
+  `order_send`; unproven outcomes stay UNRESOLVED (incident, entries blocked, no second close, no review of that
+  position, survive restart); `resolve_unresolved_closes` at startup and every cycle, from fresh broker truth only.
+  `close_position_safely` no longer lets a post-send reconciliation exception escape (reported as
+  `broker_truth_error`, surfaced by the runtime as a degraded cycle).
+- Tests: new `tests/test_close_unknown_durability.py` (9: scenarios A timeout+still open, B timeout+broker closed,
+  C ambiguous+truth unavailable, D restart mid-close, partial with/without explaining deals, DONE without history,
+  proven close/rejection, one unresolved per position) and `tests/test_runtime_broker_truth_degradation.py` (4).
+  Negative control: the 4 runtime tests all fail on `d18a5b0`. `test_runtime_reconciliation_freshness.py`: the
+  `Mt5QueryError` case now asserts the typed `BROKER_TRUTH_UNAVAILABLE` label (+ last_known CLEAN, engine
+  DEGRADED) instead of the generic `ERROR`; its blocking assertions are unchanged.
+- First full run found a real defect in the new code (a reconciliation-stage failure stored its own ERROR as
+  `last_known`); fixed by capturing the verdict before the cycle.
+- Verification (Windows, Python 3.13, `.venv`): compileall OK; focused runtime/close/reconciliation/chaos/ASN-022/
+  multi-position/kill-switch/demo-gate set 317 passed before the fix round; full suite **1767 passed / 9 skipped /
+  0 failed** (4 min 34 s). Skips: 8 opt-in live-MT5 (`ASN_LIVE_MT5=1`, not run: gateway unchanged) + 1 symlink
+  privilege. TESTED-FAKE only; NOT live-DEMO-verified; NOT DEPLOYED.
+- Unchanged: strategies, selector, thresholds, exits, risk ceilings, symbol list (GBPJPY still disabled), costs,
+  OOS ranges, research data. Live runtime, production DB and kill switch untouched.
+- Release 0.2.6 (2026-09-29): a first background build was stopped by the host for low memory (no artifact
+  produced); rebuilt in the foreground with ~3.9 GB free. `scripts\build_release.ps1 -Version 0.2.6` at `e3b1250`
+  (clean tree, = origin): gate suite **1767 passed / 9 skipped / 0 failed**; `dist\AdaptiveScalperNext-0.2.6.zip`,
+  428 entries, sha256 66bcac8dfbc02b371a6db07883812367aae958e882fadeb2cdaa149c89bd60d2. Content audit: no
+  DB/WAL/SHM/log/key/.env/data/dist/venv/model entries; 30 migrations (0001-0030, `0030_close_requests.sql`
+  included); secret-pattern hits only in synthetic guardrail fixtures (`tests/test_guardrails.py`,
+  `tests/test_knowledge.py`); no account login outside tests. `release_smoke_test.ps1`: **PASSED** (fresh venv,
+  MT5 disabled, own smoke DB: doctor OK, schema 30, integrity ok, real-money DISABLED, kill switch UNINITIALIZED;
+  retired strategies listed as `retired_permanently`; packaged suite 1767 passed / 9 skipped). NOT DEPLOYED.
+  Supersedes 0.2.5 (never deployed). Deployment needs operator approval (flat broker, verified backup -- migration
+  0030 --, launcher restart).
+
+## 2026-09-29 -- release 0.2.6 DEPLOYED to the IC Markets DEMO runtime (operator-approved)
+
+- Pre-deployment (read-only): main checkout clean at `eaa024c` (0.2.2); runtime and dashboard already stopped
+  (ENGINE_STOPPED 10:18:23 UTC, not by this session); kill switch DISENGAGED (untouched throughout). Broker flat
+  (live read-only query 10:25:54 and again 10:28:53 UTC: 0 positions, 0 orders, balance = equity 9,642.29 USD);
+  local: 0 open positions, 0 active/UNKNOWN orders, 0 unresolved incidents, last reconciliation CLEAN.
+- TESTED-LIVE-MT5-READONLY on the 0.2.6 code: `ASN_LIVE_MT5=1` live tests **8 passed** (account/terminal snapshots,
+  DEMO account, DEMO gate, symbols_get, canonical resolution, live tick, server-time rule); pinned-terminal identity
+  (ASN-010) accepted the IC Markets install; server ICMarketsSC-Demo; XAUUSD/BTCUSD resolved (GBPJPY resolves at the
+  broker but is not in `market.symbols`: not executable).
+- Package re-hashed: `dist\AdaptiveScalperNext-0.2.6.zip` sha256 66bcac8d...60d2 (match).
+- Backup: `data\backups\pre_0_2_6_deploy_20260929T102622Z.sqlite3` (sqlite3 online backup API from a read-only
+  source connection, 10:26:22 UTC): integrity_check ok, schema 29, 275,210,240 bytes, sha256
+  6ec861f62df60e0de9a6c5f2175dbdc3ebe4d5709caa56ef2d6eb0c3b4d7bb0f; WAL empty. Re-checked (quick_check ok) before
+  the switch.
+- Migration rehearsal on a disposable copy with the 0.2.6 code: applied [30] only, schema 30, integrity ok,
+  `close_requests` + partial unique index present, all 44 pre-existing tables row-for-row identical (fingerprint over
+  every row); 0.2.6 `doctor` in DEMO mode on the migrated copy: OK (DEMO, clock VERIFIED, real-money DISABLED).
+- Deployment (operator approval in session): main checkout `git checkout --detach e3b1250` (clean); the operator
+  started `START DEMO + DASHBOARD.bat` (runtime and dashboard started 10:30:13 UTC); migration 0030 applied by the
+  normal machinery.
+- Post-start gate (10:31 UTC, read from the runtime DB/dashboard): schema 30, quick_check ok; engine RUNNING (DEMO,
+  heartbeat 1 s, no degraded components); broker_truth AVAILABLE; reconciliation CLEAN (no unrepaired
+  positions/orders); startup recovery: 0 quarantined orders, 0 UNKNOWN resolutions, 0 close resolutions; account
+  trade mode DEMO, server ICMarketsSC-Demo, terminal "MetaTrader 5 IC Markets Global" build 6230 connected; kill
+  switch DISENGAGED; server clock VERIFIED; active symbols BTCUSD + XAUUSD (none excluded/awaiting); risk limits
+  0.25 / 0.75 / 2.0 / 5.0 %, 2 positions, 1 per symbol; 0 open positions, 0 active/UNKNOWN orders, 0 unresolved
+  incidents, 0 close_requests; no global entry block (both symbols waiting for a closed bar); dashboard HTTP 200;
+  `test_v1_strategy_freeze.py` + `test_config.py` 42 passed at `e3b1250`.
+- Evidence classes: ASN-026/027 remain TESTED-FAKE for their failure paths; no natural DEMO trade, close, broker-truth
+  outage or UNKNOWN has occurred yet under 0.2.6 (TESTED-LIVE-DEMO evidence pending natural operation).

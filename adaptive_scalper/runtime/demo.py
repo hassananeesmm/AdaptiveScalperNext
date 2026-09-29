@@ -47,12 +47,14 @@ from adaptive_scalper.execution.reconciliation import (
     run_reconciliation,
     BrokerPositionSnapshot,
 )
+from adaptive_scalper.execution.close_requests import has_unresolved_close, resolve_unresolved_closes
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions
 from adaptive_scalper.costs.observations import record_entry_observation
 from adaptive_scalper.execution.service import FILLED, PARTIAL, FreshEvidence, submit_new_entry
 from adaptive_scalper.execution.store import get_active_orders
 from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
+from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.symbol_validation import (
     DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS,
@@ -96,8 +98,18 @@ BLOCK_UNKNOWN_ORDER = "BLOCK_UNKNOWN_ORDER"
 BLOCK_RECONCILIATION = "BLOCK_RECONCILIATION"
 BLOCK_RISK = "BLOCK_RISK"
 BLOCK_COST = "BLOCK_COST"
-# Persisted when run_reconciliation itself fails (broker snapshot unreadable).
+# Persisted when run_reconciliation itself fails for a reason other than
+# unreadable broker truth.
 RECONCILIATION_ERROR = "ERROR"
+# Persisted when a broker-truth query failed (Mt5QueryError) anywhere in the
+# position cycle: "we cannot currently know", never a stale CLEAN.
+RECONCILIATION_BROKER_TRUTH_UNAVAILABLE = "BROKER_TRUTH_UNAVAILABLE"
+# `broker_truth` runtime state (master prompt section 14). AVAILABLE only
+# after a complete, successful position cycle (reconciliation, UNKNOWN and
+# close resolution, position reviews); anything else blocks new exposure.
+BROKER_TRUTH_AVAILABLE = "AVAILABLE"
+BROKER_TRUTH_UNAVAILABLE = "UNAVAILABLE"
+BROKER_TRUTH_CYCLE_FAILED = "CYCLE_FAILED"
 # A CLEAN verdict older than this no longer admits new entries.
 RECONCILIATION_MIN_MAX_AGE_SECONDS = 30
 
@@ -215,6 +227,8 @@ class DemoRuntime:
             return demo.block_reason, demo.detail
         if has_dangerous_unresolved_unknown(self.conn):
             return BLOCK_UNKNOWN_ORDER, "a dangerous UNKNOWN order is unresolved"
+        if has_unresolved_close(self.conn):
+            return BLOCK_UNKNOWN_ORDER, "a close request's outcome is unresolved"
         recon = get_state(self.conn, "reconciliation", {})
         last_recon = recon.get("status")
         if last_recon != CLEAN:
@@ -222,6 +236,12 @@ class DemoRuntime:
         recon_age = now - int(recon.get("at") or 0)
         if recon_age > self._reconciliation_max_age_seconds():
             return BLOCK_RECONCILIATION, f"last CLEAN reconciliation is {recon_age}s old (stale)"
+        truth = get_state(self.conn, "broker_truth", {}) or {}
+        if truth.get("status") != BROKER_TRUTH_AVAILABLE:
+            return BLOCK_RECONCILIATION, f"broker truth {truth.get('status')}: {truth.get('error')}"
+        truth_age = now - int(truth.get("at") or 0)
+        if truth_age > self._reconciliation_max_age_seconds():
+            return BLOCK_RECONCILIATION, f"last complete position cycle is {truth_age}s old (stale)"
         news_block = self.news.global_block(now)
         if news_block is not None:
             return news_block
@@ -275,13 +295,64 @@ class DemoRuntime:
     # ------------------------------------------------------------------
 
     def position_cycle(self) -> None:
+        """One protective cycle. Its outcome is published as `broker_truth`:
+        AVAILABLE only when every step completed; a broker query failure
+        anywhere is UNAVAILABLE (and reconciliation BROKER_TRUTH_UNAVAILABLE),
+        any other failure CYCLE_FAILED. Both block new exposure until a later
+        cycle completes -- never cleared merely because time passed."""
         now = self.now()
+        verdict_before = get_state(self.conn, "reconciliation", {}) or {}
+        try:
+            self._position_cycle(now)
+        except Exception as exc:
+            self._publish_broker_truth_failure(now, exc, verdict_before)
+            raise
+        self._publish_broker_truth_available(now)
+
+    def _publish_broker_truth_failure(self, now: int, exc: BaseException, verdict_before: dict) -> None:
+        unavailable = isinstance(exc, Mt5QueryError)
+        error = f"{type(exc).__name__}: {exc}"
+        previous = get_state(self.conn, "broker_truth", {}) or {}
+        degraded_before = previous.get("status") not in (None, BROKER_TRUTH_AVAILABLE)
+        put_state(self.conn, "broker_truth", {
+            "status": BROKER_TRUTH_UNAVAILABLE if unavailable else BROKER_TRUTH_CYCLE_FAILED, "at": now,
+            "since": previous.get("since") if degraded_before else now,
+            "error": error, "last_available_at": previous.get("last_available_at"),
+        }, now_utc=now)
+        if unavailable:
+            # Keep the last verdict that was actually proven (taken before this
+            # cycle overwrote anything), labelled as such -- never shown as current.
+            recon = get_state(self.conn, "reconciliation", {}) or {}
+            if recon.get("status") not in (None, RECONCILIATION_ERROR, RECONCILIATION_BROKER_TRUTH_UNAVAILABLE):
+                last_known = recon  # this cycle's own reconciliation succeeded before the failure
+            elif verdict_before.get("status") == RECONCILIATION_BROKER_TRUTH_UNAVAILABLE:
+                last_known = verdict_before.get("last_known")
+            else:
+                last_known = verdict_before or None
+            put_state(self.conn, "reconciliation", {"status": RECONCILIATION_BROKER_TRUTH_UNAVAILABLE, "at": now,
+                                                    "error": error, "last_known": last_known}, now_utc=now)
+        record_event(self.conn, "BLOCKED", "broker_truth",
+                     "BROKER_TRUTH_UNAVAILABLE" if unavailable else "POSITION_CYCLE_FAILED",
+                     f"{error}; new exposure blocked until a full position cycle succeeds",
+                     dedup_key="broker_truth:unavailable", now_utc=now)
+
+    def _publish_broker_truth_available(self, now: int) -> None:
+        from adaptive_scalper.runtime.state import clear_event
+        previous = get_state(self.conn, "broker_truth", {}) or {}
+        put_state(self.conn, "broker_truth", {"status": BROKER_TRUTH_AVAILABLE, "at": now, "since": None,
+                                              "error": None, "last_available_at": now}, now_utc=now)
+        if clear_event(self.conn, "broker_truth:unavailable", now_utc=now):
+            record_event(self.conn, "INFO", "broker_truth", "BROKER_TRUTH_RESTORED",
+                         f"full position cycle succeeded (degraded since {previous.get('since')})", now_utc=now)
+
+    def _position_cycle(self, now: int) -> None:
         try:
             report = run_reconciliation(self.conn, self.gateway, f"reconcile:{now // 86400}", now_utc=now,
                                         journal_clean=False, own_magic=self.config.runtime.magic)
         except Exception as exc:
-            # A failed broker snapshot (e.g. Mt5QueryError) is never "still
-            # CLEAN": persist ERROR so global_entry_block fails closed.
+            # A failed broker snapshot is never "still CLEAN": persist ERROR
+            # (position_cycle relabels a broker query failure
+            # BROKER_TRUTH_UNAVAILABLE) so global_entry_block fails closed.
             put_state(self.conn, "reconciliation", {"status": RECONCILIATION_ERROR, "at": now,
                                                     "error": f"{type(exc).__name__}: {exc}"}, now_utc=now)
             record_event(self.conn, "BLOCKED", "reconciliation", "RECONCILIATION_FAILED",
@@ -302,11 +373,23 @@ class DemoRuntime:
             record_event(self.conn, "INFO" if outcome.resolved else "BLOCKED", "execution", "UNKNOWN_RESOLUTION",
                          outcome.detail, dedup_key=f"unknown:{outcome.order_id}", now_utc=now)
 
+        for resolution in resolve_unresolved_closes(self.conn, self.gateway, now_utc=now):
+            if resolution.resolved:
+                clear_event(self.conn, f"close_unresolved:{resolution.broker_position_id}", now_utc=now)
+                record_event(self.conn, "INFO", "execution", "CLOSE_RESOLUTION",
+                             f"{resolution.status}: {resolution.detail}", now_utc=now)
+            else:
+                record_event(self.conn, "BLOCKED", "execution", "CLOSE_UNRESOLVED", resolution.detail,
+                             dedup_key=f"close_unresolved:{resolution.broker_position_id}", now_utc=now)
+
         broker_positions = {p.broker_position_id: p for p in self.gateway.positions_get()}
+        truth_failure: Exception | None = None
         for local in get_open_positions(self.conn):
             live = broker_positions.get(local.broker_position_id)
             if live is None:
                 continue  # reconciliation owns vanished positions
+            if has_unresolved_close(self.conn, local.broker_position_id):
+                continue  # an unproven close is never followed by another decision on this position
             try:
                 self._review(local, live, now)
             except Exception as exc:  # one position's failure must not stop the others
@@ -314,6 +397,10 @@ class DemoRuntime:
                 record_event(self.conn, "ERROR", "position_manager", "REVIEW_FAILED", f"{type(exc).__name__}: {exc}",
                              canonical_symbol=local.canonical_symbol,
                              dedup_key=f"review_failed:{local.broker_position_id}", now_utc=now)
+                if isinstance(exc, Mt5QueryError) and truth_failure is None:
+                    truth_failure = exc
+        if truth_failure is not None:
+            raise truth_failure  # after every position was reviewed: this cycle did not see full broker truth
 
     def _entry_context(self, local) -> sqlite3.Row | dict | None:
         row = get_position_entry_context(self.conn, local.broker_position_id)
@@ -381,8 +468,14 @@ class DemoRuntime:
             current_price_at_review=price,
             close_magic=self.config.runtime.magic, close_comment="ASN exit",
         )
-        review_position_once(self.conn, self.gateway, inp, params=self.exit_params, now_utc=now,
-                             clock=self.clock)
+        result = review_position_once(self.conn, self.gateway, inp, params=self.exit_params, now_utc=now,
+                                      clock=self.clock)
+        close = result.close_outcome
+        if close is not None and close.broker_truth_error is not None:
+            # The close request is durable and UNRESOLVED; surface the
+            # unreadable broker truth as a cycle failure (degraded state).
+            raise Mt5QueryError(f"broker truth unavailable after closing {local.broker_position_id}: "
+                                f"{close.broker_truth_error}")
 
     # ------------------------------------------------------------------
     # entry cycle
