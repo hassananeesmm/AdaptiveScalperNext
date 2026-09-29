@@ -51,6 +51,7 @@ do not change that; calibrated selector abstains. Reserved OOS 2026-07-01..09-18
 `run_backtest` for research hooks). No candidate locked. Strategy status: V1 = DEPLOYED baseline (frozen); every V2
 variant = REJECTED. Next: measure exit-side DEMO execution cost; pre-register H6 (cost-to-risk / longer horizon) and H7
 (XAUUSD London/NY overlap, POST-HOC origin).
+**Update (evening):** H6 (78 trials, M15 slower entries, cost gate, Donchian) -- no screen passer; XAUUSD Donchian has a real but too small gross edge (+0.07 R, gross/cost 0.95). H7 run once on the untouched XAUUSD M15 holdout: FAIL; holdout CONSUMED. Still NO VALIDATED EDGE; OOS sealed; 260 ledger trials (`docs/research/V2_H6_H7_RESULTS_v2r3.md`).
 
 ## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
 

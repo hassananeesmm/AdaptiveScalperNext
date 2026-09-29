@@ -2908,3 +2908,19 @@ check or order send occurred.
   AVAILABLE, reconciliation CLEAN, engine heartbeat current, 0 unresolved incidents, kill switch DISENGAGED, 1 open
   XAUUSD position under management. ASN-026 degradation and close-side UNKNOWN: not occurred naturally (still
   TESTED-FAKE only); not provoked.
+
+## 2026-09-29 (evening) -- operator plan A-G: housekeeping, observation review, exit-cost observability, H6/H7
+
+- A: `main` fast-forwarded to c730e96 (no force); `v0.2.6` = e3b1250 unchanged; PRs #2/#3/#4 closed as superseded
+  (branches kept); PR #5 open. B: task-observer review read and bucketed (11 observations), awaiting operator approval;
+  nothing applied. C: exit-side cost observability on `feature/exit-cost-observability` (75f6e34, migration 0031,
+  1782/9/0, rehearsed on a production-DB copy; NOT deployed) -- see that branch's WORKLOG.
+- D: H6/H7 pre-registered (78f0491) before any code. M15 data discovered in the research DB (XAUUSD from 2022-06,
+  BTCUSD from 2023-10); H7 given the untouched XAUUSD M15 window 2022-06-23..2024-05-31, which H6 is barred from in code.
+- E: H6 (2c98b9a, tag v2r3; smoke on a scratch DB copy first): 78 trials, fidelity 100 %, 0 screen passers. Cost R fell
+  to 0.04-0.17 on M15; V1 logic still has no gross edge; XAUUSD Donchian shows gross +0.07 R with CI above 0 but
+  gross/cost 0.95, net ~0. DEMO-evidence cost scenario changes nothing material.
+- F: H7 one-shot runner (f9b56a6; refuses a second run -- tested on a clean tree), run once: FAIL (session gross
+  -0.009 R, net -0.297 R, n 84); holdout CONSUMED.
+- G: reserved OOS untouched throughout. Ledger 260 trials, 0 failed, 0 smoke rows. Results:
+  docs/research/V2_H6_H7_RESULTS_v2r3.md.
