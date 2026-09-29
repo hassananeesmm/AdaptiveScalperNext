@@ -145,3 +145,48 @@ def test_the_research_cli_refuses_the_production_database(tmp_path):
         research_cli.open_research_db(str(cfg_path), str(prod))
     with pytest.raises(CliError, match="does not exist"):
         research_cli.open_research_db(str(cfg_path), str(tmp_path / "nope.sqlite3"))
+
+
+def _v2_report(symbol: str, created: int) -> dict:
+    session = {"r": {"n": 4, "gross_r": 0.05, "cost_r": 0.2, "net_r": -0.15, "net_win_rate": 0.25},
+               "summary": {"profit_factor": 0.5, "net_pnl": -6.0, "avg_holding_seconds": 600.0},
+               "statistics": {"psr_vs_zero": 0.1}, "positive_folds": 1, "folds": 2, "halted_folds": 0,
+               "mae_r": {"median": 0.4}, "mfe_r": {"median": 0.3}}
+    return {"kind": "RESEARCH_V2_STUDY", "symbol": symbol, "created_at_utc": created, "bars": 100, "folds": 2,
+            "cost_provenance": "BROKER_DEMO_CONFIRMED", "protected_oos": "not read",
+            "sessions": {"V1:momentum_continuation": session, "H1-DIR:momentum_continuation": {**session, "dsr": {"dsr": 0.0}},
+                         "H3-M1:__selector__": {"r": {"n": 0}, "summary": {}, "statistics": {}},
+                         "H2-K3:range_breakout": {"error": "RuntimeError: x"}},
+            "family_pbo": {}, "raw_confidence_reliability": {"momentum_continuation": "UNKNOWN (too few trades)"}}
+
+
+def test_research_v2_view_labels_baseline_and_candidates_separately(tmp_path):
+    folder = tmp_path / "research"
+    folder.mkdir()
+    (folder / "v2_XAUUSD_old.json").write_text(json.dumps(_v2_report("XAUUSD", 1)), encoding="utf-8")
+    (folder / "v2_XAUUSD_new.json").write_text(json.dumps(_v2_report("XAUUSD", 2)), encoding="utf-8")
+    (folder / "v2_costs_20260929.json").write_text(json.dumps({"evidence": "BROKER_DEMO_CONFIRMED (entry side)",
+                                                               "symbols": {}}), encoding="utf-8")
+    (folder / "independent_XAUUSD_r.json").write_text(json.dumps(_report("XAUUSD", 3)), encoding="utf-8")
+    body = sl.research_v2_reports(folder)
+    x = body["symbols"]["XAUUSD"]
+    assert x["file"] == "v2_XAUUSD_new.json"
+    assert {r["evidence_label"] for r in x["variants"]["V1"]} == {"V1 BASELINE"}
+    assert {r["evidence_label"] for v in ("H1-DIR", "H2-K3", "H3-M1") for r in x["variants"][v]} == {"V2 CANDIDATE"}
+    assert x["variants"]["H2-K3"][0]["error"].startswith("RuntimeError")
+    assert x["variants"]["H3-M1"][0]["trades"] == 0
+    assert body["costs"]["_file"] == "v2_costs_20260929.json"
+    assert sl.research_v2_reports(tmp_path / "missing")["status"] == "NO_DATA"
+
+
+def test_research_v2_endpoint_is_read_only(tmp_path):
+    db_path = tmp_path / "prod.sqlite3"
+    conn = connect(db_path)
+    migrate(conn)
+    conn.close()
+    (tmp_path / "research").mkdir()
+    (tmp_path / "research" / "v2_BTCUSD_t.json").write_text(json.dumps(_v2_report("BTCUSD", 1)), encoding="utf-8")
+    client = TestClient(create_app(db_path))
+    body = client.get("/api/strategy-lab/research-v2").json()
+    assert body["status"] == "OK" and list(body["symbols"]) == ["BTCUSD"]
+    assert client.post("/api/strategy-lab/research-v2").status_code == 405

@@ -1484,6 +1484,76 @@ def research_reports(research_dir) -> dict:
             "detail": None if out else "no independent research report found; run `independent-research`"}
 
 
+RESEARCH_V2_REPORT_GLOB = "v2_*_*.json"
+RESEARCH_V2_COSTS_GLOB = "v2_costs_*.json"
+
+
+def _v2_row(label: str, v: dict) -> dict:
+    if "error" in v:
+        return {"label": label, "error": v["error"]}
+    r, st, summ = v.get("r") or {}, v.get("statistics") or {}, v.get("summary") or {}
+    return {
+        "label": label, "trades": r.get("n", 0), "gross_r": r.get("gross_r"), "cost_r": r.get("cost_r"),
+        "net_r": r.get("net_r"), "net_win_rate": r.get("net_win_rate"), "profit_factor": summ.get("profit_factor"),
+        "net_pnl": summ.get("net_pnl"), "positive_folds": v.get("positive_folds"), "folds": v.get("folds"),
+        "halted_folds": v.get("halted_folds"), "max_fold_drawdown": v.get("max_fold_drawdown"),
+        "psr_vs_zero": st.get("psr_vs_zero"), "dsr": (v.get("dsr") or {}).get("dsr"),
+        "avg_holding_seconds": summ.get("avg_holding_seconds"),
+        "mae_r_median": (v.get("mae_r") or {}).get("median"), "mfe_r_median": (v.get("mfe_r") or {}).get("median"),
+        "exit_reasons": v.get("exit_reasons"), "holding_duration": v.get("holding_duration"),
+        "selection_distribution": v.get("selection_distribution"),
+    }
+
+
+def research_v2_reports(research_dir) -> dict:
+    """RESEARCH-ONLY V2 candidates next to the frozen V1 BASELINE on identical
+    development folds (BACKTEST origin, research DB only), plus DEMO cost
+    prediction diagnostics. Latest report per symbol. Labels are kept
+    separate; nothing is pooled with DEMO/PAPER and nothing here promotes."""
+    import pathlib
+
+    folder = pathlib.Path(research_dir)
+    note = ("INDEPENDENT RESEARCH · V1 BASELINE vs V2 CANDIDATE: BACKTEST evidence on development data only. "
+            "V2 candidates cannot reach order_send and are never promoted from this view.")
+    out, errors, costs = {}, [], None
+    if folder.is_dir():
+        latest: dict[str, dict] = {}
+        for path in sorted(folder.glob(RESEARCH_V2_REPORT_GLOB)):
+            if path.name.startswith("v2_costs_"):
+                continue
+            try:
+                report = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                errors.append(f"{path.name}: {exc}")
+                continue
+            symbol = report.get("symbol")
+            if report.get("kind") == "RESEARCH_V2_STUDY" and symbol and (
+                    symbol not in latest or report.get("created_at_utc", 0) > latest[symbol].get("created_at_utc", 0)):
+                report["_file"] = path.name
+                latest[symbol] = report
+        for symbol, r in sorted(latest.items()):
+            groups: dict[str, list] = {}
+            for label, v in (r.get("sessions") or {}).items():
+                variant = label.split(":", 1)[0]
+                family = "V1 BASELINE" if variant == "V1" else "V2 CANDIDATE"
+                groups.setdefault(variant, []).append({**_v2_row(label, v), "evidence_label": family})
+            out[symbol] = {
+                "file": r.get("_file"), "created_at_utc": r.get("created_at_utc"), "range": r.get("range"),
+                "bars": r.get("bars"), "folds": r.get("folds"), "cost_provenance": r.get("cost_provenance"),
+                "protected_oos": r.get("protected_oos"), "variants": groups, "family_pbo": r.get("family_pbo"),
+                "raw_confidence_reliability": r.get("raw_confidence_reliability"),
+            }
+        cost_files = sorted(folder.glob(RESEARCH_V2_COSTS_GLOB))
+        if cost_files:
+            try:
+                costs = json.loads(cost_files[-1].read_text(encoding="utf-8"))
+                costs["_file"] = cost_files[-1].name
+            except (OSError, ValueError) as exc:
+                errors.append(f"{cost_files[-1].name}: {exc}")
+    return {"status": "OK" if out else "NO_DATA", "note": note, "symbols": out, "costs": costs, "errors": errors,
+            "detail": None if out else "no V2 research report found; run scripts/research_v2.py"}
+
+
 def comparison_csv_rows(summary_payload: dict, keys: list[str]) -> list[dict]:
     rows = []
     for s in summary_payload["strategies"]:
