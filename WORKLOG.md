@@ -2871,3 +2871,27 @@ check or order send occurred.
   `test_v1_strategy_freeze.py` + `test_config.py` 42 passed at `e3b1250`.
 - Evidence classes: ASN-026/027 remain TESTED-FAKE for their failure paths; no natural DEMO trade, close, broker-truth
   outage or UNKNOWN has occurred yet under 0.2.6 (TESTED-LIVE-DEMO evidence pending natural operation).
+
+## 2026-09-29 (evening) -- exit-side execution cost observability (branch `feature/exit-cost-observability`, NOT deployed)
+
+- Repository housekeeping (operator-directed): `main` fast-forwarded 8e67f77 -> c730e96 (local + origin, no force);
+  `v0.2.6` still = e3b1250; PRs #2, #3, #4 closed as superseded with explanations (branches kept); PR #5 open.
+- Why: research showed the per-fill slippage ASSUMPTION dominates modelled cost and only ENTRY slippage was ever
+  observed in DEMO.
+- Change (additive, migration **0031**): `close_requests.quote_bid/quote_ask/quote_time_msc` stored in the write-ahead
+  row from the SAME validated round-2 tick (no extra broker call; send/settle logic unchanged -- a test pins exactly two
+  `symbol_info_tick` calls per close); `deals.reason` (MT5 ENUM_DEAL_REASON) persisted by reconciliation for closing
+  deals; new `exit_cost_observations` filled by the existing off-hot-path cost sweep (ADVISORY component): exit kind
+  (AGENT_CLOSE / STOP_LOSS / TAKE_PROFIT / MANUAL / STOP_OUT / OTHER / UNKNOWN), reference price only from evidence
+  (close quote, the broker's own "[sl X]"/"[tp X]" trigger comment, or the never-moved entry TP; never the entry SL,
+  which breakeven moves), VWAP exit fill, adverse exit slippage, else NULL. `system cost-evidence` CLI output gains
+  `exit_side` (p50/p75/p90/p95 per kind). Evidence only: nothing changes configuration.
+- Tests: `tests/test_exit_cost_observations.py` 15 (fail on the old code by construction); full suite at this branch
+  **1782 passed / 9 skipped / 0 failed**; compileall OK.
+- Rehearsal on an online-backup COPY of the production DB (source opened `mode=ro`; production never written):
+  migration 0031 applied, integrity ok; the sweep produced real stop-exit evidence from historical broker comments --
+  XAUUSD STOP_LOSS n 15: p50 0.18 / p75 0.54 / p90 0.72 (assumed 0.41 per fill); BTCUSD n 36: p50 0.94 / p90 5.70 /
+  p95 6.56 (assumed 11.97). 21 pre-change agent closes correctly stay NULL (no recorded quote); 150 older closes are
+  UNKNOWN (no reason, no evidence) and are not guessed.
+- Deployment: only through the normal release procedure at an operator-approved flat (backup, rehearsal, build, smoke,
+  live read-only checks). The running 0.2.6 process was not touched.

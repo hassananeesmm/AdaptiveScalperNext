@@ -103,6 +103,7 @@ def get_unresolved_closes(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def record_close_intent(
     conn: sqlite3.Connection, *, broker_position_id: str, broker_symbol: str, position_direction: str,
     requested_volume: float, magic: int, comment: str, now_utc: int,
+    quote_bid: float | None = None, quote_ask: float | None = None, quote_time_msc: int | None = None,
 ) -> int:
     """Write-ahead row, committed before `order_send` is called. Raises
     `CloseRequestConflict` when the position already has an unresolved
@@ -115,10 +116,10 @@ def record_close_intent(
     try:
         cursor = conn.execute(
             "INSERT INTO close_requests (position_id, broker_position_id, broker_symbol, position_direction, "
-            "requested_volume, magic, comment, requested_at_utc, send_outcome, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "requested_volume, magic, comment, requested_at_utc, send_outcome, status, quote_bid, quote_ask, "
+            "quote_time_msc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (local["id"] if local is not None else None, str(broker_position_id), broker_symbol, position_direction,
-             requested_volume, magic, comment, now_utc, SENDING, UNRESOLVED),
+             requested_volume, magic, comment, now_utc, SENDING, UNRESOLVED, quote_bid, quote_ask, quote_time_msc),
         )
     except sqlite3.IntegrityError as exc:  # a concurrent writer won the partial unique index
         raise CloseRequestConflict(f"position {broker_position_id}: {exc}") from exc

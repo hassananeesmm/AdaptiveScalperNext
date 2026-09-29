@@ -17,6 +17,7 @@ wraps it so a failure here can never affect order handling.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import statistics
 import time
@@ -127,7 +128,143 @@ def sweep_exit_costs(conn: sqlite3.Connection, *, now_utc: int | None = None) ->
              all_swap, now, row["id"]),
         )
     conn.commit()
+    record_exit_observations(conn, now_utc=now)
     return len(rows)
+
+
+# MT5 ENUM_DEAL_REASON codes (raw integers, as the gateway reports them).
+_DEAL_REASON_KIND = {0: "MANUAL", 1: "MANUAL", 2: "MANUAL", 3: "AGENT_CLOSE", 4: "STOP_LOSS", 5: "TAKE_PROFIT",
+                     6: "STOP_OUT"}
+_TRIGGER_COMMENT = re.compile(r"\[(sl|tp)\s+([0-9]+(?:\.[0-9]+)?)\]", re.IGNORECASE)
+
+
+def _trigger_from_comment(comment: str | None) -> tuple[str, float] | None:
+    """MT5 writes a broker-triggered exit's level into the deal comment,
+    e.g. "[sl 2345.67]". That is broker evidence of the trigger price."""
+    match = _TRIGGER_COMMENT.search(comment or "")
+    return (match.group(1).lower(), float(match.group(2))) if match else None
+
+
+def record_exit_observations(conn: sqlite3.Connection, *, now_utc: int | None = None) -> int:
+    """One `exit_cost_observations` row per CLOSED position with recorded
+    exit deals, from evidence already in the DB (no broker call). The
+    reference price comes only from broker evidence or the recorded close
+    quote; where none exists it stays NULL and so does the slippage --
+    never guessed. Idempotent (one row per broker position). Returns rows
+    written."""
+    now = now_utc if now_utc is not None else int(time.time())
+    positions = conn.execute(
+        """
+        SELECT p.id, p.broker_position_id, p.canonical_symbol, p.direction, p.entry_order_id
+        FROM positions p
+        WHERE p.status = 'CLOSED'
+          AND NOT EXISTS (SELECT 1 FROM exit_cost_observations e WHERE e.broker_position_id = p.broker_position_id)
+          AND EXISTS (SELECT 1 FROM deals d WHERE d.broker_position_id = p.broker_position_id
+                      AND d.entry_type IS NOT NULL AND d.entry_type != 'IN')
+        """
+    ).fetchall()
+    written = 0
+    for p in positions:
+        deals = conn.execute(
+            "SELECT price, volume, comment, reason, occurred_at_utc FROM deals "
+            "WHERE broker_position_id = ? AND entry_type IS NOT NULL AND entry_type != 'IN' ORDER BY occurred_at_utc",
+            (p["broker_position_id"],),
+        ).fetchall()
+        volume = sum(d["volume"] for d in deals)
+        fill = sum(d["price"] * d["volume"] for d in deals) / volume if volume > 0 else None
+        reasons = {d["reason"] for d in deals}
+        reason = next(iter(reasons)) if len(reasons) == 1 else None
+        triggers = {t for t in (_trigger_from_comment(d["comment"]) for d in deals) if t is not None}
+        trigger = next(iter(triggers)) if len(triggers) == 1 else None
+        close_request = conn.execute(
+            "SELECT id, quote_bid, quote_ask FROM close_requests WHERE broker_position_id = ? "
+            "AND status IN ('RESOLVED_CLOSED', 'RESOLVED_PARTIALLY_CLOSED') ORDER BY id DESC LIMIT 1",
+            (p["broker_position_id"],),
+        ).fetchone()
+
+        if reason is not None:
+            kind = _DEAL_REASON_KIND.get(reason, "OTHER")
+        elif trigger is not None:
+            kind = "STOP_LOSS" if trigger[0] == "sl" else "TAKE_PROFIT"
+        elif close_request is not None:
+            kind = "AGENT_CLOSE"
+        else:
+            kind = "UNKNOWN"
+
+        reference, source, spread = None, "NONE", None
+        if kind == "AGENT_CLOSE" and close_request is not None and close_request["quote_bid"] is not None:
+            # closing a BUY sells at the bid; closing a SELL buys at the ask
+            reference = close_request["quote_bid"] if p["direction"] == "BUY" else close_request["quote_ask"]
+            spread = close_request["quote_ask"] - close_request["quote_bid"]
+            source = "CLOSE_QUOTE"
+        elif kind in ("STOP_LOSS", "TAKE_PROFIT") and trigger is not None \
+                and trigger[0] == ("sl" if kind == "STOP_LOSS" else "tp"):
+            reference, source = trigger[1], "DEAL_COMMENT_TRIGGER"
+        elif kind == "TAKE_PROFIT" and p["entry_order_id"] is not None:
+            # targets are never moved after entry; stops are (breakeven), so no such fallback for STOP_LOSS
+            order = conn.execute("SELECT take_profit FROM orders WHERE id = ?", (p["entry_order_id"],)).fetchone()
+            if order is not None and order["take_profit"]:
+                reference, source = order["take_profit"], "ENTRY_ORDER_LEVEL"
+
+        slippage = None
+        if reference is not None and fill is not None:
+            slippage = (reference - fill) if p["direction"] == "BUY" else (fill - reference)
+        estimate = conn.execute(
+            "SELECT estimated_slippage_price FROM execution_cost_observations WHERE broker_position_id = ? "
+            "ORDER BY id LIMIT 1", (p["broker_position_id"],),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO exit_cost_observations (
+                broker_position_id, position_id, canonical_symbol, position_direction, exit_kind, deal_reason,
+                close_request_id, reference_price, reference_source, quote_spread_price, exit_fill_price,
+                exit_volume, exit_deal_count, exit_slippage_price, estimated_slippage_price, exit_time_utc,
+                recorded_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (p["broker_position_id"], p["id"], p["canonical_symbol"], p["direction"], kind, reason,
+             close_request["id"] if close_request is not None else None, reference, source, spread, fill, volume,
+             len(deals), slippage, estimate["estimated_slippage_price"] if estimate is not None else None,
+             deals[-1]["occurred_at_utc"] if deals else None, now),
+        )
+        written += 1
+    conn.commit()
+    return written
+
+
+def _percentile(sorted_values: list[float], q: float) -> float | None:
+    if not sorted_values:
+        return None
+    return sorted_values[min(len(sorted_values) - 1, int(q * (len(sorted_values) - 1) + 0.5))]
+
+
+def summarize_exit_observations(conn: sqlite3.Connection, canonical_symbol: str) -> dict:
+    """Per exit kind: count, how many have a proven reference, and the
+    adverse exit slippage distribution (p50/p75/p90/p95) in PRICE units,
+    next to the per-fill assumption the entries were costed with."""
+    rows = conn.execute(
+        "SELECT exit_kind, exit_slippage_price, estimated_slippage_price FROM exit_cost_observations "
+        "WHERE canonical_symbol = ?", (canonical_symbol,),
+    ).fetchall()
+    out: dict = {"symbol": canonical_symbol, "exits": len(rows), "by_kind": {},
+                 "sufficient": False, "min_samples": MIN_SAMPLES_FOR_EVIDENCE}
+    kinds: dict = {}
+    for r in rows:
+        kinds.setdefault(r["exit_kind"], []).append(r)
+    for kind, group in sorted(kinds.items()):
+        slip = sorted(r["exit_slippage_price"] for r in group if r["exit_slippage_price"] is not None)
+        assumed = [r["estimated_slippage_price"] for r in group if r["estimated_slippage_price"] is not None]
+        out["by_kind"][kind] = {
+            "exits": len(group), "with_reference": len(slip),
+            "p50": _percentile(slip, 0.50), "p75": _percentile(slip, 0.75),
+            "p90": _percentile(slip, 0.90), "p95": _percentile(slip, 0.95),
+            "mean": statistics.fmean(slip) if slip else None,
+            "adverse_share": (sum(1 for s in slip if s > 0) / len(slip)) if slip else None,
+            "assumed_per_fill": statistics.median(assumed) if assumed else None,
+        }
+    measured = sum(v["with_reference"] for v in out["by_kind"].values())
+    out["sufficient"] = measured >= MIN_SAMPLES_FOR_EVIDENCE
+    return out
 
 
 @dataclass(frozen=True)
