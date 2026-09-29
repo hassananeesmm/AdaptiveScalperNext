@@ -41,6 +41,17 @@ PR #3 and PR #4 are SUPERSEDED (their work is in the 0.2.5/0.2.6 lineage: ASN-02
 them without merging. Strategy research happens on `research/*` branches in `.worktrees/`, never in the main
 checkout that the running DEMO process uses.
 
+## Strategy research (2026-09-29, branch `research/v2-on-0.2.6`, never in a release)
+
+**Result: NO VALIDATED EDGE YET** (development data, BACKTEST evidence; `docs/research/PROFITABILITY_ANALYSIS_2026-09-29.md`).
+V1 baseline (fresh run): XAUUSD selector net -0.193 R/trade (gross +0.025, cost 0.218), BTCUSD -0.269 (gross -0.031,
+cost 0.238), 0/12 folds positive. H1-H5 (150 trials in the append-only ledger, 0 failed): none passes; entries have no
+gross edge at any tested horizon (H4 same-entry replay, 100 % replay fidelity); exits, holding thesis and marginal cost
+do not change that; calibrated selector abstains. Reserved OOS 2026-07-01..09-18 **sealed** (now also refused inside
+`run_backtest` for research hooks). No candidate locked. Strategy status: V1 = DEPLOYED baseline (frozen); every V2
+variant = REJECTED. Next: measure exit-side DEMO execution cost; pre-register H6 (cost-to-risk / longer horizon) and H7
+(XAUUSD London/NY overlap, POST-HOC origin).
+
 ## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
 
 **Release 0.2.6** = `e3b1250` (branch `fix/0.2.6-broker-truth-degradation`, PR #5): `dist\AdaptiveScalperNext-0.2.6.zip`,

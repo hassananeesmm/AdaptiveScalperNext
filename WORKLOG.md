@@ -2871,3 +2871,31 @@ check or order send occurred.
   `test_v1_strategy_freeze.py` + `test_config.py` 42 passed at `e3b1250`.
 - Evidence classes: ASN-026/027 remain TESTED-FAKE for their failure paths; no natural DEMO trade, close, broker-truth
   outage or UNKNOWN has occurred yet under 0.2.6 (TESTED-LIVE-DEMO evidence pending natural operation).
+
+## 2026-09-29 (afternoon) -- governance, V2 port onto 0.2.6, H4/H5 research (no runtime change)
+
+- Running DEMO runtime untouched throughout: main checkout stays detached at `e3b1250` (0.2.6); all work in
+  worktrees (`.worktrees/degradation`, `.worktrees/research-v2b`).
+- Governance: annotated tag `v0.2.6` created at exactly `e3b1250a70a4849633ec8d2da2f0018a3c655049` and pushed.
+  PROJECT_STATUS pre-deploy sections reworded as history ("At that time ... still 0.2.2") and a governance note added
+  (`317b2e4` on `fix/0.2.6-broker-truth-degradation`, pushed): `main` (`8e67f77`) is a strict ancestor of `e3b1250`
+  (fast-forward possible, awaiting operator approval); PR #3/#4 superseded (not closed yet); PR #5 = docs on top of the
+  tested release, a merge SHA would need rebuild + retest.
+- V2 port: `f060fda`, `0be4f08`, `10184be` cherry-picked cleanly onto `317b2e4` as branch `research/v2-on-0.2.6`
+  (`f73a88a`, `4683a3a`, `039c855`); focused suites 86 passed.
+- Disclosed: H1-H3 had already been run once (tag `v2r1`, 07:05-07:45) before this session; their headline numbers were
+  seen before H4/H5 were written. H4/H5 pre-registered and committed before any H4/H5 code ran (`33f06d9`).
+- Framework (`5293ce0`): `backtest/reserved_oos.py` (single OOS definition; `run_backtest` itself refuses research
+  hooks over the OOS -- tests prove direct calls fail), `research/v2/counterfactual.py` (same-entry exit replay using
+  the engine's own SL/TP, fill and cost primitives), `research/v2/marginal_cost.py` (H5), `research/v2/metrics.py`
+  (section-35 metrics, segments, stress, development verdict), `scripts/research_v2_counterfactual.py` (refuses a dirty
+  tree and OOS ranges before loading). `tests/test_research_v2_counterfactual.py` 27 tests; research + freeze +
+  boundary suites 115 passed. No runtime / PAPER / DEMO / strategy / selector / risk change.
+- Runs (tag `v2r2`, research DB `data/research/v2_20260929.sqlite3`): smoke first on a scratch DB copy (so no smoke
+  trials entered the ledger). XAUUSD 325 s, BTCUSD 247 s; replay fidelity 100 % in all 14 cohorts; 98 trials appended
+  (H4 84, H5 14), 0 FAILED; ledger total 180. Passing trials: NONE.
+- Findings (docs/research/PROFITABILITY_ANALYSIS_2026-09-29.md): NO VALIDATED EDGE YET. V1 entries have no gross edge
+  at any tested horizon; the V1 exit neither creates nor destroys it (all paired |t| < 2); H5 changed no exit (the
+  remaining-edge test never binds); cost 0.10-0.24 R/trade is dominated by the configured slippage, which is 2-4x the
+  DEMO-observed ENTRY p90 (exit-side slippage unrecorded) -- a POST-HOC sensitivity with observed entry slippage leaves
+  every session negative; the calibrated selector correctly abstains. OOS untouched.
