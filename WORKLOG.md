@@ -2828,3 +2828,14 @@ check or order send occurred.
   privilege. TESTED-FAKE only; NOT live-DEMO-verified; NOT DEPLOYED.
 - Unchanged: strategies, selector, thresholds, exits, risk ceilings, symbol list (GBPJPY still disabled), costs,
   OOS ranges, research data. Live runtime, production DB and kill switch untouched.
+- Release 0.2.6 (2026-09-29): a first background build was stopped by the host for low memory (no artifact
+  produced); rebuilt in the foreground with ~3.9 GB free. `scripts\build_release.ps1 -Version 0.2.6` at `e3b1250`
+  (clean tree, = origin): gate suite **1767 passed / 9 skipped / 0 failed**; `dist\AdaptiveScalperNext-0.2.6.zip`,
+  428 entries, sha256 66bcac8dfbc02b371a6db07883812367aae958e882fadeb2cdaa149c89bd60d2. Content audit: no
+  DB/WAL/SHM/log/key/.env/data/dist/venv/model entries; 30 migrations (0001-0030, `0030_close_requests.sql`
+  included); secret-pattern hits only in synthetic guardrail fixtures (`tests/test_guardrails.py`,
+  `tests/test_knowledge.py`); no account login outside tests. `release_smoke_test.ps1`: **PASSED** (fresh venv,
+  MT5 disabled, own smoke DB: doctor OK, schema 30, integrity ok, real-money DISABLED, kill switch UNINITIALIZED;
+  retired strategies listed as `retired_permanently`; packaged suite 1767 passed / 9 skipped). NOT DEPLOYED.
+  Supersedes 0.2.5 (never deployed). Deployment needs operator approval (flat broker, verified backup -- migration
+  0030 --, launcher restart).
