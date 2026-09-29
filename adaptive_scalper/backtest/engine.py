@@ -85,6 +85,7 @@ import time
 
 from adaptive_scalper.backtest.dataset import build_dataset_snapshot
 from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
+from adaptive_scalper.backtest.reserved_oos import assert_outside_reserved_oos
 from adaptive_scalper.backtest.types import (
     FILL_NEXT_BAR_OPEN,
     FILL_RANGE_END_CLOSE,
@@ -342,6 +343,9 @@ def run_backtest(
             raise ValueError("research V2 hooks are for bounded research runs only, never incremental PAPER")
         if not research_variant:
             raise ValueError("research V2 hooks require a non-empty research_variant label")
+        # Defense in depth (not only in the research wrappers): research
+        # hooks never see the reserved untouched OOS holdout.
+        assert_outside_reserved_oos(bars[0].time, bars[-1].time)
         fingerprint = hashlib.sha256(f"{fingerprint}|research-v2:{research_variant}".encode()).hexdigest()
     elif research_variant is not None:
         raise ValueError("research_variant without a research hook")

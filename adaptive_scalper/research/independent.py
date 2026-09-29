@@ -58,31 +58,20 @@ from adaptive_scalper.research.stats import (
 from adaptive_scalper.research.trade_analysis import TradeView, from_simulated, summarize
 from adaptive_scalper.strategies import select_active_strategies
 
-# The untouched out-of-sample holdout reserved before any research was run
-# (docs/QA_REPORT.md, docs/RESEARCH_VALIDATION.md): 2026-07-01 00:00 UTC to
-# the end of 2026-09-18 UTC, all symbols. Half-open [start, end).
-RESERVED_OOS_INTERVALS: tuple[tuple[int, int], ...] = ((1782864000, 1789776000),)
+# The reserved OOS holdout and its guard live in `backtest.reserved_oos` so the
+# engine enforces them too (defense in depth); re-exported here unchanged.
+from adaptive_scalper.backtest.reserved_oos import (  # noqa: E402,F401
+    RESERVED_OOS_INTERVALS,
+    ReservedOosOverlapError,
+    assert_outside_reserved_oos,
+)
 
 SELECTOR_SESSION = "__selector__"
 INDEPENDENT_TRIAL_KIND = "INDEPENDENT_STRATEGY"
 
 
-class ReservedOosOverlapError(ValueError):
-    """The requested research range overlaps the reserved untouched OOS
-    interval. Research never reads it; use the one-shot `oos` command."""
-
-
 class ProductionDatabaseError(ValueError):
     """A research study was about to be written to the production database."""
-
-
-def assert_outside_reserved_oos(start_utc: int, end_utc: int) -> None:
-    for oos_start, oos_end in RESERVED_OOS_INTERVALS:
-        if start_utc < oos_end and end_utc >= oos_start:
-            raise ReservedOosOverlapError(
-                f"research range [{start_utc}, {end_utc}] overlaps the reserved untouched OOS interval "
-                f"[{oos_start}, {oos_end}) -- refused; OOS is consumed once via `oos`, never by research"
-            )
 
 
 def _same_file(a: str, b: str) -> bool:
