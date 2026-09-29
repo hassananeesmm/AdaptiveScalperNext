@@ -2795,3 +2795,36 @@ check or order send occurred.
   `release_smoke_test.ps1`: PASSED (fresh venv, MT5 disabled, own smoke DB, packaged suite 1754 passed / 9 skipped).
   NOT DEPLOYED. Operator decision 2026-09-29: deploy at the next flat via Ctrl+C + launcher restart.
 - Branches pushed (operator-approved): `fix/integrated-demo-safety-20260928`, `research/strategy-v2-20260929`.
+
+## 2026-09-29 -- 0.2.6 safety integration (branch `fix/0.2.6-broker-truth-degradation`, from `d18a5b0`)
+
+- Session start: fetched all remotes. `fix/integrated-demo-safety-20260928` (`d18a5b0`) already contained PR #4
+  (merged `749f3ce`), ASN-022..025, the PR #3 port and the V1 freeze; 0.2.4 (superseded) and 0.2.5 (`3a8df17`) were
+  built and smoke-tested. Confirmed read-only by the peer session: the running DEMO runtime is still 0.2.2
+  (`eaa024c`); 0.2.5 NOT DEPLOYED. So the next safety increment is 0.2.6 (master prompt sections 13-15, which
+  0.2.5 did not cover).
+- ASN-026 (runtime degradation): a broker query failing after a CLEAN reconciliation in the same position cycle
+  left engine RUNNING and a fresh CLEAN verdict admitting entries. Now: `broker_truth` state (AVAILABLE only after
+  a complete cycle; UNAVAILABLE on `Mt5QueryError`, CYCLE_FAILED otherwise), `reconciliation.status=
+  BROKER_TRUTH_UNAVAILABLE` with the last proven verdict under `last_known`, entry block on non-AVAILABLE/stale
+  broker truth, SAFETY_CRITICAL vs ADVISORY task health, `engine.safety_critical_degraded`, dashboard alert.
+  Cleared only by a later successful cycle (tested: 120 s of failure does not clear it).
+- ASN-027 (close-side UNKNOWN durability): migration 0030 `close_requests` (additive). Write-ahead row before
+  `order_send`; unproven outcomes stay UNRESOLVED (incident, entries blocked, no second close, no review of that
+  position, survive restart); `resolve_unresolved_closes` at startup and every cycle, from fresh broker truth only.
+  `close_position_safely` no longer lets a post-send reconciliation exception escape (reported as
+  `broker_truth_error`, surfaced by the runtime as a degraded cycle).
+- Tests: new `tests/test_close_unknown_durability.py` (9: scenarios A timeout+still open, B timeout+broker closed,
+  C ambiguous+truth unavailable, D restart mid-close, partial with/without explaining deals, DONE without history,
+  proven close/rejection, one unresolved per position) and `tests/test_runtime_broker_truth_degradation.py` (4).
+  Negative control: the 4 runtime tests all fail on `d18a5b0`. `test_runtime_reconciliation_freshness.py`: the
+  `Mt5QueryError` case now asserts the typed `BROKER_TRUTH_UNAVAILABLE` label (+ last_known CLEAN, engine
+  DEGRADED) instead of the generic `ERROR`; its blocking assertions are unchanged.
+- First full run found a real defect in the new code (a reconciliation-stage failure stored its own ERROR as
+  `last_known`); fixed by capturing the verdict before the cycle.
+- Verification (Windows, Python 3.13, `.venv`): compileall OK; focused runtime/close/reconciliation/chaos/ASN-022/
+  multi-position/kill-switch/demo-gate set 317 passed before the fix round; full suite **1767 passed / 9 skipped /
+  0 failed** (4 min 34 s). Skips: 8 opt-in live-MT5 (`ASN_LIVE_MT5=1`, not run: gateway unchanged) + 1 symlink
+  privilege. TESTED-FAKE only; NOT live-DEMO-verified; NOT DEPLOYED.
+- Unchanged: strategies, selector, thresholds, exits, risk ceilings, symbol list (GBPJPY still disabled), costs,
+  OOS ranges, research data. Live runtime, production DB and kill switch untouched.

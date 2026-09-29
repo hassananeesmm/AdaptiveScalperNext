@@ -12,7 +12,11 @@ from __future__ import annotations
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
-from adaptive_scalper.runtime.demo import BLOCK_RECONCILIATION, RECONCILIATION_ERROR
+from adaptive_scalper.runtime.demo import (
+    BLOCK_RECONCILIATION,
+    RECONCILIATION_BROKER_TRUTH_UNAVAILABLE,
+    RECONCILIATION_ERROR,
+)
 from adaptive_scalper.runtime.state import get_state, put_state
 from chaos_harness import raise_
 from runtime_helpers import STEP, T0, FakeClock, build_engine, step
@@ -42,8 +46,13 @@ def test_broker_query_failure_persists_error_and_blocks_new_entries(tmp_path):
     step(engine, clock, seconds=STEP * 3, tick=4)
 
     recon = get_state(conn, "reconciliation")
-    assert recon["status"] == RECONCILIATION_ERROR
+    # 0.2.6: an unreadable broker is typed BROKER_TRUTH_UNAVAILABLE (not the
+    # generic ERROR), and the last proven verdict is kept, labelled as such.
+    assert recon["status"] == RECONCILIATION_BROKER_TRUTH_UNAVAILABLE != RECONCILIATION_ERROR
     assert "Mt5QueryError" in recon["error"]
+    assert recon["last_known"]["status"] == "CLEAN"
+    assert get_state(conn, "broker_truth")["status"] == "UNAVAILABLE"
+    assert get_state(conn, "engine")["state"] == "DEGRADED"
     assert _reconciliation_blocks(conn), "entries must be blocked by the failed reconciliation"
     assert gateway.calls["order_send"] == 0
     failed = "SELECT COUNT(*) FROM runtime_events WHERE event = 'RECONCILIATION_FAILED' AND cleared_at_utc IS NULL"

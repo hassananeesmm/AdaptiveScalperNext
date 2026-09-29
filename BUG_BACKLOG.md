@@ -274,6 +274,32 @@ ASN-025 [LOW, dashboard] FIXED 2026-09-28 (`b799d41`). When the runtime's `posit
 stayed connected, telemetry held `"positions": null` and Strategy Lab's `live_floating_pnl` raised `TypeError`.
 It now reports NO_FRESH_BROKER_SAMPLE (unknown), never a crash and never "flat".
 
+ASN-026 [HIGH, runtime/health] FIXED 2026-09-29 on `fix/0.2.6-broker-truth-degradation` (TESTED-FAKE,
+tests/test_runtime_broker_truth_degradation.py; all 4 fail on `d18a5b0`). A broker query failing AFTER a CLEAN
+reconciliation in the same position cycle (UNKNOWN resolution, the final `positions_get`, a position review) only
+recorded TASK_FAILED: the engine stayed RUNNING and the fresh CLEAN verdict still admitted new entries (the pre-send
+fresh read was the only remaining guard). `RuntimeEngine._task_failed` degraded nothing. Fix: `position_cycle`
+publishes `broker_truth` = AVAILABLE only after a complete successful cycle; `Mt5QueryError` anywhere -> UNAVAILABLE
+and `reconciliation.status=BROKER_TRUTH_UNAVAILABLE` (last proven verdict kept under `last_known`), any other
+failure -> CYCLE_FAILED; `global_entry_block` requires a fresh AVAILABLE; a review's `Mt5QueryError` is re-raised
+after every position was reviewed. Task failures are health: SAFETY_CRITICAL (`position_cycle`, `entry_cycle`) vs
+ADVISORY, published as `engine.safety_critical_degraded`; only a later successful run clears them, never time.
+Dashboard alert for BROKER TRUTH UNAVAILABLE / CYCLE_FAILED.
+
+ASN-027 [HIGH, execution/close] FIXED 2026-09-29 on `fix/0.2.6-broker-truth-degradation` (TESTED-FAKE,
+tests/test_close_unknown_durability.py, scenarios A-D + partial/conflict). A close with an ambiguous or lost
+`order_send` result was an in-memory UNKNOWN only: nothing durable recorded it, the next cycle could send another
+close once the review re-decided, and when the post-send reconciliation raised (`Mt5QueryError`) the exception
+escaped `close_position_safely`, losing the send outcome and the exit-request timestamp. Fix: migration 0030
+`close_requests`; a row is written BEFORE `order_send` (write-ahead, survives a crash) and resolved only from
+positive evidence (DONE + local recovery from real deals, definitive rejection/cancel, proven partial). Otherwise it
+stays UNRESOLVED with an `UNKNOWN_OUTCOME` incident: new exposure blocked, no further close or review for that
+position (partial unique index + pre-send refusal `CLOSE_UNRESOLVED`). `resolve_unresolved_closes` (startup and
+every position cycle) decides from fresh positions/working orders/deal history: RESOLVED_STILL_OPEN only after a
+10 s settle with full volume, no working order and no closing deal; RESOLVED_PARTIALLY_CLOSED only when the closing
+deals explain the volume change exactly; RESOLVED_CLOSED only once reconciliation recovered the position from
+history. A broker query failure records the attempt and re-raises (runtime degraded). Never invents a fill.
+
 - ~~ASN-016 [HIGH, runtime/symbols] A symbol whose market was closed at startup (quote stale / missing)
   was excluded from `RuntimeEngine.symbols` for the whole life of the process and never re-admitted,
   so a runtime started at the weekend could only ever trade BTCUSD, even after XAUUSD reopened.~~

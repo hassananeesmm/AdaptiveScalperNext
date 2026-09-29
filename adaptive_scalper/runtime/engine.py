@@ -48,6 +48,7 @@ from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.costs.observations import sweep_exit_costs
 from adaptive_scalper.execution.reconciliation import run_reconciliation
+from adaptive_scalper.execution.close_requests import resolve_unresolved_closes
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions, quarantine_interrupted_submissions
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.server_time import INCONCLUSIVE, MISMATCH, VERIFIED, classify_quote_clock
@@ -69,7 +70,7 @@ from adaptive_scalper.persistence.database import integrity_check
 from adaptive_scalper.rag.ingestion import ingest as ingest_rag_memories
 from adaptive_scalper.rag.service import RagService
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
-from adaptive_scalper.runtime.demo import DemoRuntime
+from adaptive_scalper.runtime.demo import BROKER_TRUTH_AVAILABLE, DemoRuntime
 from adaptive_scalper.runtime.news_monitor import NewsMonitor, default_live_providers
 from adaptive_scalper.runtime.paper import PaperRuntime
 from adaptive_scalper.runtime.scheduler import Scheduler
@@ -80,6 +81,13 @@ logger = logging.getLogger(__name__)
 
 ENGINE_RUNNING = "RUNNING"
 ENGINE_DEGRADED = "DEGRADED"
+# Task criticality (master prompt section 15). A safety-critical failure
+# (broker truth, reconciliation, UNKNOWN/close resolution, position reviews,
+# the entry pipeline) degrades the engine; an advisory one (news fetch, RAG,
+# telemetry, cost evidence, symbol re-admission) degrades only itself.
+SAFETY_CRITICAL = "SAFETY_CRITICAL"
+ADVISORY = "ADVISORY"
+SAFETY_CRITICAL_TASKS = frozenset({"position_cycle", "entry_cycle"})
 # Scheduled news refresh: the longest the scheduler thread waits for the
 # off-thread calendar fetch, and when a still-running fetch is reported.
 NEWS_FETCH_BUDGET_SECONDS = 2.0
@@ -174,13 +182,37 @@ class RuntimeEngine:
     def now(self) -> int:
         return int(self.clock())
 
-    def _health(self, component: str, status: str, detail: str = "") -> None:
-        self.component_health[component] = {"status": status, "detail": detail, "at": self.now()}
+    def _health(self, component: str, status: str, detail: str = "", *, criticality: str = ADVISORY) -> None:
+        self.component_health[component] = {"status": status, "detail": detail, "at": self.now(),
+                                            "criticality": criticality}
 
     def _task_failed(self, task, exc: BaseException) -> None:
+        """A failed task is a health signal, never only a log line (master
+        prompt section 15). A SAFETY_CRITICAL task failing degrades the
+        engine at once; an ADVISORY one degrades only its own component --
+        neither ever blocks risk reduction."""
         logger.error("scheduled task %s failed: %s", task.name, exc, exc_info=exc)
+        critical = task.name in SAFETY_CRITICAL_TASKS
         record_event(self.conn, "ERROR", "scheduler", "TASK_FAILED", f"{task.name}: {type(exc).__name__}: {exc}",
                      dedup_key=f"task_failed:{task.name}", now_utc=self.now())
+        self._health(f"task:{task.name}", "DEGRADED", f"{type(exc).__name__}: {exc}",
+                     criticality=SAFETY_CRITICAL if critical else ADVISORY)
+        if critical:
+            self.heartbeat()  # publish the degraded state now, not on the next heartbeat tick
+
+    def _task_succeeded(self, name: str) -> None:
+        from adaptive_scalper.runtime.state import clear_event
+        if self.component_health.get(f"task:{name}", {}).get("status") == "DEGRADED":
+            del self.component_health[f"task:{name}"]
+            clear_event(self.conn, f"task_failed:{name}", now_utc=self.now())
+
+    def _add_task(self, name: str, interval_seconds: float, priority: int, run: Callable[[], object]) -> None:
+        """Only a later successful run of the same task clears its degraded
+        health -- never the passage of time."""
+        def tracked() -> None:
+            run()
+            self._task_succeeded(name)
+        self.scheduler.add(name, interval_seconds, priority, tracked)
 
     # ------------------------------------------------------------------
     def startup(self) -> dict:
@@ -251,6 +283,14 @@ class RuntimeEngine:
                                                     "unrepaired_orders": report.unrepaired_order_ids}, now_utc=now)
             recovery["reconciliation"] = report.status
             recovery["unknown_resolutions"] = [o.detail for o in apply_unknown_resolutions(self.conn, self.gateway, now_utc=now)]
+            # A close left unproven by a previous run (crash, lost ack,
+            # unreadable broker truth) stays UNRESOLVED -- blocking new
+            # exposure -- until broker truth proves its outcome.
+            recovery["close_resolutions"] = [
+                f"{r.status}: {r.detail}" for r in resolve_unresolved_closes(self.conn, self.gateway, now_utc=now)
+            ]
+            put_state(self.conn, "broker_truth", {"status": BROKER_TRUTH_AVAILABLE, "at": now, "since": None,
+                                                  "error": None, "last_available_at": now}, now_utc=now)
 
         self._refresh_news()
         self._ingest_rag(rebuild=False)
@@ -262,20 +302,20 @@ class RuntimeEngine:
         if self.mode == "DEMO":
             self.demo = DemoRuntime(self.conn, self.gateway, self.config, self.symbols, registry, self.news, advisory,
                                     clock=self.clock)
-            self.scheduler.add("position_cycle", self.config.runtime.position_cycle_seconds, 0, self.demo.position_cycle)
-            self.scheduler.add("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.demo.entry_cycle)
-            self.scheduler.add("cost_evidence_sweep", 60.0, 3, self._sweep_cost_evidence)
+            self._add_task("position_cycle", self.config.runtime.position_cycle_seconds, 0, self.demo.position_cycle)
+            self._add_task("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.demo.entry_cycle)
+            self._add_task("cost_evidence_sweep", 60.0, 3, self._sweep_cost_evidence)
         else:
             self.paper = PaperRuntime(self.conn, self.gateway, self.config, self.symbols, self.news,
                                       clock=self.clock)
-            self.scheduler.add("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.paper.cycle)
-        self.scheduler.add("live_telemetry", 5.0, 2, self._publish_telemetry)
-        self.scheduler.add("news_refresh", self.config.runtime.news_refresh_seconds, 2, self._refresh_news_bounded)
-        self.scheduler.add("news_poll", 1.0, 2, self._poll_news)
-        self.scheduler.add("rag_ingest", RAG_INGEST_SECONDS, 3, self._ingest_rag)
-        self.scheduler.add("rag_rebuild", 600, 3, self._rebuild_rag)
-        self.scheduler.add("symbol_admission", SYMBOL_ADMISSION_SECONDS, 3, self.admit_reopened_symbols)
-        self.scheduler.add("heartbeat", self.config.runtime.heartbeat_seconds, 4, self.heartbeat)
+            self._add_task("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.paper.cycle)
+        self._add_task("live_telemetry", 5.0, 2, self._publish_telemetry)
+        self._add_task("news_refresh", self.config.runtime.news_refresh_seconds, 2, self._refresh_news_bounded)
+        self._add_task("news_poll", 1.0, 2, self._poll_news)
+        self._add_task("rag_ingest", RAG_INGEST_SECONDS, 3, self._ingest_rag)
+        self._add_task("rag_rebuild", 600, 3, self._rebuild_rag)
+        self._add_task("symbol_admission", SYMBOL_ADMISSION_SECONDS, 3, self.admit_reopened_symbols)
+        self._add_task("heartbeat", self.config.runtime.heartbeat_seconds, 4, self.heartbeat)
         # news/rag already ran during startup: don't repeat them on the first tick
         for task in self.scheduler.tasks:
             if task.name in ("live_telemetry", "news_refresh", "rag_ingest", "rag_rebuild"):
@@ -510,10 +550,19 @@ class RuntimeEngine:
     def heartbeat(self) -> None:
         now = self.now()
         degraded = [name for name, h in self.component_health.items() if h["status"] not in ("OK", "HEALTHY")]
+        critical = [name for name in degraded
+                    if self.component_health[name].get("criticality") == SAFETY_CRITICAL]
+        broker_truth = None
+        if self.mode == "DEMO":
+            broker_truth = (get_state(self.conn, "broker_truth", {}) or {}).get("status")
+            if broker_truth != BROKER_TRUTH_AVAILABLE:
+                degraded.append("broker_truth")
+                critical.append("broker_truth")
         state = ENGINE_DEGRADED if degraded else ENGINE_RUNNING
         put_state(self.conn, "engine", {
             "state": state, "mode": self.mode, "started_at_utc": self.started_at, "heartbeat_utc": now,
-            "symbols": self.symbols, "degraded_components": degraded, "tasks": self.scheduler.snapshot(),
+            "symbols": self.symbols, "degraded_components": degraded, "safety_critical_degraded": critical,
+            "broker_truth": broker_truth, "tasks": self.scheduler.snapshot(),
         }, now_utc=now)
         put_state(self.conn, "components", self.component_health, now_utc=now)
 
