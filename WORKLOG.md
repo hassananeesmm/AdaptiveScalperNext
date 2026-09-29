@@ -2782,3 +2782,16 @@ check or order send occurred.
   9 skipped / 0 failed** (6 min 54 s); freeze + registry tests 29 passed.
 - GateGuard blocked the first edit of a 3-edit batch on `paper/state.py` and applied the dependent two, leaving the
   module briefly referencing undefined helpers; repaired immediately (not committed in the broken state).
+- Release 0.2.4 (built by the peer session, recorded here at its request): `9aed106`,
+  `dist\AdaptiveScalperNext-0.2.4.zip`, 422 entries, sha256
+  3e1fdbc81d063f9bf29c7484980603c1a294281a71c812332c533cf075ce2943, smoke PASSED (packaged suite 1716 passed /
+  9 skipped). NEVER DEPLOYED; superseded by 0.2.5.
+- `3a8df17` redacted the historical DEMO login from WORKLOG (still present in older commits; no history rewrite).
+- Release 0.2.5: `scripts\build_release.ps1 -Version 0.2.5` at `95401fc` ran the full suite **1754 passed / 9 skipped
+  / 0 failed** (then refused because 0.2.4 existed); rebuilt `-SkipTests` at `3a8df17` (diff vs `95401fc` =
+  WORKLOG.md only): `dist\AdaptiveScalperNext-0.2.5.zip`, 424 entries, sha256
+  a14b75420ec2269e4d5ba21246ec665168f169bbc1cba1820d215c428f10d830. Content audit: no DB/WAL/SHM/log/key/.env/
+  data/dist/venv entries; secret-pattern hits only in synthetic guardrail test fixtures; no account login.
+  `release_smoke_test.ps1`: PASSED (fresh venv, MT5 disabled, own smoke DB, packaged suite 1754 passed / 9 skipped).
+  NOT DEPLOYED. Operator decision 2026-09-29: deploy at the next flat via Ctrl+C + launcher restart.
+- Branches pushed (operator-approved): `fix/integrated-demo-safety-20260928`, `research/strategy-v2-20260929`.

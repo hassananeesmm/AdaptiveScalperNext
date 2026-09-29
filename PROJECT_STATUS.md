@@ -23,7 +23,17 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-09-28 night, branch `fix/integrated-demo-safety-20260928`) -- NOT DEPLOYED
+## Current phase (2026-09-29, release 0.2.5 built) -- NOT DEPLOYED
+
+**Release 0.2.5** = `3a8df17` (this branch): P0 `Mt5QueryError` fail-closed broker truth, post-send UNKNOWN
+quarantine, ASN-022..026, ASN-010 terminal pin, pending PAPER entry hardening (`f1d79f1`), V1 strategy freeze
+test (`40aba67`). Full suite 1754 passed / 9 skipped / 0 failed; smoke PASSED; zip sha256
+a14b75420ec2269e4d5ba21246ec665168f169bbc1cba1820d215c428f10d830. 0.2.4 (`9aed106`, peer build) was never
+deployed and is superseded. **Running: still 0.2.2 (`eaa024c`) WITHOUT the P0 fix.** Operator decision: deploy
+at the next flat (operator Ctrl+C, verified online backup, checkout `3a8df17`, launcher restart). Schema 29, no
+migration. Research-only Strategy V2 work lives on `research/strategy-v2-20260929` (never in a release).
+
+## Current phase (2026-09-28 night, branch `fix/integrated-demo-safety-20260928`) -- superseded by the section above
 
 **Running (untouched):** release 0.2.2 (`eaa024c`) DEMO runtime + dashboard, started 22:07 GMT+4 from the main
 checkout; schema 29; kill switch DISENGAGED (operator-set 2026-09-26); reconciliation CLEAN; 0 unresolved
