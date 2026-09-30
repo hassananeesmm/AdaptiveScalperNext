@@ -54,6 +54,8 @@ $expected = @{
     (Join-Path $ClaudeDir "security-patterns.json")       = (Join-Path $TemplatesDir "security-patterns.json")
     (Join-Path $ClaudeDir "hooks\guardrails.py")          = (Join-Path $TemplatesDir "guardrails.py")
     (Join-Path $ClaudeDir "hooks\run-guardrails.sh")      = (Join-Path $TemplatesDir "run-guardrails.sh")
+    (Join-Path $ClaudeDir "hooks\edit_claims.py")         = (Join-Path $TemplatesDir "edit_claims.py")
+    (Join-Path $ClaudeDir "hooks\run-edit-claims.sh")     = (Join-Path $TemplatesDir "run-edit-claims.sh")
 }
 foreach ($dest in $expected.Keys) {
     if (-not (Test-Path $dest)) {

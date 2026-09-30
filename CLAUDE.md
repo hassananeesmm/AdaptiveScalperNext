@@ -49,3 +49,33 @@ server_time_rule`). Architecture: `docs/ARCHITECTURE.md`; safety guarantees:
 - Tests: `pytest` (config in `pytest.ini`, tests live under `tests/`).
 - CLI: `python -m adaptive_scalper.cli --help`. `tests/test_mt5_gateway_live.py`
   needs a live MT5 terminal and skips elsewhere.
+
+## Agent session discipline
+
+Evidence: task-observer observations #4, #6, #11 (`docs/TOOLING_FOLLOWUPS.md`).
+
+- **Verify side effects before asking for approval.** Before presenting an
+  operational plan, read every script, launcher or command it names and list
+  what each one changes (kill switch, DB, processes, files). An approval
+  covers the plan as described; an unlisted side effect is an unapproved
+  action. Example: a "stop" launcher that also engages the kill switch.
+- **Process lifetime belongs to its owner.** The DEMO runtime and dashboard
+  are the operator's processes, started from the operator's launchers.
+  Never start, restart or stop them from an agent session unless the
+  operator explicitly asks. If an approved restart needs a relaunch, ask
+  the operator to relaunch from their own launcher.
+- **Check for concurrent sessions and shared outputs before writing.**
+  Before mutating the repository: list peer agent sessions, running
+  processes whose command line names this repo, `git worktree list` and
+  each worktree's status. Also check untracked shared output folders
+  (`dist/`, `data/backups/`, `data/research/`) before choosing an
+  artifact name, version or output path. If another session owns the
+  target, stop and ask.
+- The deployed DEMO runs from the main checkout (`C:\AdaptiveScalperNext`)
+  and its `.venv`. Do all development in `.worktrees/*`. Never check out,
+  install into, or write the main checkout or `data/adaptive_scalper.sqlite3`
+  without explicit deployment approval.
+- The project-owned hook `.claude/hooks/edit_claims.py` denies a second
+  edit to a file while the first edit in the same batch has not landed.
+  Still, make the first edit to a file on its own, never in a parallel
+  batch, and never batch a test run with first-touch edits.
