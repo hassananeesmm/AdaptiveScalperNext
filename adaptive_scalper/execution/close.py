@@ -408,4 +408,6 @@ def _settle(conn: sqlite3.Connection, close_request_id: int, broker_position_id:
         detail += f" -- broker truth unavailable after the send: {outcome.broker_truth_error}"
     settle_close_request(conn, close_request_id, send_outcome=outcome.status, send_detail=detail,
                          retcode=outcome.result.retcode if outcome.result is not None else None,
-                         status=status, now_utc=now)
+                         status=status, now_utc=now,
+                         # exit-cost evidence only: the ticket the send itself returned
+                         broker_order_ticket=outcome.result.broker_order_id if outcome.result is not None else None)

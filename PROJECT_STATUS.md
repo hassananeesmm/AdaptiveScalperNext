@@ -32,6 +32,16 @@ CLEAN, account DEMO (ICMarketsSC-Demo, pinned IC Markets terminal), symbols BTCU
 (untouched), 0 positions / orders / UNKNOWN / unresolved incidents / close_requests. Live read-only MT5 tests 8/8.
 ASN-026/027 failure paths: TESTED-FAKE; TESTED-LIVE-DEMO evidence pending natural operation (see WORKLOG).
 
+## Release candidate 0.2.7 (2026-09-30, branch `release/0.2.7`, OBSERVABILITY ONLY, NOT deployed)
+
+Exit-side execution cost observability, re-designed around ECONOMIC EXIT EVENTS (one event = one broker order that
+closed part of a position; fills of one order are volume-weighted, separate orders on one position stay separate).
+Migration **0031** (never applied to production; rewritten from the unmerged `feature/exit-cost-observability`
+design, which pooled every closing deal of a position into one row). No strategy, selector, entry threshold, exit,
+risk, symbol or cost-assumption change. Evidence only: nothing writes configuration. Deployment needs explicit
+operator approval at a flat broker with clean broker truth, clean reconciliation and zero unresolved incidents.
+Details and counts: WORKLOG 2026-09-30.
+
 ## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
 
 **Release 0.2.6** = `e3b1250` (branch `fix/0.2.6-broker-truth-degradation`, PR #5): `dist\AdaptiveScalperNext-0.2.6.zip`,

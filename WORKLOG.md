@@ -2895,3 +2895,39 @@ check or order send occurred.
   UNKNOWN (no reason, no evidence) and are not guessed.
 - Deployment: only through the normal release procedure at an operator-approved flat (backup, rehearsal, build, smoke,
   live read-only checks). The running 0.2.6 process was not touched.
+
+## 2026-09-30 -- release candidate 0.2.7: exit-cost observability per ECONOMIC EXIT EVENT (branch `release/0.2.7`, NOT deployed)
+
+- Baseline verified before editing: v0.2.6 = e3b1250 (deployed, running from the main checkout, untouched); main =
+  c730e96; `feature/exit-cost-observability` = 75f6e34 (one commit on main, never merged); PR #5 open.
+- Defect found in the 75f6e34 design (not deployed): `exit_cost_observations` was UNIQUE per broker position and
+  volume-weighted EVERY closing deal into one row with one kind, so a partial agent close followed by a stop loss
+  became one VWAP "STOP_LOSS" (or UNKNOWN) row; INOUT counted as a normal close; rows were frozen on first sight
+  (INSERT OR IGNORE) before late deals settled; the agent close was linked to the LATEST close request; the TP
+  reference fell back to the entry order's TP; one pooled `sufficient` flag across SL/TP/agent closes.
+- Corrected model (migration 0031 rewritten; additive only): one row per economic exit event, key
+  `<position>:ORDER:<order ticket>` (else `<position>:DEAL:<deal ticket>`). Evidence = local `deals` + imported
+  `broker_account_deals` (identity-checked by the position's own opening deal), de-duplicated by deal ticket; no extra
+  broker call. `close_requests.broker_order_ticket` is stored from the ticket the send ALREADY returned; an agent close
+  is linked to its request only by that ticket and uses the recorded round-2 quote. SL/TP reference only from the
+  broker's own "[sl X]"/"[tp X]" deal comment (stops move: no order-level fallback). Kinds AGENT_CLOSE / STOP_LOSS /
+  TAKE_PROFIT / MANUAL / STOP_OUT / OTHER / UNKNOWN from the MT5 deal reason; EXPERT without our magic = OTHER.
+  Lifecycle: PROVISIONAL (recomputed deterministically, version bumps only on change) until the position is CLOSED and
+  closing volume = entry volume -> FINAL; unprovable after 7 days -> FINAL + UNSETTLED_VOLUME (never counted). FINAL
+  rows immutable/undeletable (triggers). INOUT, OUT_BY and reason conflicts are recorded and excluded. Summary is per
+  exit kind only (`meets_min_samples` per kind, explicitly "never a recalibration trigger"); no pooled flag.
+- Tests: `tests/test_exit_cost_observations.py` 31 (negative controls: partial agent close then SL, partial close
+  then TP, multi-fill one order, mixed reasons, delayed second deal, restart before finalization, idempotency, FINAL
+  immutability, INOUT, OUT_BY, missing references, foreign magic, account-history identity, history None vs empty,
+  per-kind sufficiency, no extra tick call). Mutation check: pooling per position, freezing on first sight, INOUT as a
+  normal close, latest-request linking and pooled sufficiency each make the suite fail.
+- Rehearsal on an online-backup COPY (production opened `mode=ro` as backup source only; its size/mtime unchanged):
+  schema 30 -> 31 (applied [31] only), integrity_check ok before / after / after the sweep, 0 FK violations; all 45
+  pre-existing tables identical (row fingerprints; market-data tables compared by schema only, their rows never read);
+  new columns all NULL (nothing back-filled); sweep 281 events, all FINAL, 0.08 s; second sweep 0 changes. Evidence:
+  XAUUSD STOP_LOSS 22 measured (p50 0.09 / p90 0.63 / p95 0.72; assumption 0.41 per fill), BTCUSD STOP_LOSS 51
+  (p50 0.33 / p90 5.64 / p95 7.73; assumption 11.97); 208 older exits UNKNOWN (no deal reason recorded, no ticket
+  link) and not guessed; no multi-event position yet. **No cost assumption changed** (small, single-kind samples;
+  entry side and agent closes unmeasured).
+- Deployment: NOT deployed. Requires explicit operator approval, a flat broker, clean broker truth, clean
+  reconciliation and zero unresolved incidents; the running 0.2.6 process and production DB were not touched.

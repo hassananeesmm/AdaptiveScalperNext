@@ -130,13 +130,17 @@ def record_close_intent(
 
 def settle_close_request(
     conn: sqlite3.Connection, close_request_id: int, *, send_outcome: str, send_detail: str,
-    retcode: int | None, status: str, now_utc: int,
+    retcode: int | None, status: str, now_utc: int, broker_order_ticket: str | None = None,
 ) -> None:
     """Record what the send proved. `status` UNRESOLVED keeps the request
-    open and raises the UNKNOWN_OUTCOME incident that blocks new entries."""
+    open and raises the UNKNOWN_OUTCOME incident that blocks new entries.
+    `broker_order_ticket` (the ticket the send itself returned) is exit-cost
+    evidence only: it links closing deals to this request and never affects
+    the resolution; a known ticket is never overwritten with NULL."""
     conn.execute(
-        "UPDATE close_requests SET send_outcome = ?, send_detail = ?, retcode = ? WHERE id = ?",
-        (send_outcome, send_detail, retcode, close_request_id),
+        "UPDATE close_requests SET send_outcome = ?, send_detail = ?, retcode = ?, "
+        "broker_order_ticket = COALESCE(broker_order_ticket, ?) WHERE id = ?",
+        (send_outcome, send_detail, retcode, broker_order_ticket, close_request_id),
     )
     if status == UNRESOLVED:
         _ensure_incident(conn, close_request_id, f"close outcome not proven ({send_outcome}): {send_detail}", now_utc)
