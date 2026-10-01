@@ -156,6 +156,24 @@ def test_multiple_fills_of_one_close_instruction_are_one_volume_weighted_event()
     assert event["exit_slippage_price"] == pytest.approx(1999.0 - event["exit_fill_price"])
 
 
+def test_two_agent_close_instructions_on_one_position_are_two_events():
+    conn = _db()
+    _position(conn, "35")
+    _entry(conn, "35")
+    _request(conn, "35", ticket="o-close-1", bid=1999.0, ask=2001.0)
+    _request(conn, "35", ticket="o-close-2", bid=1998.0, ask=2000.0)
+    _deal(conn, "35", "d1", 1998.9, volume=0.02, order="o-close-1", reason=3, at=T0 + 300)
+    _deal(conn, "35", "d2", 1997.8, volume=0.03, order="o-close-2", reason=3, at=T0 + 600)
+    conn.commit()
+    record_exit_observations(conn, now_utc=T0 + 700)
+    first, second = _events(conn, "35")
+    assert first["event_key"] == "35:ORDER:o-close-1" and second["event_key"] == "35:ORDER:o-close-2"
+    assert first["close_request_id"] != second["close_request_id"]
+    assert first["reference_price"] == 1999.0 and second["reference_price"] == 1998.0   # each its OWN quote
+    assert first["exit_slippage_price"] == pytest.approx(0.1) and second["exit_slippage_price"] == pytest.approx(0.2)
+    assert {first["exit_kind"], second["exit_kind"]} == {"AGENT_CLOSE"}
+
+
 def test_mixed_reasons_inside_one_order_are_excluded_not_guessed():
     conn = _db()
     _position(conn, "14")
@@ -368,6 +386,8 @@ def test_out_by_close_is_excluded():
     record_exit_observations(conn, now_utc=T0 + 700)
     [event] = _events(conn, "28")
     assert event["exclusion_reason"] == "OUT_BY" and event["exit_slippage_price"] is None
+    assert event["exit_kind"] not in ("STOP_LOSS", "TAKE_PROFIT", "AGENT_CLOSE")
+    assert summarize_exit_observations(conn, "XAUUSD")["excluded"] == {"OUT_BY": 1}
 
 
 # ------------------------------------------------------- evidence sources
