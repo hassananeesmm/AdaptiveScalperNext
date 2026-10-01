@@ -2924,3 +2924,17 @@ check or order send occurred.
   -0.009 R, net -0.297 R, n 84); holdout CONSUMED.
 - G: reserved OOS untouched throughout. Ledger 260 trials, 0 failed, 0 smoke rows. Results:
   docs/research/V2_H6_H7_RESULTS_v2r3.md.
+
+## 2026-09-30 / 10-01 -- H8 pre-registered, implemented, run h8r1 REFUSED by its data gate (branch `research/h8-xau-bpr`)
+
+- Pre-registration `docs/research/V2_H8_PREREGISTRATION_2026-09-30.md` committed ALONE first (`64adb24`): XAUUSD
+  M15 Donchian N20 context (labelled H6-derived/post-selection) -> M5 pullback (2 counter closes + 0.50 ATR14) -> M1
+  3-bar resumption; cost_R <= 0.05 on spread + 2x configured slippage + commission + margin; stop = max(structural,
+  0.5 ATR, cost/0.05), 2R, 45 min; one trial; episode-clustered bootstrap, PSR/DSR/PBO; hard criteria; a data gate.
+- Implementation `0319e40`: `adaptive_scalper/research/v2/h8.py`, `scripts/research_v2_h8.py`,
+  `tests/test_research_v2_h8.py` (36 tests; 12 mutants of the core rules all killed). Not in the runtime registry; no
+  execution/gateway/runtime import. Full suite on the branch: 1864 passed / 9 skipped / 0 failed; compileall OK.
+- Run `h8r1` (2026-10-01, clean tree): REFUSED, exit 3 -- the stored research DB has no XAUUSD M1 before 2026-06-09
+  and no M5 before 2025-04-23 inside the window; all 12 folds fail the gate. No rule evaluated, no ledger row
+  (260 unchanged). Only bars inside 2024-06-01..2026-06-30 were read; OOS and H7 holdout untouched. Details:
+  `docs/research/V2_H8_RUN_h8r1.md`. Next step is an operator decision about M5/M1 history.
