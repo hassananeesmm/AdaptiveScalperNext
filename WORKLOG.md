@@ -3066,3 +3066,26 @@ check or order send occurred.
   -0.0579..-0.0356), cost 0.0453 R; 0/12 net-positive folds; PSR 9e-13, DSR 3e-55, PBO 0.85; gross/cost -0.02;
   FRICTION set the stop in 99.45 % of trades, 94 % exited at the 45-min time stop. 11/13 criteria fail; 0 safety
   violations; 0 forbidden data access. FAIL: H8 REJECTED, no tuning. docs/research/V2_H8_RESULTS_h8r1.md.
+
+## 2026-10-02 (afternoon) -- H9 (BTCUSD volatility-conditioned time-trend continuation): pre-registered, implemented
+
+- Repo state verified before any work: main c730e96, release/0.2.7 5be15d8, research/h8-xau-bpr 249d978,
+  research/v2-on-0.2.6 b6da097, tooling/edit-claim-guard b50283e (all equal origin, all worktrees clean); protected
+  root at v0.2.7 d9c1bd1 (deployed DEMO runtime) untouched. No prior H9 branch locally or on origin.
+- Worktree `.worktrees/h9`, branch `research/h9-btc-vol-trend` from release/0.2.7 5be15d8; merged
+  research/h8-xau-bpr (research package, ledger code, H6/H8 history) as 9639bdc (doc conflicts union-resolved).
+- Audit findings recorded in the pre-registration: V1 `raw_confidence` is heuristic yet `costs/edge.py` uses it as a
+  probability (documented, V1 not modified); the engine's `_revalidate_and_open` always runs that EV gate, so H9
+  opens through a research wrapper with the same staleness/news/sizing/risk/portfolio gates and the cost_R gate
+  instead; BTCUSD has no broker swap evidence (holds crossing the server-midnight rollover are rejected
+  COST_UNKNOWN_SWAP); 32,502 of 92,660 H6 BTCUSD M15 bars carry spread 0 (missing evidence -> COST_UNKNOWN).
+- H6 BTCUSD dataset reproduced exactly from the research copy (92,660 bars, 2023-11-01 00:00 .. 2026-06-30 00:00
+  UTC bar opens, checksum ede3898a...); H6 fold boundaries recovered (fold_index_ranges); H6 artifact sha256
+  7770fc6f...; ledger 261 rows, 39 v2-H6:BTCUSD COMPLETED, 0 v2h9.
+- DISCLOSED: during the audit one read-only COUNT(*) of BTCUSD M15 rows after 2026-06-30 00:00 returned 7760 (it
+  spans sealed-OOS rows; no prices or other values read). Recorded in the pre-registration section 1.1.
+- Pre-registration eb2f9ae committed alone, before any H9 code. Implementation: `adaptive_scalper/research/v2/h9.py`,
+  `scripts/research_v2_h9.py`, `tests/test_research_v2_h9.py` (63 tests: HAC vs an independent numpy sandwich,
+  future-independence, fill-bar lookahead negative control, staleness from the decision close, cost causality,
+  episode uniqueness, rejection consumption across a restart, one-shot runner; 6 mutants all killed).
+  Full suite 1999 passed / 9 skipped / 0 failed; compileall OK; CLI smoke OK.

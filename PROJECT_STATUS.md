@@ -23,6 +23,12 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
+## H9 status (2026-10-02): PRE-REGISTERED + IMPLEMENTED, run pending (branch research/h9-btc-vol-trend)
+
+BTCUSD M15 volatility-conditioned time-trend continuation, one parameterization, pre-registered eb2f9ae
+(`docs/research/V2_H9_PREREGISTRATION_2026-10-02.md`) before any code. EXPOSED development data (the H6 BTCUSD set),
+never "unseen". OOS sealed; nothing deployed; runtime 0.2.7 untouched. If H9 fails, strategy research is frozen.
+
 ## H8 status (2026-10-02): FAIL -- H8 REJECTED
 
 H8 (pre-registered 64adb24, amended c61b69d, code 28271dc) ran once after the operator lifted the MT5 history limit:
