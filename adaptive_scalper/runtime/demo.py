@@ -126,9 +126,19 @@ class SymbolAnalysis:
 
 
 def live_cost_estimate(config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None) -> CostEstimate | None:
-    """Spread from the live quote; commission/slippage/swap from the
-    configured per-symbol evidence. Any unknown component -> None ->
-    BLOCK_COST (never a silent zero)."""
+    """Conservative PRE-ENTRY round-trip cost estimate.
+
+    SymbolCostConfig.slippage_price is measured per fill (the shipped
+    config records p90 adverse slippage from individual market-order fills).
+    A market entry followed by a market/stop exit therefore has TWO slippage
+    opportunities. The previous implementation charged only one, while the
+    simulator correctly charged slippage on every fill. That made the live
+    selector/final-permission cost estimate systematically optimistic.
+
+    The bid/ask spread is charged once for an immediate round trip: buy at ask
+    and sell at bid loses one full spread. Commission is already configured
+    as a round-trip amount. Any unknown required component still fails closed.
+    """
     if spec is None or tick is None or tick.ask <= 0 or tick.bid <= 0:
         return None
     costs = config.cost_for(canonical_symbol)
@@ -137,8 +147,42 @@ def live_cost_estimate(config: AppConfig, canonical_symbol: str, spec: SymbolSpe
         if costs.commission_per_lot_round_trip is not None else None
     )
     swap = price_equivalent_of_monetary_cost(costs.swap_per_lot_per_day, spec.trade_tick_size, spec.trade_tick_value)
+    round_trip_slippage = None if costs.slippage_price is None else 2.0 * costs.slippage_price
     return estimate_cost_from_evidence(
         spread_price=tick.ask - tick.bid, commission_price_equivalent=commission,
+        expected_slippage_price=round_trip_slippage, swap_price_equivalent=swap,
+    )
+
+
+def live_remaining_exit_cost_estimate(
+    config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None
+) -> CostEstimate | None:
+    """Incremental cost still payable for an ALREADY OPEN position.
+
+    Entry spread/slippage and the entry-side commission are sunk and must not
+    be charged again when asking whether the position is worth continuing to
+    hold. _review marks a long at bid and a short at ask, i.e. at the
+    executable closing side of the quote, so the current spread is already in
+    the mark. Remaining friction is one expected exit slippage, one half of
+    the configured round-trip commission, plus the conservative configured
+    swap allowance.
+
+    Keeping this separate from live_cost_estimate prevents the same cost
+    object from meaning full trade lifecycle at entry and remaining cost
+    after entry.
+    """
+    if spec is None or tick is None or tick.ask <= 0 or tick.bid <= 0:
+        return None
+    costs = config.cost_for(canonical_symbol)
+    commission = (
+        price_equivalent_of_monetary_cost(
+            costs.commission_per_lot_round_trip / 2.0, spec.trade_tick_size, spec.trade_tick_value
+        )
+        if costs.commission_per_lot_round_trip is not None else None
+    )
+    swap = price_equivalent_of_monetary_cost(costs.swap_per_lot_per_day, spec.trade_tick_size, spec.trade_tick_value)
+    return estimate_cost_from_evidence(
+        spread_price=0.0, commission_price_equivalent=commission,
         expected_slippage_price=costs.slippage_price, swap_price_equivalent=swap,
     )
 
@@ -449,7 +493,7 @@ class DemoRuntime:
         if strategy is not None:
             fresh = strategy.evaluate(analysis.features, RegimeClassification(analysis.confirmed_regime, 1.0, 1, "re-evaluation"))
             setup_valid = fresh is not None and fresh.direction == local.direction
-        cost = live_cost_estimate(self.config, canonical, spec, tick)
+        cost = live_remaining_exit_cost_estimate(self.config, canonical, spec, tick)
         target = live.take_profit or (
             local.entry_price + context["target_distance_price"] if local.direction == "BUY"
             else local.entry_price - context["target_distance_price"]
