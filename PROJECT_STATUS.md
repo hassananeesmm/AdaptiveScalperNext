@@ -32,6 +32,14 @@ CLEAN, account DEMO (ICMarketsSC-Demo, pinned IC Markets terminal), symbols BTCU
 (untouched), 0 positions / orders / UNKNOWN / unresolved incidents / close_requests. Live read-only MT5 tests 8/8.
 ASN-026/027 failure paths: TESTED-FAKE; TESTED-LIVE-DEMO evidence pending natural operation (see WORKLOG).
 
+## Current phase (2026-10-02, release 0.2.7 DEPLOYED on DEMO)
+
+**Running: 0.2.7 (`d9c1bd1`, tag v0.2.7)** -- observability only (economic exit events, migration 0031); DEMO
+runtime + dashboard started by the operator 04:11:35 UTC after a verified backup
+(`data/backups/pre_0_2_7_deploy_20261002T041020Z.sqlite3`); production schema **31**. Post-start: RUNNING, broker
+truth AVAILABLE, reconciliation CLEAN, kill switch DISENGAGED (untouched), 0 incidents. Research: H1-H8 NO
+VALIDATED EDGE YET (H8 REJECTED, research branch).
+
 ## Release candidate 0.2.7 (2026-09-30, branch `release/0.2.7`, OBSERVABILITY ONLY, NOT deployed)
 
 Exit-side execution cost observability, re-designed around ECONOMIC EXIT EVENTS (one event = one broker order that

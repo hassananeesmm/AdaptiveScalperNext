@@ -2951,3 +2951,22 @@ check or order send occurred.
 - Fresh-environment smoke (new venv, pinned requirements, temp DB, MT5 disabled): PASSED, 1799 passed / 9 skipped.
 - Live MT5 READ-ONLY tests (`ASN_LIVE_MT5=1`, no order call): 8 passed.
 - Status: READY FOR OPERATOR REVIEW. NOT deployed; the running 0.2.6 process and production DB were not touched.
+
+## 2026-10-02 -- release 0.2.7 DEPLOYED to the IC Markets DEMO runtime (operator-approved)
+
+- Pre-deployment: operator approval in session; broker DEMO (ICMarketsSC-Demo) had 1 open position at the first check
+  (opened by the running 0.2.6); deployment waited, read-only, until it closed (04:08:15 UTC). Then: broker 0
+  positions / 0 orders, balance = equity 9,422.97; local 0 open positions, 0 sent-unfinished orders, 0 unresolved
+  incidents, 0 unresolved close_requests; kill switch DISENGAGED (untouched). Operator stopped the runtime with
+  Ctrl+C (WAL empty afterwards). Requirements/config unchanged between e3b1250 and d9c1bd1.
+- Backup: `data/backups/pre_0_2_7_deploy_20261002T041020Z.sqlite3` (online backup from a read-only source
+  connection): integrity_check ok, schema 30, 275,210,240 bytes, sha256
+  541fb9abac7996f35e7c8fbebc2726c5da5bcc4e388ce0cf9e1af92b7bdeda22.
+- Deployment: tag `v0.2.7` = d9c1bd1 (the built/smoked package commit); root checkout `git checkout --detach v0.2.7`
+  (clean, e3b1250 -> d9c1bd1); the operator started `START DEMO + DASHBOARD.bat` (08:11:35 local, 04:11:35 UTC);
+  migration 0031 applied by the normal machinery.
+- Post-start gate (read-only): schema 31, quick_check ok; engine RUNNING (DEMO, broker_truth AVAILABLE, no degraded
+  components); server clock VERIFIED; reconciliation CLEAN; account DEMO ICMarketsSC-Demo; kill switch DISENGAGED;
+  risk limits 0.25 / 0.75 / 2.0 / 5.0 %, 2 positions, 1 per symbol; 0 open positions / incidents / unresolved
+  closes; exit-cost sweep OK (369 economic exit events recorded, cost_evidence component OK); dashboard HTTP 200.
+- Rollback (not needed): checkout e3b1250 and restore the backup above.
