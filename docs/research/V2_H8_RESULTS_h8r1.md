@@ -61,6 +61,14 @@ requests). Reserved OOS 2026-07-01 .. 2026-09-18: not read. H7 holdout 2022-06-2
 read. Production DB: not opened. One earlier diagnostic (2026-10-01) asked the terminal for bars from
 position 0 without a window bound; it returned an error and no data (recorded in WORKLOG).
 
+## Known implementation limitation (recorded before any result)
+
+The fill-time cost gate and the engine's fill model use the FILL bar's MT5 `spread` field. MT5 stores one
+spread value per bar (an aggregate over the bar), so at the bar's open it is not strictly known yet. This is
+the engine's existing fill convention (also used by H6); the 2026-10-02 lookahead negative control
+(`test_fill_decision_ignores_the_fill_bar_future_high_low_close_volume`) proves the fill decision uses no
+other fill-bar future field (high, low, close, volume). Tick data would remove this limitation.
+
 ## Inference status (unchanged)
 
 Donchian N20 is H6-derived / post-selection context on this same window; even a future H8 result on

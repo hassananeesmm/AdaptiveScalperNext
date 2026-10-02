@@ -792,3 +792,22 @@ def test_a_missing_safety_or_data_key_is_fail_not_marginal(key):
     ok = {name: True for name in h8.REQUIRED_CRITERIA if name != key}
     assert h8.classify(ok, trades=150, gross_r=0.3, net_r=0.2) == "FAIL"
     assert h8.classify({**ok, key: None}, trades=150, gross_r=0.3, net_r=0.2) == "FAIL"
+
+
+@pytest.mark.parametrize("future", [(2030.0, 2001.0, 2029.0, 9999), (2006.5, 1990.0, 1991.0, 1)])
+def test_fill_decision_ignores_the_fill_bar_future_high_low_close_volume(future):
+    k, clean = _trigger_index()
+    base = m1_bars(path(LONG))
+    b = base[k + 1]
+    high, low, close, volume = future
+    variant = list(base)
+    variant[k + 1] = Bar(time=b.time, open=b.open, high=max(high, b.open), low=min(low, b.open), close=close,
+                         tick_volume=volume, spread=b.spread, real_volume=0)
+    a = h8.run_h8_fold(aggregate(base, 900), aggregate(base, 300), base, spec(), cfg(), fold=0)
+    v = h8.run_h8_fold(aggregate(variant, 900), aggregate(variant, 300), variant, spec(), cfg(), fold=0)
+    first_a, first_v = a["trades"][0], v["trades"][0]
+    assert first_a.decision.fingerprint == first_v.decision.fingerprint
+    assert first_a.trade.entry_time_utc == first_v.trade.entry_time_utc == b.time
+    assert first_a.trade.entry_price == first_v.trade.entry_price
+    assert first_a.stop == first_v.stop and first_a.fill_cost_r == first_v.fill_cost_r
+    assert first_a.trade.volume == first_v.trade.volume
