@@ -2931,3 +2931,23 @@ check or order send occurred.
   entry side and agent closes unmeasured).
 - Deployment: NOT deployed. Requires explicit operator approval, a flat broker, clean broker truth, clean
   reconciliation and zero unresolved incidents; the running 0.2.6 process and production DB were not touched.
+
+## 2026-10-02 -- release candidate 0.2.7: final independent verification (NOT deployed)
+
+- Refs verified: root checkout e3b1250 (= v0.2.6, clean, deployed runtime untouched), main c730e96, release/0.2.7
+  d9c1bd1 at build time. Added test: two agent-close instructions on one position = two events with their OWN
+  quotes; OUT_BY never counted as SL/TP/agent close. Exit-event tests: 32 (all 20 operator-required behaviours).
+- Migration rehearsal on a FRESH online-backup copy (production opened `mode=ro` as backup source only; size
+  275,210,240 and mtime unchanged after; main-file sha256 b4a8a512...fd72 (WAL pages excluded from that hash)): copy
+  sha256 6f990b94...90e5 before, 5156a28a...5e98 after; schema 30 -> 31 (applied [31]); integrity_check ok before /
+  after / after the sweep; FK violations 0; 45 pre-existing tables identical (market-data tables by schema only);
+  new columns all NULL; sweep 353 events (XAUUSD STOP_LOSS 30 measured, p50 0.14 / p90 0.63, assumption 0.41 per
+  fill; BTCUSD STOP_LOSS 59, p50 0.41 / p90 7.35, assumption 11.97; 264 older exits UNKNOWN, not guessed); second
+  sweep 0 changes. No cost assumption changed.
+- Build: `dist/AdaptiveScalperNext-0.2.7.zip` from d9c1bd1, 430 entries, sha256
+  de28c47cf7e05440a344951540afc4eeb8dcefb6f793bacd0fb86460a1df813f; build gate 1799 passed / 9 skipped / 0 failed
+  (2 deprecation warnings). Content audit: no DB/env/key/data/dist/venv/pyc entries; secret-like strings only in
+  tests/test_guardrails.py fixtures and synthetic logins in two tests, all byte-identical to v0.2.6.
+- Fresh-environment smoke (new venv, pinned requirements, temp DB, MT5 disabled): PASSED, 1799 passed / 9 skipped.
+- Live MT5 READ-ONLY tests (`ASN_LIVE_MT5=1`, no order call): 8 passed.
+- Status: READY FOR OPERATOR REVIEW. NOT deployed; the running 0.2.6 process and production DB were not touched.

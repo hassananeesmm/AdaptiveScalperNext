@@ -42,6 +42,10 @@ risk, symbol or cost-assumption change. Evidence only: nothing writes configurat
 operator approval at a flat broker with clean broker truth, clean reconciliation and zero unresolved incidents.
 Details and counts: WORKLOG 2026-09-30.
 
+**0.2.7 verification 2026-10-02:** package `AdaptiveScalperNext-0.2.7.zip` (d9c1bd1, sha256 de28c47c...813f),
+build gate 1799/9/0, smoke PASSED, live read-only MT5 8/8, rehearsal 30 -> 31 ok. READY FOR OPERATOR REVIEW; NOT
+DEPLOYED.
+
 ## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
 
 **Release 0.2.6** = `e3b1250` (branch `fix/0.2.6-broker-truth-degradation`, PR #5): `dist\AdaptiveScalperNext-0.2.6.zip`,
