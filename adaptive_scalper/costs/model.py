@@ -52,6 +52,13 @@ def estimate_cost(
 ) -> CostEstimate:
     """Combine every cost component into one estimate.
 
+    expected_slippage_price is the TOTAL expected slippage for the
+    decision horizon represented by this estimate. For a pre-entry market
+    trade that expects a later market/stop exit, callers must include both
+    fills (normally entry_slippage + exit_slippage). For an already-open
+    position, callers pass only the remaining exit slippage. This explicit
+    contract prevents a per-fill observation from being silently treated as
+    a full round-trip cost.
     Per external review: every component is a REQUIRED keyword argument,
     with no default of `0.0` — a caller must always make an explicit,
     deliberate choice for each one. A prior version defaulted commission/
