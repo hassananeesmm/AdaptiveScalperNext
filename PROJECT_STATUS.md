@@ -23,11 +23,14 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## H9 status (2026-10-02): PRE-REGISTERED + IMPLEMENTED, run pending (branch research/h9-btc-vol-trend)
+## H9 status (2026-10-02): H9 REJECTED -- NO VALIDATED EDGE; STRATEGY RESEARCH FROZEN
 
-BTCUSD M15 volatility-conditioned time-trend continuation, one parameterization, pre-registered eb2f9ae
-(`docs/research/V2_H9_PREREGISTRATION_2026-10-02.md`) before any code. EXPOSED development data (the H6 BTCUSD set),
-never "unseen". OOS sealed; nothing deployed; runtime 0.2.7 untouched. If H9 fails, strategy research is frozen.
+H9 (BTCUSD M15 volatility-conditioned time-trend continuation; prereg eb2f9ae, code eb9fb74 / tag h9r1-prerun) ran
+once as v2h9:h9r1:BTCUSD:H9-PRIMARY on EXPOSED development data: 13 trades from 1,019 events, gross -0.29 R, net
+-0.33 R, 2/12 folds, PSR 0.12, DSR 0.05, 11/13 criteria fail, 0 safety violations
+(`docs/research/V2_H9_RESULTS_h9r1.md`). **Strategy research is FROZEN**: no H9b/H10, no forward PAPER, no OOS
+access, nothing deployed. Reopening needs new independent data gathered after the freeze, materially new information,
+or an explicit human decision with a new pre-registration. Runtime 0.2.7 (DEMO) untouched; REAL disabled.
 
 ## H8 status (2026-10-02): FAIL -- H8 REJECTED
 

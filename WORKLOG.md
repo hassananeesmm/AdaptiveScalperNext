@@ -3089,3 +3089,18 @@ check or order send occurred.
   future-independence, fill-bar lookahead negative control, staleness from the decision close, cost causality,
   episode uniqueness, rejection consumption across a restart, one-shot runner; 6 mutants all killed).
   Full suite 1999 passed / 9 skipped / 0 failed; compileall OK; CLI smoke OK.
+
+## 2026-10-02 (afternoon) -- H9 h9r1 RAN ONCE: H9 REJECTED; STRATEGY RESEARCH FROZEN
+
+- Pre-run freeze: clean tree eb9fb74 (tag h9r1-prerun), prereg eb2f9ae, config fingerprint f787763f..., data
+  checksum ede3898a..., ledger 261 rows with 0 v2h9. Ran once: v2h9:h9r1:BTCUSD:H9-PRIMARY (ledger 261 -> 262).
+- Data gate passed. 1,019 threshold-cross events; 757 volatility not met, 100 cost unknown (spread 0), 85 cost_R >
+  0.05, 33 insufficient history, 27 swap-unknown rollover, 4 rejected at the fill; 13 trades.
+- Result: gross -0.293 R (episode CI -0.713..+0.172), net -0.330 R (CI -0.751..+0.134), cost 0.037 R; 2/12 folds
+  positive; PSR 0.12, DSR 0.05 (N = 40), PBO 0.20; 11/13 criteria FALSE; 0 safety violations; 0 forbidden access by
+  the runner (the audit COUNT incident is disclosed in the pre-registration and results). H9 REJECTED.
+- 0.2.7 BTCUSD exit evidence (read-only): STOP_LOSS n 64 slippage p90 8.41, AGENT_CLOSE n 7 p90 0.74 -> the 11.97
+  assumption looks conservative; no recalibration. tooling/edit-claim-guard: 12/12 tests pass, unmerged, propose
+  separately.
+- Decision: NO VALIDATED EDGE -- STRATEGY RESEARCH FROZEN. No forward PAPER, no variants, no OOS, no deployment;
+  runtime 0.2.7 untouched. docs/research/V2_H9_RESULTS_h9r1.md.

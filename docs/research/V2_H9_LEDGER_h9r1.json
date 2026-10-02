@@ -1,0 +1,148 @@
+{
+ "family_counts": {
+  "independent:BTCUSD": 6,
+  "selector:BTCUSD": 1,
+  "strategy_set:BTCUSD": 3,
+  "v2-H1:BTCUSD": 12,
+  "v2-H2:BTCUSD": 12,
+  "v2-H3:BTCUSD": 2,
+  "v2-H4:BTCUSD": 42,
+  "v2-H5:BTCUSD": 7,
+  "v2-H6:BTCUSD": 39,
+  "v2-H9:BTCUSD": 1
+ },
+ "ledger_rows_after": 262,
+ "ledger_rows_before": 261,
+ "note": "Export of the single append-only research_trials row written by the H9 h9r1 run (research DB copy data/research/v2_20260929.sqlite3). The ledger itself is a gitignored SQLite file; this is a read-only copy for the record.",
+ "row": {
+  "cost_model_json": {
+   "commission_per_lot": 0.0,
+   "provenance": "BROKER_DEMO_CONFIRMED",
+   "slippage_price": 11.97,
+   "swap": "unknown; holds crossing the broker rollover rejected",
+   "uncertainty_margin_pct": 0.1
+  },
+  "created_at_utc": 1790938599,
+  "dataset_id": "ede3898a45df163d66207fb5ad6ed745fde3853d358010da4e648de3315d03a8",
+  "family": "v2-H9:BTCUSD",
+  "feature_set": null,
+  "id": 262,
+  "kind": "RESEARCH_V2_H9",
+  "model": null,
+  "n_observations": 13,
+  "notes": null,
+  "params_json": {
+   "bars_checksum": "ede3898a45df163d66207fb5ad6ed745fde3853d358010da4e648de3315d03a8",
+   "code_sha": "eb9fb74d710e449f7c23b34aa4dfdeab8f549781",
+   "config_fingerprint": "f787763f08d9140d1fe3456e06e98be9444dfab1d2b462425d839aaac3c16296",
+   "folds": 12,
+   "preregistration": "docs/research/V2_H9_PREREGISTRATION_2026-10-02.md",
+   "preregistration_sha": "eb2f9ae1dbbca78b1b8a3a1b224931331f743536",
+   "tag": "h9r1"
+  },
+  "result_json": {
+   "checks": {
+    "cost_x1_2_net_positive": false,
+    "dsr_ge_095": false,
+    "folds_8_of_12_positive": false,
+    "gross_cost_ratio_ge_3": false,
+    "gross_episode_ci_lower_positive": false,
+    "gross_mean_positive": false,
+    "net_episode_ci_lower_positive": false,
+    "net_mean_positive": false,
+    "pbo_le_020": true,
+    "psr_ge_095": false,
+    "trade_count_ge_100": false,
+    "zero_forbidden_data_access": true,
+    "zero_safety_violations": true
+   },
+   "classification": "H9 REJECTED",
+   "cost_r": 0.03747846455681393,
+   "gross_r": -0.29279138280112027,
+   "net_r": -0.3302698473579342,
+   "trades": 13
+  },
+  "sharpe": -0.3997231475472926,
+  "split_config_json": {
+   "folds": [
+    [
+     0,
+     7721,
+     1698796800,
+     1705797000
+    ],
+    [
+     7721,
+     15442,
+     1705797900,
+     1712807100
+    ],
+    [
+     15442,
+     23163,
+     1712808000,
+     1719793800
+    ],
+    [
+     23163,
+     30884,
+     1719794700,
+     1726773300
+    ],
+    [
+     30884,
+     38605,
+     1726774200,
+     1733759100
+    ],
+    [
+     38605,
+     46326,
+     1733760000,
+     1740737700
+    ],
+    [
+     46326,
+     54047,
+     1740738600,
+     1747724400
+    ],
+    [
+     54047,
+     61768,
+     1747725300,
+     1754747100
+    ],
+    [
+     61768,
+     69489,
+     1754754300,
+     1761737400
+    ],
+    [
+     69489,
+     77210,
+     1761738300,
+     1768722300
+    ],
+    [
+     77210,
+     84931,
+     1768723200,
+     1775745000
+    ],
+    [
+     84931,
+     92652,
+     1775745900,
+     1782770400
+    ]
+   ]
+  },
+  "status": "COMPLETED",
+  "strategy_versions_json": {
+   "research_h9_btc_vol_trend": 1
+  },
+  "trial_id": "v2h9:h9r1:BTCUSD:H9-PRIMARY"
+ }
+}
