@@ -23,6 +23,13 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
+## H8 status (2026-10-02): DATA BLOCKED
+
+H8 is pre-registered (`64adb24`), amended before any result (`c61b69d`) and implemented (`435b24e`), but has never
+run: the research data fails the pre-registered M5/M1 completeness gate in all 12 folds because the MT5 terminal
+serves at most 100,000 bars per timeframe. No result exists; NO VALIDATED EDGE YET. Unblocking needs an operator
+decision (raise "Max bars in chart", forward PAPER only, or an alternate source). OOS sealed; H7 holdout untouched.
+
 ## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
 
 **Running: 0.2.6 (`e3b1250`)**, DEMO runtime + dashboard started by the operator's launcher 10:30:13 UTC after a

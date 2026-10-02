@@ -2938,3 +2938,19 @@ check or order send occurred.
   and no M5 before 2025-04-23 inside the window; all 12 folds fail the gate. No rule evaluated, no ledger row
   (260 unchanged). Only bars inside 2024-06-01..2026-06-30 were read; OOS and H7 holdout untouched. Details:
   `docs/research/V2_H8_RUN_h8r1.md`. Next step is an operator decision about M5/M1 history.
+
+## 2026-10-02 -- H8 amendment, implementation fixes, data acquisition attempt: H8 DATA BLOCKED
+
+- Amendment `c61b69d` committed ALONE before any code change or result (absolute structural stop across the fill,
+  real fill-time cost_R gate, decision-close timestamp, stop-binding reporting, OHLC-bound MFE/MAE, explicit
+  13-criterion classifier). Implementation `435b24e`; 74 H8 tests (every amendment behaviour mutation-checked);
+  full suite 1901 passed / 10 skipped / 0 failed (the extra skip is the H7 one-shot test, which skips on a dirty
+  tree; 84/84 H8+screen tests on the clean tree); compileall OK. Pushed `research/h8-xau-bpr`.
+- Operator-approved read-only MT5 acquisition (2026-10-01 and 2026-10-02) into the research copy only, bounded to
+  2024-06-01..2026-06-30 UTC: 0 new bars (M5 fetched 81,633, M1 7,981, all already stored; 0 outside the window).
+  Cause: terminal `maxbars` = 100,000. Bounded probe 2024-06-03: 1 M1, 1 M5 bar.
+- Data gate (runner, clean tree, exit 3): failed in 12/12 folds (M1 coverage 0 in folds 0-10, 0.334 in fold 11;
+  M5 0 in folds 0-4). No rule evaluated; ledger 260 rows unchanged; `v2h8:h8r1:XAUUSD:H8-PRIMARY` not written.
+  Results: `docs/research/V2_H8_RESULTS_h8r1.md`.
+- Data-safety note: on 2026-10-01 one diagnostic call asked the terminal for bars from position 0 without a window
+  bound; it returned an error (-2) and no data. No sealed-OOS bar was read. All later requests were bounded.
