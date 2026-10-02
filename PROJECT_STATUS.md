@@ -23,6 +23,13 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
+## H8 status (2026-10-02): FAIL -- H8 REJECTED
+
+H8 (pre-registered 64adb24, amended c61b69d, code 28271dc) ran once after the operator lifted the MT5 history limit:
+v2h8:h8r1:XAUUSD:H8-PRIMARY, 4,368 trades, gross -0.001 R, net -0.046 R, 0/12 folds positive, PBO 0.85 -- 11 of 13
+criteria fail. No gross edge; the friction floor set 99 % of stops. NO VALIDATED EDGE YET. No tuning; the next
+family would be a newly pre-registered H9. OOS sealed; nothing deployed.
+
 ## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
 
 **Running: 0.2.6 (`e3b1250`)**, DEMO runtime + dashboard started by the operator's launcher 10:30:13 UTC after a
@@ -54,12 +61,33 @@ Details and counts: WORKLOG 2026-09-30.
 build gate 1799/9/0, smoke PASSED, live read-only MT5 8/8, rehearsal 30 -> 31 ok. READY FOR OPERATOR REVIEW; NOT
 DEPLOYED.
 
+**Repository governance (2026-09-29).** The executable release is exactly `e3b1250`, tagged **`v0.2.6`**
+(annotated, pushed). Later commits on `fix/0.2.6-broker-truth-degradation` (`4e8f8e5`..) are documentation only and
+are NOT the tested executable; a merge of PR #5 produces a new SHA that must be rebuilt and retested before it
+could ever be called a release. `main` (`8e67f77`) is a strict ancestor of `e3b1250`, so it can be fast-forwarded
+without rewriting history (plan: fast-forward `main` to the PR #5 head once the operator approves; no force push).
+PR #3 and PR #4 are SUPERSEDED (their work is in the 0.2.5/0.2.6 lineage: ASN-024 port, `Mt5QueryError`); close
+them without merging. Strategy research happens on `research/*` branches in `.worktrees/`, never in the main
+checkout that the running DEMO process uses.
+
+## Strategy research (2026-09-29, branch `research/v2-on-0.2.6`, never in a release)
+
+**Result: NO VALIDATED EDGE YET** (development data, BACKTEST evidence; `docs/research/PROFITABILITY_ANALYSIS_2026-09-29.md`).
+V1 baseline (fresh run): XAUUSD selector net -0.193 R/trade (gross +0.025, cost 0.218), BTCUSD -0.269 (gross -0.031,
+cost 0.238), 0/12 folds positive. H1-H5 (150 trials in the append-only ledger, 0 failed): none passes; entries have no
+gross edge at any tested horizon (H4 same-entry replay, 100 % replay fidelity); exits, holding thesis and marginal cost
+do not change that; calibrated selector abstains. Reserved OOS 2026-07-01..09-18 **sealed** (now also refused inside
+`run_backtest` for research hooks). No candidate locked. Strategy status: V1 = DEPLOYED baseline (frozen); every V2
+variant = REJECTED. Next: measure exit-side DEMO execution cost; pre-register H6 (cost-to-risk / longer horizon) and H7
+(XAUUSD London/NY overlap, POST-HOC origin).
+**Update (evening):** H6 (78 trials, M15 slower entries, cost gate, Donchian) -- no screen passer; XAUUSD Donchian has a real but too small gross edge (+0.07 R, gross/cost 0.95). H7 run once on the untouched XAUUSD M15 holdout: FAIL; holdout CONSUMED. Still NO VALIDATED EDGE; OOS sealed; 260 ledger trials (`docs/research/V2_H6_H7_RESULTS_v2r3.md`).
+
 ## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
 
 **Release 0.2.6** = `e3b1250` (branch `fix/0.2.6-broker-truth-degradation`, PR #5): `dist\AdaptiveScalperNext-0.2.6.zip`,
 428 entries, sha256 66bcac8dfbc02b371a6db07883812367aae958e882fadeb2cdaa149c89bd60d2; build gate 1767 passed /
 9 skipped / 0 failed; content audit clean; smoke PASSED (schema 30). Supersedes 0.2.5 (never deployed).
-**Running: still 0.2.2 (`eaa024c`).** Deploy only with operator approval: broker flat, verified online backup +
+At that time (before the 10:30 UTC deploy) the runtime was still 0.2.2 (`eaa024c`); deploy only with operator approval: broker flat, verified online backup +
 integrity check (migration 0030 will be applied), operator Ctrl+C, checkout `e3b1250`, launcher restart, kill
 switch untouched.
 
@@ -69,7 +97,7 @@ ADVISORY task health, entry block until a full cycle succeeds) and ASN-027 durab
 **0030**, write-ahead before `order_send`, UNRESOLVED blocks entries and any second close, resolved only from fresh
 broker truth). Evidence: TESTED-FAKE (full suite 1767 passed / 9 skipped / 0 failed on Windows at `90e7584`; new
 chaos tests; negative control on `d18a5b0`). NOT live-DEMO-verified. **Deploying 0.2.6 applies migration 0030 to
-the production DB** (additive; take and verify a backup first). Running: still 0.2.2 (`eaa024c`). No strategy,
+the production DB** (additive; take and verify a backup first). At that time the runtime was still 0.2.2 (`eaa024c`). No strategy,
 selector, risk, symbol or cost change.
 
 ## Previous phase (2026-09-29, release 0.2.5 built) -- NOT DEPLOYED, superseded by 0.2.6 once built
@@ -78,7 +106,7 @@ selector, risk, symbol or cost change.
 quarantine, ASN-022..026, ASN-010 terminal pin, pending PAPER entry hardening (`f1d79f1`), V1 strategy freeze
 test (`40aba67`). Full suite 1754 passed / 9 skipped / 0 failed; smoke PASSED; zip sha256
 a14b75420ec2269e4d5ba21246ec665168f169bbc1cba1820d215c428f10d830. 0.2.4 (`9aed106`, peer build) was never
-deployed and is superseded. **Running: still 0.2.2 (`eaa024c`) WITHOUT the P0 fix.** Operator decision: deploy
+deployed and is superseded. At that time the runtime was still 0.2.2 (`eaa024c`), WITHOUT the P0 fix. Operator decision: deploy
 at the next flat (operator Ctrl+C, verified online backup, checkout `3a8df17`, launcher restart). Schema 29, no
 migration. Research-only Strategy V2 work lives on `research/strategy-v2-20260929` (never in a release).
 

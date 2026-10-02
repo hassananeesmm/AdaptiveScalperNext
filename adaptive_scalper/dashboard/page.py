@@ -826,6 +826,8 @@ async function labLoad(force){
   if(current!=="strategy_lab")return;
   const seq=++LAB.seq;LAB.loading=true;if(force)labRender();
   if(LAB.evidence==="RESEARCH"){
+    try{const v2=await labGet("/api/strategy-lab/research-v2");if(seq===LAB.seq)LAB.researchV2=v2;}
+    catch(err){if(seq===LAB.seq)LAB.researchV2={status:"UNAVAILABLE",detail:String(err)};}
     try{const r=await labGet("/api/strategy-lab/research");if(seq===LAB.seq){LAB.research=r;LAB.error=null;LAB.lastFetch=Date.now();}}
     catch(err){if(seq===LAB.seq)LAB.error=String(err);}
     finally{if(seq===LAB.seq){LAB.loading=false;labRender();}}
@@ -1085,7 +1087,55 @@ function labResearch(){
   });
   box.appendChild(el("p","Research is review-only evidence. It never changes live configuration, never promotes a strategy, "+
     "and the reserved out-of-sample interval (2026-07-01..2026-09-18) is never read by it.","lab-note"));
+  labResearchV2(box);
   return box;
+}
+function labResearchV2(box){
+  const r=LAB.researchV2;
+  box.appendChild(el("div","INDEPENDENT RESEARCH · V1 BASELINE vs V2 CANDIDATE","mini-title"));
+  if(!r||r.status!=="OK"){box.appendChild(el("p",r?fmt(r.status)+": "+fmt(r.detail):"Loading…","empty"));return;}
+  box.appendChild(el("div",r.note,"safeguard"));
+  const heads=["Evidence","Variant : session",["Trades","num"],["Gross R","num"],["Cost R","num"],["Net R","num"],
+    ["Gross/cost","num"],["PF","num"],["+folds","num"],["Halted","num"],["PSR","num"],["DSR","num"],["Avg hold","num"],
+    ["MAE R (med)","num"],["MFE R (med)","num"]];
+  Object.entries(r.symbols).forEach(([symbol,x])=>{
+    box.appendChild(el("div",symbol+" · "+fmt(x.bars)+" M5 bars · "+x.folds+" folds · costs "+fmt(x.cost_provenance)+
+      " · protected OOS: "+fmt(x.protected_oos)+" · file "+fmt(x.file),"mini-title"));
+    const rows=[];
+    Object.entries(x.variants).forEach(([variant,list])=>list.forEach(v=>{
+      const tr=el("tr");cell(tr,v.evidence_label);cell(tr,v.label.replace("__selector__","SELECTOR"));
+      if(v.error){const td=cell(tr,"FAILED: "+v.error,"error");td.colSpan=13;rows.push(tr);return;}
+      if(!v.trades){const td=cell(tr,"NO TRADES (abstained / flat)","na");td.colSpan=13;rows.push(tr);return;}
+      const ratio=(v.cost_r>0&&v.gross_r!==null)?v.gross_r/v.cost_r:null;
+      cell(tr,fmt(v.trades),"num");cell(tr,num(v.gross_r,3),"num");cell(tr,num(v.cost_r,3),"num");cell(tr,num(v.net_r,3),"num");
+      cell(tr,num(ratio,2),"num");cell(tr,num(v.profit_factor),"num");cell(tr,fmt(v.positive_folds)+" / "+fmt(v.folds),"num");
+      cell(tr,fmt(v.halted_folds),"num");cell(tr,num(v.psr_vs_zero,3),"num");
+      cell(tr,v.dsr===null||v.dsr===undefined?"N/A":num(v.dsr,3),"num");cell(tr,dur(v.avg_holding_seconds),"num");
+      cell(tr,num(v.mae_r_median,2),"num");cell(tr,num(v.mfe_r_median,2),"num");rows.push(tr);}));
+    box.appendChild(gridTable(heads,rows,{nowrap:true}));
+    const rel=x.raw_confidence_reliability||{};
+    const rrows=[];Object.entries(rel).forEach(([k,bins])=>{
+      if(!Array.isArray(bins)){const tr=el("tr");cell(tr,k);const td=cell(tr,fmt(bins),"na");td.colSpan=6;rrows.push(tr);return;}
+      bins.forEach(b=>{const tr=el("tr");cell(tr,k+" · bin "+b.bin+" ("+b.level+")");cell(tr,num(b.mean_raw_confidence,2),"num");
+        cell(tr,pct(b.predicted_p_net_win),"num");cell(tr,pct(b.realized_p_net_win),"num");
+        cell(tr,num(b.predicted_gross_r,3),"num");cell(tr,num(b.realized_gross_r,3),"num");
+        cell(tr,fmt(b.calibration_n)+" / "+fmt(b.evaluated_n),"num");rrows.push(tr);});});
+    if(rrows.length){box.appendChild(el("div","Raw confidence vs calibrated (out-of-fold) · "+symbol,"mini-title"));
+      box.appendChild(gridTable(["Strategy · bin",["Raw confidence","num"],["Calibrated p(net win)","num"],["Realized p","num"],
+        ["Predicted gross R","num"],["Realized gross R","num"],["n calib / eval","num"]],rrows,{nowrap:true}));}
+  });
+  const c=r.costs;
+  if(c&&c.symbols){
+    box.appendChild(el("div","DEMO cost prediction vs realized (entry side) · "+fmt(c.evidence),"mini-title"));
+    const crow=Object.entries(c.symbols).map(([s,v])=>{const a=v.all||{};const tr=el("tr");cell(tr,s);cell(tr,fmt(a.fills),"num");
+      const m=x=>x?num(x.mean,4):"N/A";
+      cell(tr,m(a.spread_predicted),"num");cell(tr,m(a.spread_at_fill_quote),"num");cell(tr,m(a.slippage_predicted),"num");
+      cell(tr,m(a.slippage_realized_signed),"num");cell(tr,pct(a.slippage_realized_adverse_share),"num");
+      cell(tr,m(a.commission_money_per_lot_round_trip),"num");return tr;});
+    box.appendChild(gridTable(["Symbol",["Fills","num"],["Spread predicted","num"],["Spread at fill","num"],
+      ["Slippage predicted","num"],["Slippage realized (+adverse)","num"],["Adverse share","num"],["Commission / lot RT","num"]],crow,{nowrap:true}));
+    box.appendChild(el("p",fmt(c.limitation),"lab-note"));
+  }
 }
 function labComparison(s){
   const box=el("div",null,"lab");

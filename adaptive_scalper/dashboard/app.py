@@ -175,6 +175,12 @@ def create_app(db_path: str | Path, *, push_seconds: float = DEFAULT_PUSH_SECOND
         in `research/`). Read-only; never the live evidence tabs."""
         return strategy_lab.research_reports(Path(db_path).resolve().parent / "research")
 
+    @app.get("/api/strategy-lab/research-v2")
+    def lab_research_v2() -> dict:
+        """RESEARCH-ONLY V1 BASELINE vs V2 CANDIDATE comparison and DEMO cost
+        prediction diagnostics (JSON files in `research/`). Read-only."""
+        return strategy_lab.research_v2_reports(Path(db_path).resolve().parent / "research")
+
     @app.get("/api/strategy-lab/export.csv")
     def lab_export(request: Request, keys: str = "") -> Response:
         """Review export of the comparison table (same filters). Exporting

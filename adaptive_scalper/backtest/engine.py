@@ -85,6 +85,7 @@ import time
 
 from adaptive_scalper.backtest.dataset import build_dataset_snapshot
 from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
+from adaptive_scalper.backtest.reserved_oos import assert_outside_reserved_oos
 from adaptive_scalper.backtest.types import (
     FILL_NEXT_BAR_OPEN,
     FILL_RANGE_END_CLOSE,
@@ -276,6 +277,9 @@ def run_backtest(
     entry_block_reason: str | None = None,
     strategy_keys: tuple[str, ...] | None = None,
     candidate_log: list[CandidateRecord] | None = None,
+    research_selector=None,
+    research_holding_thesis=None,
+    research_variant: str | None = None,
 ) -> BacktestResult:
     """`strategy_keys`: evaluate only these active strategies (None = all
     six). An independent research session passes exactly one, so its
@@ -329,6 +333,23 @@ def run_backtest(
         config, canonical_symbol=canonical_symbol, resolutions=(resolution,),
         strategies=tuple((s.key, s.version) for s in active_strategies),
     )
+    # RESEARCH-ONLY V2 hooks (adaptive_scalper/research/v2). They never run
+    # outside a BACKTEST: PAPER and DEMO always take the frozen V1 path, and a
+    # research run can never share a V1 configuration fingerprint.
+    if research_selector is not None or research_holding_thesis is not None:
+        if origin != EvidenceOrigin.BACKTEST:
+            raise ValueError(f"research V2 hooks are BACKTEST-only, not {origin}")
+        if resume_open_position is not None or resume_pending_entry is not None or not force_close_at_range_end:
+            raise ValueError("research V2 hooks are for bounded research runs only, never incremental PAPER")
+        if not research_variant:
+            raise ValueError("research V2 hooks require a non-empty research_variant label")
+        # Defense in depth (not only in the research wrappers): research
+        # hooks never see the reserved untouched OOS holdout.
+        assert_outside_reserved_oos(bars[0].time, bars[-1].time)
+        fingerprint = hashlib.sha256(f"{fingerprint}|research-v2:{research_variant}".encode()).hexdigest()
+    elif research_variant is not None:
+        raise ValueError("research_variant without a research hook")
+    last_exit_time_utc: int | None = None
     if resume_regime_tracker is not None:
         regime_tracker = RegimeTracker(
             min_confirmations=config.regime_min_confirmations, initial_regime=resume_regime_tracker.confirmed,
@@ -359,7 +380,8 @@ def run_backtest(
         trade: _OpenTrade, bar_time: int, exit_price: float, reason: str, *,
         exit_spread_price: float, exit_slippage_price: float, fill_reference: str, decision_time: int,
     ) -> None:
-        nonlocal equity, peak_equity, max_drawdown, risk_state
+        nonlocal equity, peak_equity, max_drawdown, risk_state, last_exit_time_utc
+        last_exit_time_utc = bar_time
         closed = _close_trade(
             trade, bar_time, exit_price, reason, regime_tracker.confirmed_regime, symbol_spec,
             exit_spread_price=exit_spread_price, exit_slippage_price=exit_slippage_price, fills=fills,
@@ -437,7 +459,8 @@ def run_backtest(
                 open_trade = None
             else:
                 _review_open_trade(open_trade, bar, features, confirmed_regime, active_strategies, symbol_spec, config,
-                                   bar_seconds=resolution_seconds(resolution))
+                                   bar_seconds=resolution_seconds(resolution),
+                                   holding_thesis=research_holding_thesis)
 
         # 4. Scan for a new entry only when flat, outside any supplied
         # news-block window, and while no daily-loss/drawdown ceiling is
@@ -455,10 +478,17 @@ def run_backtest(
                     candidates.append(signal)
             if candidates:
                 cost = _estimate_cost(bar, symbol_spec, config)
-                selection = select_proposal(
-                    candidates, {canonical_symbol: cost},
-                    min_net_edge_price=config.min_net_edge_price, min_raw_confidence=config.min_raw_confidence,
-                )
+                if research_selector is not None:
+                    selection = research_selector(
+                        candidates, {canonical_symbol: cost},
+                        min_net_edge_price=config.min_net_edge_price, min_raw_confidence=config.min_raw_confidence,
+                        bar_time_utc=bar.time, last_exit_time_utc=last_exit_time_utc,
+                    )
+                else:
+                    selection = select_proposal(
+                        candidates, {canonical_symbol: cost},
+                        min_net_edge_price=config.min_net_edge_price, min_raw_confidence=config.min_raw_confidence,
+                    )
                 if candidate_log is not None:
                     candidate_log.extend(_candidate_records(selection, bar.time, cost))
                 if selection.selected is not None:
@@ -630,7 +660,7 @@ def _revalidate_and_open(
 
 def _review_open_trade(
     open_trade: _OpenTrade, bar: Bar, features, confirmed_regime: str, active_strategies,
-    symbol_spec: SymbolSpec, config: BacktestConfig, *, bar_seconds: int,
+    symbol_spec: SymbolSpec, config: BacktestConfig, *, bar_seconds: int, holding_thesis=None,
 ) -> None:
     """Bar-close review: updates peak_r/stop in place, or sets a
     `pending_exit_reason` that fills at the next bar's open. The review
@@ -651,7 +681,16 @@ def _review_open_trade(
         open_trade.peak_r_time_utc = bar.time
 
     holding_seconds = bar.time + bar_seconds - open_trade.entry_time_utc
-    setup_signal = _reevaluate_setup(active_strategies, open_trade, features, confirmed_regime)
+    if holding_thesis is None:
+        setup_still_valid = _reevaluate_setup(active_strategies, open_trade, features, confirmed_regime) is not None
+    else:
+        # Research V2: the entry trigger and the holding thesis are separate
+        # questions. The hook only decides validity; it cannot move the stop,
+        # change size or add risk.
+        setup_still_valid = bool(holding_thesis(
+            direction=open_trade.direction, entry_regime=open_trade.entry_regime, confirmed_regime=confirmed_regime,
+            fresh_signal=_evaluate_original_strategy(active_strategies, open_trade, features, confirmed_regime),
+        ))
     cost = _estimate_cost(bar, symbol_spec, config)
     current_net_edge = (
         (open_trade.target_price - bar.close if open_trade.direction == "BUY" else bar.close - open_trade.target_price)
@@ -659,7 +698,7 @@ def _review_open_trade(
     )
     expectancy = evaluate_position_expectancy(ExpectancyEvidence(
         entry_regime=open_trade.entry_regime, current_regime=confirmed_regime,
-        strategy_setup_still_valid=setup_signal is not None,
+        strategy_setup_still_valid=setup_still_valid,
         current_net_edge_price=current_net_edge, min_required_edge_price=config.min_net_edge_price,
         holding_seconds=holding_seconds, current_r=current_r, peak_r=open_trade.peak_r,
     ))
@@ -694,6 +733,17 @@ def _estimate_cost(bar: Bar, symbol_spec: SymbolSpec, config: BacktestConfig):
         expected_slippage_price=config.fill_assumptions.slippage_price, swap_price_equivalent=0.0,
         uncertainty_margin_pct=config.uncertainty_margin_pct,
     )
+
+
+def _evaluate_original_strategy(active_strategies, open_trade: _OpenTrade, features, confirmed_regime: str):
+    """The original strategy's fresh signal in ANY direction (or None) --
+    raw evidence for a research holding thesis."""
+    from adaptive_scalper.regimes.classifier import RegimeClassification
+
+    strategy = next((s for s in active_strategies if s.key == open_trade.strategy_key), None)
+    if strategy is None:
+        return None
+    return strategy.evaluate(features, RegimeClassification(confirmed_regime, 1.0, 1, "re-evaluation"))
 
 
 def _reevaluate_setup(active_strategies, open_trade: _OpenTrade, features, confirmed_regime: str) -> StrategySignal | None:

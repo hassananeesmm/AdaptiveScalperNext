@@ -2970,3 +2970,99 @@ check or order send occurred.
   risk limits 0.25 / 0.75 / 2.0 / 5.0 %, 2 positions, 1 per symbol; 0 open positions / incidents / unresolved
   closes; exit-cost sweep OK (369 economic exit events recorded, cost_evidence component OK); dashboard HTTP 200.
 - Rollback (not needed): checkout e3b1250 and restore the backup above.
+
+## 2026-09-29 (afternoon) -- governance, V2 port onto 0.2.6, H4/H5 research (no runtime change)
+
+- Running DEMO runtime untouched throughout: main checkout stays detached at `e3b1250` (0.2.6); all work in
+  worktrees (`.worktrees/degradation`, `.worktrees/research-v2b`).
+- Governance: annotated tag `v0.2.6` created at exactly `e3b1250a70a4849633ec8d2da2f0018a3c655049` and pushed.
+  PROJECT_STATUS pre-deploy sections reworded as history ("At that time ... still 0.2.2") and a governance note added
+  (`317b2e4` on `fix/0.2.6-broker-truth-degradation`, pushed): `main` (`8e67f77`) is a strict ancestor of `e3b1250`
+  (fast-forward possible, awaiting operator approval); PR #3/#4 superseded (not closed yet); PR #5 = docs on top of the
+  tested release, a merge SHA would need rebuild + retest.
+- V2 port: `f060fda`, `0be4f08`, `10184be` cherry-picked cleanly onto `317b2e4` as branch `research/v2-on-0.2.6`
+  (`f73a88a`, `4683a3a`, `039c855`); focused suites 86 passed.
+- Disclosed: H1-H3 had already been run once (tag `v2r1`, 07:05-07:45) before this session; their headline numbers were
+  seen before H4/H5 were written. H4/H5 pre-registered and committed before any H4/H5 code ran (`33f06d9`).
+- Framework (`5293ce0`): `backtest/reserved_oos.py` (single OOS definition; `run_backtest` itself refuses research
+  hooks over the OOS -- tests prove direct calls fail), `research/v2/counterfactual.py` (same-entry exit replay using
+  the engine's own SL/TP, fill and cost primitives), `research/v2/marginal_cost.py` (H5), `research/v2/metrics.py`
+  (section-35 metrics, segments, stress, development verdict), `scripts/research_v2_counterfactual.py` (refuses a dirty
+  tree and OOS ranges before loading). `tests/test_research_v2_counterfactual.py` 27 tests; research + freeze +
+  boundary suites 115 passed. No runtime / PAPER / DEMO / strategy / selector / risk change.
+- Runs (tag `v2r2`, research DB `data/research/v2_20260929.sqlite3`): smoke first on a scratch DB copy (so no smoke
+  trials entered the ledger). XAUUSD 325 s, BTCUSD 247 s; replay fidelity 100 % in all 14 cohorts; 98 trials appended
+  (H4 84, H5 14), 0 FAILED; ledger total 180. Passing trials: NONE.
+- Findings (docs/research/PROFITABILITY_ANALYSIS_2026-09-29.md): NO VALIDATED EDGE YET. V1 entries have no gross edge
+  at any tested horizon; the V1 exit neither creates nor destroys it (all paired |t| < 2); H5 changed no exit (the
+  remaining-edge test never binds); cost 0.10-0.24 R/trade is dominated by the configured slippage, which is 2-4x the
+  DEMO-observed ENTRY p90 (exit-side slippage unrecorded) -- a POST-HOC sensitivity with observed entry slippage leaves
+  every session negative; the calibrated selector correctly abstains. OOS untouched.
+- Verification at `5d37055` (research branch): compileall OK; full suite **1818 passed / 9 skipped / 0 failed**
+  (398 s; skips = opt-in live-MT5 tests + symlink privilege, as before).
+- Natural 0.2.6 DEMO evidence (read-only look at the production DB, `mode=ro`, 13:58 UTC): 8 positions opened since
+  the 10:30 deploy (all entry orders FILLED), 7 closed; 7 `close_requests`, each write-ahead -> send_outcome
+  FULLY_CLOSED -> RESOLVED_CLOSED within 0-1 s, attempt_count 0, no UNKNOWN, no duplicate close (ASN-027 normal
+  lifecycle: TESTED-LIVE-DEMO). Close settlement well inside the 10 s assumption on this sample. broker_truth
+  AVAILABLE, reconciliation CLEAN, engine heartbeat current, 0 unresolved incidents, kill switch DISENGAGED, 1 open
+  XAUUSD position under management. ASN-026 degradation and close-side UNKNOWN: not occurred naturally (still
+  TESTED-FAKE only); not provoked.
+
+## 2026-09-29 (evening) -- operator plan A-G: housekeeping, observation review, exit-cost observability, H6/H7
+
+- A: `main` fast-forwarded to c730e96 (no force); `v0.2.6` = e3b1250 unchanged; PRs #2/#3/#4 closed as superseded
+  (branches kept); PR #5 open. B: task-observer review read and bucketed (11 observations), awaiting operator approval;
+  nothing applied. C: exit-side cost observability on `feature/exit-cost-observability` (75f6e34, migration 0031,
+  1782/9/0, rehearsed on a production-DB copy; NOT deployed) -- see that branch's WORKLOG.
+- D: H6/H7 pre-registered (78f0491) before any code. M15 data discovered in the research DB (XAUUSD from 2022-06,
+  BTCUSD from 2023-10); H7 given the untouched XAUUSD M15 window 2022-06-23..2024-05-31, which H6 is barred from in code.
+- E: H6 (2c98b9a, tag v2r3; smoke on a scratch DB copy first): 78 trials, fidelity 100 %, 0 screen passers. Cost R fell
+  to 0.04-0.17 on M15; V1 logic still has no gross edge; XAUUSD Donchian shows gross +0.07 R with CI above 0 but
+  gross/cost 0.95, net ~0. DEMO-evidence cost scenario changes nothing material.
+- F: H7 one-shot runner (f9b56a6; refuses a second run -- tested on a clean tree), run once: FAIL (session gross
+  -0.009 R, net -0.297 R, n 84); holdout CONSUMED.
+- G: reserved OOS untouched throughout. Ledger 260 trials, 0 failed, 0 smoke rows. Results:
+  docs/research/V2_H6_H7_RESULTS_v2r3.md.
+
+## 2026-09-30 / 10-01 -- H8 pre-registered, implemented, run h8r1 REFUSED by its data gate (branch `research/h8-xau-bpr`)
+
+- Pre-registration `docs/research/V2_H8_PREREGISTRATION_2026-09-30.md` committed ALONE first (`64adb24`): XAUUSD
+  M15 Donchian N20 context (labelled H6-derived/post-selection) -> M5 pullback (2 counter closes + 0.50 ATR14) -> M1
+  3-bar resumption; cost_R <= 0.05 on spread + 2x configured slippage + commission + margin; stop = max(structural,
+  0.5 ATR, cost/0.05), 2R, 45 min; one trial; episode-clustered bootstrap, PSR/DSR/PBO; hard criteria; a data gate.
+- Implementation `0319e40`: `adaptive_scalper/research/v2/h8.py`, `scripts/research_v2_h8.py`,
+  `tests/test_research_v2_h8.py` (36 tests; 12 mutants of the core rules all killed). Not in the runtime registry; no
+  execution/gateway/runtime import. Full suite on the branch: 1864 passed / 9 skipped / 0 failed; compileall OK.
+- Run `h8r1` (2026-10-01, clean tree): REFUSED, exit 3 -- the stored research DB has no XAUUSD M1 before 2026-06-09
+  and no M5 before 2025-04-23 inside the window; all 12 folds fail the gate. No rule evaluated, no ledger row
+  (260 unchanged). Only bars inside 2024-06-01..2026-06-30 were read; OOS and H7 holdout untouched. Details:
+  `docs/research/V2_H8_RUN_h8r1.md`. Next step is an operator decision about M5/M1 history.
+
+## 2026-10-02 -- H8 amendment, implementation fixes, data acquisition attempt: H8 DATA BLOCKED
+
+- Amendment `c61b69d` committed ALONE before any code change or result (absolute structural stop across the fill,
+  real fill-time cost_R gate, decision-close timestamp, stop-binding reporting, OHLC-bound MFE/MAE, explicit
+  13-criterion classifier). Implementation `435b24e`; 74 H8 tests (every amendment behaviour mutation-checked);
+  full suite 1901 passed / 10 skipped / 0 failed (the extra skip is the H7 one-shot test, which skips on a dirty
+  tree; 84/84 H8+screen tests on the clean tree); compileall OK. Pushed `research/h8-xau-bpr`.
+- Operator-approved read-only MT5 acquisition (2026-10-01 and 2026-10-02) into the research copy only, bounded to
+  2024-06-01..2026-06-30 UTC: 0 new bars (M5 fetched 81,633, M1 7,981, all already stored; 0 outside the window).
+  Cause: terminal `maxbars` = 100,000. Bounded probe 2024-06-03: 1 M1, 1 M5 bar.
+- Data gate (runner, clean tree, exit 3): failed in 12/12 folds (M1 coverage 0 in folds 0-10, 0.334 in fold 11;
+  M5 0 in folds 0-4). No rule evaluated; ledger 260 rows unchanged; `v2h8:h8r1:XAUUSD:H8-PRIMARY` not written.
+  Results: `docs/research/V2_H8_RESULTS_h8r1.md`.
+- Data-safety note: on 2026-10-01 one diagnostic call asked the terminal for bars from position 0 without a window
+  bound; it returned an error (-2) and no data. No sealed-OOS bar was read. All later requests were bounded.
+
+## 2026-10-02 (morning) -- H8 h8r1 RAN ONCE: FAIL, H8 REJECTED
+
+- Operator raised MT5 Max bars in chart to Unlimited (maxbars 100,000,000; terminal restarted 07:48; DEMO runtime
+  relaunched by the operator, still v0.2.6 e3b1250, schema 30, 0 incidents, broker flat). Bounded read-only import
+  into the research copy: M5 +63,186 (147,280), M1 +715,027 (735,599); 0 bars outside 2024-06-01..2026-06-30;
+  0 duplicates; data gate 12/12 folds pass (M5 >= 0.999, M1 >= 0.998).
+- Pre-run freeze: clean tree 28271dc (tag h8r1-prerun), prereg 64adb24 unchanged, amendment c61b69d before the
+  implementation, ledger key absent. Run once: v2h8:h8r1:XAUUSD:H8-PRIMARY (ledger 260 -> 261).
+- Result: 4,368 trades, 799 episodes; gross -0.0010 R (episode CI -0.0126..+0.0097), net -0.0463 R (CI
+  -0.0579..-0.0356), cost 0.0453 R; 0/12 net-positive folds; PSR 9e-13, DSR 3e-55, PBO 0.85; gross/cost -0.02;
+  FRICTION set the stop in 99.45 % of trades, 94 % exited at the 45-min time stop. 11/13 criteria fail; 0 safety
+  violations; 0 forbidden data access. FAIL: H8 REJECTED, no tuning. docs/research/V2_H8_RESULTS_h8r1.md.
