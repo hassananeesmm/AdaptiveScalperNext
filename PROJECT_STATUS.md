@@ -23,12 +23,12 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## H8 status (2026-10-02): DATA BLOCKED
+## H8 status (2026-10-02): FAIL -- H8 REJECTED
 
-H8 is pre-registered (`64adb24`), amended before any result (`c61b69d`) and implemented (`435b24e`), but has never
-run: the research data fails the pre-registered M5/M1 completeness gate in all 12 folds because the MT5 terminal
-serves at most 100,000 bars per timeframe. No result exists; NO VALIDATED EDGE YET. Unblocking needs an operator
-decision (raise "Max bars in chart", forward PAPER only, or an alternate source). OOS sealed; H7 holdout untouched.
+H8 (pre-registered 64adb24, amended c61b69d, code 28271dc) ran once after the operator lifted the MT5 history limit:
+v2h8:h8r1:XAUUSD:H8-PRIMARY, 4,368 trades, gross -0.001 R, net -0.046 R, 0/12 folds positive, PBO 0.85 -- 11 of 13
+criteria fail. No gross edge; the friction floor set 99 % of stops. NO VALIDATED EDGE YET. No tuning; the next
+family would be a newly pre-registered H9. OOS sealed; nothing deployed.
 
 ## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
 

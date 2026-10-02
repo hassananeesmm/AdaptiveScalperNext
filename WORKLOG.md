@@ -2954,3 +2954,16 @@ check or order send occurred.
   Results: `docs/research/V2_H8_RESULTS_h8r1.md`.
 - Data-safety note: on 2026-10-01 one diagnostic call asked the terminal for bars from position 0 without a window
   bound; it returned an error (-2) and no data. No sealed-OOS bar was read. All later requests were bounded.
+
+## 2026-10-02 (morning) -- H8 h8r1 RAN ONCE: FAIL, H8 REJECTED
+
+- Operator raised MT5 Max bars in chart to Unlimited (maxbars 100,000,000; terminal restarted 07:48; DEMO runtime
+  relaunched by the operator, still v0.2.6 e3b1250, schema 30, 0 incidents, broker flat). Bounded read-only import
+  into the research copy: M5 +63,186 (147,280), M1 +715,027 (735,599); 0 bars outside 2024-06-01..2026-06-30;
+  0 duplicates; data gate 12/12 folds pass (M5 >= 0.999, M1 >= 0.998).
+- Pre-run freeze: clean tree 28271dc (tag h8r1-prerun), prereg 64adb24 unchanged, amendment c61b69d before the
+  implementation, ledger key absent. Run once: v2h8:h8r1:XAUUSD:H8-PRIMARY (ledger 260 -> 261).
+- Result: 4,368 trades, 799 episodes; gross -0.0010 R (episode CI -0.0126..+0.0097), net -0.0463 R (CI
+  -0.0579..-0.0356), cost 0.0453 R; 0/12 net-positive folds; PSR 9e-13, DSR 3e-55, PBO 0.85; gross/cost -0.02;
+  FRICTION set the stop in 99.45 % of trades, 94 % exited at the 45-min time stop. 11/13 criteria fail; 0 safety
+  violations; 0 forbidden data access. FAIL: H8 REJECTED, no tuning. docs/research/V2_H8_RESULTS_h8r1.md.
