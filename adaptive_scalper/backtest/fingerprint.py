@@ -41,7 +41,7 @@ def describe_config(
     config: BacktestConfig, *, canonical_symbol: str, resolutions: tuple[str, ...],
     strategies: tuple[tuple[str, int], ...],
 ) -> dict:
-    return {
+    description = {
         "canonical_symbol": canonical_symbol,
         "resolutions": sorted(resolutions),
         "strategies": sorted([key, version] for key, version in strategies),
@@ -62,6 +62,10 @@ def describe_config(
         "uncertainty_margin_pct": config.uncertainty_margin_pct,
         "max_entry_fill_delay_seconds": config.max_entry_fill_delay_seconds,
     }
+    # Only when set, so every fingerprint without a suspension is unchanged.
+    if config.suspended_strategy_keys:
+        description["suspended_strategy_keys"] = sorted(config.suspended_strategy_keys)
+    return description
 
 
 def compute_config_fingerprint(

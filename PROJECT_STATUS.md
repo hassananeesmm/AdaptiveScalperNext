@@ -32,6 +32,13 @@ CLEAN, account DEMO (ICMarketsSC-Demo, pinned IC Markets terminal), symbols BTCU
 (untouched), 0 positions / orders / UNKNOWN / unresolved incidents / close_requests. Live read-only MT5 tests 8/8.
 ASN-026/027 failure paths: TESTED-FAKE; TESTED-LIVE-DEMO evidence pending natural operation (see WORKLOG).
 
+## Release candidate 0.2.8 (2026-10-02, branch `release/0.2.8`, NOT deployed)
+
+Operator-requested entry suspension of `microstructure_acceleration` (`[strategies] entry_suspended` in
+`config/default.toml`): still active and journaled, never opens a position (DEMO, PAPER, backtest). V1 selector and
+strategies byte-identical; no schema change. Full suite 1812/9/0. Deploy only with explicit operator approval at a
+flat broker. Not a validated edge: it removes the main live loss source (377 of 391 DEMO trades, -277.58 USD).
+
 ## Current phase (2026-10-02, release 0.2.7 DEPLOYED on DEMO)
 
 **Running: 0.2.7 (`d9c1bd1`, tag v0.2.7)** -- observability only (economic exit events, migration 0031); DEMO

@@ -58,6 +58,7 @@ def paper_config(config: AppConfig, canonical_symbol: str, news_windows: tuple[t
             swap_monetary_per_lot_per_day=costs.swap_per_lot_per_day, provenance=provenance,
         ),
         news_windows=news_windows,
+        suspended_strategy_keys=tuple(sorted(config.strategies.entry_suspended)),
     )
 
 

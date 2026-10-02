@@ -61,6 +61,9 @@ class BacktestConfig:
     # session break, data gap), the pending entry is dropped as stale.
     # None = two bars of the run's resolution.
     max_entry_fill_delay_seconds: int | None = None
+    # Config `strategies.entry_suspended`: active strategies whose signals are
+    # evaluated but never selected for an entry (the same rule DEMO applies).
+    suspended_strategy_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.initial_equity <= 0:
