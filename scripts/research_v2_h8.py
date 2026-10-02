@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from adaptive_scalper.backtest.dataset import compute_bars_checksum  # noqa: E402
+from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint  # noqa: E402
 from adaptive_scalper.cli.research import open_research_db  # noqa: E402
 from adaptive_scalper.gateway.spec_store import load_symbol_spec  # noqa: E402
 from adaptive_scalper.history.store import get_bars  # noqa: E402
@@ -35,6 +36,7 @@ TRIAL_KIND = "RESEARCH_V2_H8"
 FAMILY = "v2-H8:XAUUSD"
 H6_FAMILY = "v2-H6:XAUUSD"
 PREREGISTRATION = "docs/research/V2_H8_PREREGISTRATION_2026-09-30.md"
+AMENDMENT = "docs/research/V2_H8_PREREGISTRATION_AMENDMENT_2026-10-02.md"
 H6_RESULTS = "data/research/v2h6_XAUUSD_v2r3.json"
 
 
@@ -94,8 +96,11 @@ def main(argv=None) -> int:
         ranges = fold_index_ranges(len(m15), 12, config.feature_lookback)
         gate = h8.coverage_gate(m15, m5, m1, ranges)
         checksums = {res: compute_bars_checksum(s) if s else None for res, s in bars.items()}
+        config_fp, _ = compute_config_fingerprint(config, canonical_symbol=h8.SYMBOL, resolutions=("M15", "M5", "M1"),
+                                                  strategies=((h8.STRATEGY_KEY, 1),))
         base = {"kind": "RESEARCH_V2_H8", "origin": "BACKTEST", "evidence": "HYPOTHESIS DEVELOPMENT (not validation)",
-                "preregistration": PREREGISTRATION, "code_sha": code_sha, "tag": args.tag, "symbol": h8.SYMBOL,
+                "preregistration": PREREGISTRATION, "amendment": AMENDMENT, "code_sha": code_sha, "tag": args.tag,
+                "symbol": h8.SYMBOL, "config_fingerprint": config_fp,
                 "window": [h8.DEV_START_UTC, h8.DEV_END_UTC], "bars": {r: len(s) for r, s in bars.items()},
                 "bars_checksum": checksums, "folds": len(ranges), "data_gate": gate,
                 "protected_oos": "not read", "h7_holdout": "not read"}
@@ -107,6 +112,8 @@ def main(argv=None) -> int:
                   f"nothing recorded in the ledger. Report: {args.out}")
             return 3
 
+        if forbidden:
+            raise SystemExit("refusing: loaded bars outside the development window")
         store = h8.FingerprintStore()
         results, rejected, decisions = [], [], 0
         for f, (start, end) in enumerate(h8.fold_spans(m15, ranges)):
@@ -127,7 +134,8 @@ def main(argv=None) -> int:
                              family_sharpe_variance=_variance(conn, first["sharpe_per_trade"]), **kwargs)
         record_trial(
             conn, trial_id=trial_id, family=FAMILY, kind=TRIAL_KIND, strategy_versions={h8.STRATEGY_KEY: 1},
-            params={"preregistration": PREREGISTRATION, "code_sha": code_sha, "tag": args.tag,
+            params={"preregistration": PREREGISTRATION, "amendment": AMENDMENT, "code_sha": code_sha, "tag": args.tag,
+                    "config_fingerprint": config_fp,
                     "bars_checksum": checksums, "folds": len(ranges)},
             status="COMPLETED", dataset_id=checksums["M1"],
             cost_model={"provenance": config.fill_assumptions.provenance,

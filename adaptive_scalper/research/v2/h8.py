@@ -28,6 +28,7 @@ Nothing here touches a broker, a production database or the reserved OOS
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import random
 import sqlite3
@@ -75,6 +76,16 @@ REJECT_POSITION_OPEN = "POSITION_OPEN"
 REJECT_RISK_HALT = "RISK_HALT"
 REJECT_COST_UNKNOWN = "COST_UNKNOWN"
 REJECT_COST_R = "COST_R_ABOVE_0.05"
+REJECT_COST_R_AT_FILL = "COST_R_ABOVE_0_05_AT_FILL"
+REJECT_COST_UNKNOWN_AT_FILL = "COST_UNKNOWN_AT_FILL"
+REJECT_GAP_THROUGH_STRUCTURAL = "GAP_THROUGH_STRUCTURAL_STOP"
+STRUCTURAL, VOLATILITY, FRICTION = "STRUCTURAL", "VOLATILITY", "FRICTION"
+# Pre-registration section 6 + amendment item 12: ALL required, by name. Nothing else counts.
+REQUIRED_CRITERIA = (
+    "trade_count_ge_100", "gross_mean_positive", "gross_episode_ci_positive", "net_mean_positive",
+    "net_episode_ci_positive", "folds_8_of_12_positive", "psr_ge_095", "dsr_ge_095", "pbo_le_020",
+    "gross_cost_ratio_ge_3", "cost_x1_2_net_positive", "zero_safety_violations", "zero_forbidden_data_access",
+)
 REJECT_NO_NEXT_BAR = "NO_NEXT_BAR"
 
 
@@ -277,16 +288,37 @@ def round_trip_cost_price(bar, symbol_spec, config) -> float | None:
     ).total_cost
 
 
-def stop_distance(decision: Decision, spread_price: float, round_trip_cost: float) -> dict:
-    close = decision.bar.close
-    structural = (close - decision.pullback_extreme + spread_price) if decision.direction == "BUY" \
-        else (decision.pullback_extreme - close + spread_price)
-    volatility = VOLATILITY_FLOOR_ATR * decision.atr_m5
-    friction = round_trip_cost / MAX_COST_R
+def structural_stop_price(decision: Decision, spread_price: float) -> float:
+    """Amendment item 3: the ABSOLUTE invalidation price, one decision spread beyond the pullback extreme."""
+    return decision.pullback_extreme - spread_price if decision.direction == "BUY" \
+        else decision.pullback_extreme + spread_price
+
+
+def _combine(structural: float, volatility: float, friction: float) -> dict:
     distance = max(structural, volatility, friction)
-    binding = "structural" if distance == structural else "volatility" if distance == volatility else "friction"
+    binding = STRUCTURAL if distance == structural else VOLATILITY if distance == volatility else FRICTION
     return {"structural": structural, "volatility": volatility, "friction": friction, "distance": distance,
             "binding": binding}
+
+
+def stop_distance(decision: Decision, spread_price: float, round_trip_cost: float) -> dict:
+    """Decision-time stop: max(structural from the decision close, 0.5 ATR14(M5), cost/0.05)."""
+    level = structural_stop_price(decision, spread_price)
+    structural = (decision.bar.close - level) if decision.direction == "BUY" else (level - decision.bar.close)
+    return {**_combine(structural, VOLATILITY_FLOOR_ATR * decision.atr_m5, round_trip_cost / MAX_COST_R),
+            "structural_stop_price": level}
+
+
+def fill_stop_distance(direction: str, fill_price: float, decision_stop: dict) -> dict | None:
+    """Amendment item 6: at the real fill, the structural distance is measured from the fill to the
+    SAME absolute invalidation price; volatility and friction floors stay the decision's. None when
+    the fill is already through the invalidation price (no valid stop exists)."""
+    level = decision_stop["structural_stop_price"]
+    structural = (fill_price - level) if direction == "BUY" else (level - fill_price)
+    if structural <= 0:
+        return None
+    return {**_combine(structural, decision_stop["volatility"], decision_stop["friction"]),
+            "structural_stop_price": level}
 
 
 # --------------------------------------------------------------------------
@@ -297,14 +329,17 @@ def stop_distance(decision: Decision, spread_price: float, round_trip_cost: floa
 class H8Trade:
     decision: Decision
     trade: object               # the engine's SimulatedTrade
-    stop: dict
-    round_trip_cost: float
-    cost_r: float
-    mfe_r: float
-    mae_r: float
+    stop: dict                  # the FILL-time stop (amendment item 6)
+    round_trip_cost: float      # decision-time round-trip cost
+    cost_r: float               # decision-time cost_R
+    mfe_r_ohlc_bound: float     # M1 OHLC bounds (amendment item 9): descriptive only
+    mae_r_ohlc_bound: float
     fold: int
     equity_at_entry: float
     decision_spread_price: float
+    decision_stop: dict = None
+    fill_round_trip_cost: float = None
+    fill_cost_r: float = None
 
 
 def completion_stream(m15, m5, m1):
@@ -344,9 +379,10 @@ def run_h8_fold(m15, m5, m1, symbol_spec, config, *, fold: int, store: Fingerpri
         equity += sim.realized_pnl
         risk_state = RiskState(peak_equity=max(risk_state.peak_equity, equity), day_utc=risk_state.day_utc,
                                day_realized_pnl=risk_state.day_realized_pnl + sim.realized_pnl)
-        trades.append(H8Trade(open_meta["decision"], sim, open_meta["stop"], open_meta["rt"], open_meta["cost_r"],
-                              open_meta["mfe"], open_meta["mae"], fold, open_meta["equity_at_entry"],
-                              open_meta["spread"]))
+        trades.append(H8Trade(open_meta["decision"], sim, open_meta["fill_stop"], open_meta["rt"],
+                              open_meta["cost_r"], open_meta["mfe"], open_meta["mae"], fold,
+                              open_meta["equity_at_entry"], open_meta["spread"], open_meta["stop"],
+                              open_meta["fill_rt"], open_meta["fill_cost_r"]))
         open_trade = open_meta = None
 
     def track_excursion(bar):
@@ -373,16 +409,36 @@ def run_h8_fold(m15, m5, m1, symbol_spec, config, *, fold: int, store: Fingerpri
         if pending is not None:
             entry, decision, meta = pending
             pending = None
-            outcome = _revalidate_and_open(
-                entry, bar, equity=equity, risk_state=risk_state, symbol_spec=symbol_spec, config=config,
-                canonical_symbol=SYMBOL, max_fill_delay_seconds=2 * M1, external_open_positions=(),
-                correlation_matrix=None, config_fingerprint=fingerprint,
-            )
-            if isinstance(outcome, tuple):
-                rejected.append({**_public(meta), "reason": outcome[0], "detail": outcome[1], "at_utc": bar.time})
+            preview = simulate_fill(bar, decision.direction, point, fills)      # the engine's own fill price
+            fill_stop = fill_stop_distance(decision.direction, preview.price, meta["stop"])
+            fill_rt = round_trip_cost_price(bar, symbol_spec, config)
+            fill_cost_r = (fill_rt / fill_stop["distance"]) if (fill_stop and fill_rt is not None) else None
+            meta = {**meta, "fill_rt": fill_rt, "fill_cost_r": fill_cost_r}
+            reason = None
+            if fill_stop is None:
+                reason = REJECT_GAP_THROUGH_STRUCTURAL
+            elif fill_rt is None:
+                reason = REJECT_COST_UNKNOWN_AT_FILL
+            elif not fill_cost_r <= MAX_COST_R + 1e-12:
+                reason = REJECT_COST_R_AT_FILL        # never re-widen the stop to rescue it
+            if reason is not None:
+                rejected.append({**_public(meta), "reason": reason, "at_utc": bar.time})
             else:
-                open_trade = outcome
-                open_meta = {**meta, "decision": decision, "mfe": 0.0, "mae": 0.0, "equity_at_entry": equity}
+                entry = dataclasses.replace(entry, stop_distance=fill_stop["distance"],
+                                            target_distance=TARGET_R * fill_stop["distance"])
+                outcome = _revalidate_and_open(
+                    entry, bar, equity=equity, risk_state=risk_state, symbol_spec=symbol_spec, config=config,
+                    canonical_symbol=SYMBOL, max_fill_delay_seconds=2 * M1, external_open_positions=(),
+                    correlation_matrix=None, config_fingerprint=fingerprint,
+                )
+                if isinstance(outcome, tuple):
+                    rejected.append({**_public(meta), "reason": outcome[0], "detail": outcome[1], "at_utc": bar.time})
+                else:
+                    if abs(outcome.entry_price - preview.price) > 1e-9:
+                        raise AssertionError("engine fill differs from the previewed fill")
+                    open_trade = outcome
+                    open_meta = {**meta, "decision": decision, "mfe": 0.0, "mae": 0.0, "equity_at_entry": equity,
+                                 "fill_stop": fill_stop}
         if open_trade is not None and bar.time >= open_trade.entry_time_utc + TIME_STOP_SECONDS:
             fill = simulate_fill(bar, _opposite(open_trade.direction), point, fills)
             close_open(bar.time, fill.price, TIME_STOP_REASON, spread=fill.spread_cost_price / 2.0,
@@ -428,9 +484,10 @@ def run_h8_fold(m15, m5, m1, symbol_spec, config, *, fold: int, store: Fingerpri
             raw_confidence=0.5, stop_distance=stop["distance"], target_distance=TARGET_R * stop["distance"],
             expected_duration_seconds=TIME_STOP_SECONDS, entry_method="market", regime="UNKNOWN",
             rationale=f"H8 {decision.pullback_id}", feature_schema_version=FEATURE_SCHEMA_VERSION,
-            data_timestamp=bar.time,
+            data_timestamp=decision.decided_at_utc,
         )
-        entry = _pending_from_signal(signal, {"atr_m5": decision.atr_m5}, bar.time, canonical_symbol=SYMBOL,
+        entry = _pending_from_signal(signal, {"atr_m5": decision.atr_m5}, decision.decided_at_utc,
+                                     canonical_symbol=SYMBOL,
                                      estimated_cost_price=rt, expected_net_edge_price=None)
         pending = (entry, decision, {**meta, "stop": stop, "rt": rt, "cost_r": cost_r,
                                      "spread": bar.spread * point})
@@ -448,7 +505,8 @@ def run_h8_fold(m15, m5, m1, symbol_spec, config, *, fold: int, store: Fingerpri
 
 def _public(meta: dict) -> dict:
     return {k: v for k, v in meta.items() if k in ("fingerprint", "breakout_event_id", "pullback_id", "direction",
-                                                    "decided_at_utc", "fold", "cost_r")}
+                                                    "decided_at_utc", "fold", "cost_r", "rt", "fill_rt",
+                                                    "fill_cost_r")}
 
 
 # --------------------------------------------------------------------------
@@ -489,8 +547,13 @@ def trade_rows(results: list[H8Trade]) -> list[dict]:
             "cost_r": t.total_cost / risk, "entry_cost_r": (t.entry_spread_cost + t.entry_slippage_cost) / risk,
             "exit_cost_r": (t.exit_spread_cost + t.exit_slippage_cost) / risk,
             "commission_swap_r": (t.commission_cost + t.swap_cost + t.fee_cost) / risk,
-            "mfe_r": h.mfe_r, "mae_r": h.mae_r, "holding_seconds": t.exit_time_utc - t.entry_time_utc,
-            "cost_r_at_decision": h.cost_r, "stop_binding": h.stop["binding"], "stop_distance": h.stop["distance"],
+            "mfe_r_ohlc_bound": h.mfe_r_ohlc_bound, "mae_r_ohlc_bound": h.mae_r_ohlc_bound,
+            "holding_seconds": t.exit_time_utc - t.entry_time_utc,
+            "decision_cost_r": h.cost_r, "fill_time_cost_r": h.fill_cost_r,
+            "decision_round_trip_cost": h.round_trip_cost, "fill_time_round_trip_cost": h.fill_round_trip_cost,
+            "stop_binding": h.stop["binding"], "stop_distance": h.stop["distance"],
+            "structural_distance": h.stop["structural"], "volatility_floor": h.stop["volatility"],
+            "friction_floor": h.stop["friction"], "target_distance": TARGET_R * h.stop["distance"],
             "decision_spread_price": h.decision_spread_price, "atr_m5": h.decision.atr_m5,
             "initial_monetary_risk": risk, "equity_at_entry": h.equity_at_entry, "volume": t.volume,
         })
@@ -538,7 +601,8 @@ def safety_violations(results: list[H8Trade], config) -> list[str]:
     ceiling = config.risk_limits.risk_per_trade_pct / 100.0
     for h in results:
         t = h.trade
-        if not (h.round_trip_cost > 0 and h.cost_r <= MAX_COST_R + 1e-12):
+        if not (h.round_trip_cost > 0 and h.cost_r <= MAX_COST_R + 1e-12 and h.fill_cost_r is not None
+                and h.fill_cost_r <= MAX_COST_R + 1e-12):
             problems.append(f"cost gate violated at {t.entry_time_utc}")
         if not 0 < t.initial_monetary_risk <= h.equity_at_entry * ceiling * (1 + 1e-9):
             problems.append(f"risk {t.initial_monetary_risk:.2f} above the per-trade ceiling at {t.entry_time_utc}")
@@ -548,11 +612,14 @@ def safety_violations(results: list[H8Trade], config) -> list[str]:
 
 
 def classify(checks: dict, *, trades: int, gross_r: float | None, net_r: float | None) -> str:
-    """Pre-registration section 6 classification."""
+    """Pre-registration section 6 (+ amendment item 12). STRONG PASS needs every REQUIRED criterion
+    present and exactly True; a missing / None / uncomputable criterion is never a success, and keys
+    outside REQUIRED_CRITERIA are ignored."""
     if trades < 100 or gross_r is None or net_r is None or gross_r <= 0 or net_r <= 0 \
-            or not checks.get("zero_safety_violations") or not checks.get("zero_forbidden_data_access"):
+            or checks.get("zero_safety_violations") is not True \
+            or checks.get("zero_forbidden_data_access") is not True:
         return "FAIL"
-    return "STRONG PASS" if all(checks.values()) else "MARGINAL"
+    return "STRONG PASS" if all(checks.get(name) is True for name in REQUIRED_CRITERIA) else "MARGINAL"
 
 
 # --------------------------------------------------------------------------
@@ -607,20 +674,26 @@ def evaluate(results: list[H8Trade], rejected: list[dict], *, n_folds: int, conf
         return ci[key] is not None and ci[key][0] > 0
 
     checks = {
-        "trades_ge_100": n >= 100,
-        "mean_gross_r_gt_0": gross is not None and gross > 0,
-        "gross_ci_episode_lower_gt_0": lower("gross_r_episode"),
-        "mean_net_r_gt_0": net is not None and net > 0,
-        "net_ci_episode_lower_gt_0": lower("net_r_episode"),
-        "folds_net_positive_ge_8": sum(1 for v in fold_net if v > 0) >= 8,
-        "psr_ge_0.95": psr is not None and psr >= 0.95,
-        "dsr_ge_0.95": dsr is not None and dsr >= 0.95,
-        "pbo_le_0.20": pbo is not None and pbo.computable and pbo.pbo <= 0.20,
-        "gross_ge_3x_cost": bool(rows) and total_gross >= 3.0 * total_cost,
-        "net_positive_at_cost_x1.2": stress["x1.2"] is not None and stress["x1.2"] > 0,
+        "trade_count_ge_100": n >= 100,
+        "gross_mean_positive": gross is not None and gross > 0,
+        "gross_episode_ci_positive": lower("gross_r_episode"),
+        "net_mean_positive": net is not None and net > 0,
+        "net_episode_ci_positive": lower("net_r_episode"),
+        "folds_8_of_12_positive": n_folds == 12 and sum(1 for v in fold_net if v > 0) >= 8,
+        "psr_ge_095": psr is not None and psr >= 0.95,
+        "dsr_ge_095": dsr is not None and dsr >= 0.95,
+        "pbo_le_020": pbo is not None and pbo.computable and pbo.pbo is not None and pbo.pbo <= 0.20,
+        "gross_cost_ratio_ge_3": bool(rows) and total_cost > 0 and total_gross >= 3.0 * total_cost,
+        "cost_x1_2_net_positive": stress["x1.2"] is not None and stress["x1.2"] > 0,
         "zero_safety_violations": not violations,
         "zero_forbidden_data_access": not forbidden_access,
     }
+    assert set(checks) == set(REQUIRED_CRITERIA)
+    binding = {k: sum(1 for r in rows if r["stop_binding"] == k) for k in (STRUCTURAL, VOLATILITY, FRICTION)}
+
+    def median(key):
+        values = [r[key] for r in rows if r[key] is not None]
+        return statistics.median(values) if values else None
 
     def group(key):
         out: dict = {}
@@ -640,7 +713,14 @@ def evaluate(results: list[H8Trade], rejected: list[dict], *, n_folds: int, conf
         "gross_r": gross, "entry_cost_r": mean("entry_cost_r"), "exit_cost_r": mean("exit_cost_r"),
         "commission_swap_r": mean("commission_swap_r"), "cost_r": cost, "net_r": net,
         "total_gross_r": total_gross, "total_cost_r": total_cost, "total_net_r": sum(r["net_r"] for r in rows),
-        "mfe_r_mean": mean("mfe_r"), "mae_r_mean": mean("mae_r"), "holding_seconds_mean": mean("holding_seconds"),
+        "mfe_r_ohlc_bound_mean": mean("mfe_r_ohlc_bound"), "mae_r_ohlc_bound_mean": mean("mae_r_ohlc_bound"),
+        "excursion_note": "M1 OHLC bounds; an exit bar's full range may include movement after the exit; "
+                          "descriptive only, never a criterion",
+        "holding_seconds_mean": mean("holding_seconds"),
+        "stop_binding": {k: {"count": v, "pct": (100.0 * v / n) if n else None} for k, v in binding.items()},
+        "medians": {k: median(k) for k in ("stop_distance", "structural_distance", "volatility_floor",
+                                           "friction_floor", "target_distance", "holding_seconds",
+                                           "decision_cost_r", "fill_time_cost_r")},
         "exit_reasons": group("exit_reason"), "by_session": group("session"), "by_stop_binding": group("stop_binding"),
         "by_fold_net_r": fold_net, "by_episode": group("episode"), "by_day": group("day"),
         "ci95": ci, "sharpe_per_trade": sharpe, "psr": psr, "dsr": dsr, "dsr_family_trials": family_trials,

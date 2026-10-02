@@ -182,7 +182,9 @@ def test_the_trigger_is_an_m1_close_above_the_previous_3_highs_and_fills_at_the_
     assert not t.decision.bar.close > max(b.high for b in m1[k - 4:k - 1]) or \
         m1[k - 1].time + 60 <= [e for e in result["events"] if e[0] == "PULLBACK"][0][1]
     nxt = m1[k + 1]
-    assert t.trade.signal_time_utc == t.decision.bar.time and t.trade.entry_time_utc == nxt.time
+    assert t.decision.decided_at_utc == t.decision.bar.time + 60                    # the trigger bar CLOSE
+    assert t.trade.signal_time_utc == t.decision.decided_at_utc and t.trade.entry_time_utc == nxt.time
+    assert t.trade.entry_time_utc >= t.decision.decided_at_utc
     assert t.trade.entry_price == pytest.approx(nxt.open + SPREAD_PTS * 0.01 / 2 + SLIP)   # never the signal price
 
 
@@ -205,7 +207,8 @@ def test_unknown_cost_is_rejected_and_consumes_the_fingerprint():
 
 def test_high_cost_widens_the_stop_to_the_friction_floor_never_below():
     t = run(spreads={i: 40 for i in range(2000)})["trades"][0]
-    assert t.stop["binding"] == "friction" and t.cost_r == pytest.approx(h8.MAX_COST_R)
+    assert t.decision_stop["binding"] == h8.FRICTION and t.cost_r == pytest.approx(h8.MAX_COST_R)
+    assert t.fill_cost_r <= h8.MAX_COST_R
     assert t.stop["distance"] >= t.stop["structural"] and t.stop["distance"] >= t.stop["volatility"]
 
 
@@ -338,9 +341,9 @@ def test_cluster_bootstrap_resamples_whole_clusters_deterministically():
 def test_cost_stress_and_classification():
     rows = [{"gross_r": 0.3, "cost_r": 0.1}] * 3
     assert h8.cost_stress(rows)["x1.2"] == pytest.approx(0.18)
-    ok = {f"c{i}": True for i in range(13)} | {"zero_safety_violations": True, "zero_forbidden_data_access": True}
+    ok = {name: True for name in h8.REQUIRED_CRITERIA}
     assert h8.classify(ok, trades=150, gross_r=0.3, net_r=0.2) == "STRONG PASS"
-    assert h8.classify({**ok, "c5": False}, trades=150, gross_r=0.3, net_r=0.2) == "MARGINAL"
+    assert h8.classify({**ok, "psr_ge_095": False}, trades=150, gross_r=0.3, net_r=0.2) == "MARGINAL"
     assert h8.classify(ok, trades=99, gross_r=0.3, net_r=0.2) == "FAIL"
     assert h8.classify(ok, trades=150, gross_r=0.3, net_r=-0.01) == "FAIL"
     assert h8.classify({**ok, "zero_safety_violations": False}, trades=150, gross_r=0.3, net_r=0.2) == "FAIL"
@@ -408,7 +411,12 @@ def test_evaluate_reports_every_preregistered_statistic_and_classifies():
                          prior_fold_net_r=[[0.1 * f for f in range(12)], [-0.1] * 12], family_trials=40,
                          family_sharpe_variance=0.01, forbidden_access=False)
     assert report["trades"] == len(result["trades"]) and report["episodes"] == 1
-    assert set(report["checks"]) >= {"trades_ge_100", "pbo_le_0.20", "dsr_ge_0.95", "net_positive_at_cost_x1.2"}
+    assert set(report["checks"]) == set(h8.REQUIRED_CRITERIA)
+    assert set(report["stop_binding"]) == {h8.STRUCTURAL, h8.VOLATILITY, h8.FRICTION}
+    assert sum(v["count"] for v in report["stop_binding"].values()) == report["trades"]
+    assert set(report["medians"]) >= {"stop_distance", "structural_distance", "volatility_floor", "friction_floor",
+                                      "target_distance", "holding_seconds"}
+    assert "mfe_r_ohlc_bound_mean" in report and "ohlc" in report["excursion_note"].lower()
     assert report["classification"] == "FAIL"                       # < 100 trades
     assert report["pbo"]["members"] == 3
     assert report["gross_r"] == pytest.approx(report["net_r"] + report["cost_r"])
@@ -486,3 +494,301 @@ def test_runner_is_one_shot(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "_git_sha", lambda: "abc")
     monkeypatch.setattr(module, "get_bars", lambda *a, **k: pytest.fail("bars were loaded"))
     assert _main(module, tmp_path, db) == 2
+
+
+# =====================================================================
+# Amendment 2026-10-02 + Phase 6 coverage
+# =====================================================================
+
+def _trigger_index(prices=None):
+    clean = run(prices)
+    return (clean["trades"][0].decision.bar.time - START) // 60, clean
+
+
+# ---- M15
+def test_sell_breakout_uses_the_previous_20_lows_and_the_level():
+    engine = h8.H8SignalEngine(store=h8.FingerprintStore())
+    for i in range(20):
+        engine.on_m15(_m15(i, 2001.0, 1999.0 - (i == 5) * 0.5, 2000.0))
+    engine.on_m15(_m15(20, 2000.0, 1998.0, 1998.5))                            # == channel low: no breakout
+    assert engine.context is None
+    engine.on_m15(_m15(21, 2000.0, 1997.0, 1997.9))                            # channel bars 1..20: low 1998.0
+    assert engine.context.direction == "SELL" and engine.context.level == pytest.approx(1998.0)
+
+
+def test_same_direction_context_is_not_duplicated_and_opposite_breakout_replaces_it():
+    engine = h8.H8SignalEngine(store=h8.FingerprintStore())
+    for i in range(20):
+        engine.on_m15(_m15(i, 2001.0, 1999.0, 2000.0))
+    engine.on_m15(_m15(20, 2003.0, 2000.0, 2002.0))
+    first = engine.context.event_id
+    engine.on_m15(_m15(21, 2005.0, 2002.0, 2004.5))                            # higher again: same context
+    assert engine.context.event_id == first and len([e for e in engine.events if e[0] == "BREAKOUT"]) == 1
+    for i in range(22, 42):
+        engine.on_m15(_m15(i, 2003.0, 2002.5, 2002.5))                         # stays above the level
+    engine.on_m15(_m15(42, 2002.6, 1990.0, 1990.5))                            # below the 20-bar low
+    assert engine.context is not None and engine.context.direction == "SELL"
+    assert any(e[0] == "INVALIDATED" and e[2] == first for e in engine.events)
+
+
+def test_m15_close_back_through_the_level_invalidates_the_context():
+    engine = h8.H8SignalEngine(store=h8.FingerprintStore())
+    for i in range(20):
+        engine.on_m15(_m15(i, 2001.0, 1999.0, 2000.0))
+    engine.on_m15(_m15(20, 2003.0, 2000.0, 2002.0))
+    engine.on_m15(_m15(21, 2002.0, 2000.5, 2000.9))                            # below level 2001.0
+    assert engine.context is None
+
+
+# ---- M5
+def test_atr14_is_the_mean_true_range_of_the_last_14_completed_m5_bars():
+    engine = h8.H8SignalEngine(store=h8.FingerprintStore())
+    bars = [_m5(i, 2000.0, 2000.0 + 1 + i * 0.1, 2000.0, 2000.5) for i in range(16)]
+    for b in bars:
+        engine.on_m5(b)
+    trs = [max(b.high - b.low, abs(b.high - q.close), abs(b.low - q.close)) for q, b in zip(bars, bars[1:])]
+    assert engine.atr() == pytest.approx(sum(trs[-14:]) / 14)
+    fresh = h8.H8SignalEngine(store=h8.FingerprintStore())
+    for b in bars[:14]:
+        fresh.on_m5(b)
+    assert fresh.atr() is None                                                  # only 13 true ranges yet
+
+
+def test_non_consecutive_counter_closes_count():
+    e = _armed_engine()
+    pid = _feed(e, [_m5(2, 2009.9, 2009.95, 2009.0, 2009.1), _m5(3, 2009.1, 2009.6, 2009.05, 2009.5),
+                    _m5(4, 2009.5, 2009.55, 2008.6, 2008.7)])
+    assert pid is not None and e._counter == 2
+
+
+def test_retracement_threshold_is_exactly_half_atr14():
+    # bar 3 adds its own true range (2009.7 - low) to ATR14 before the check (13 x 2.0 held):
+    # retrace x = 2010 - low must satisfy x >= 0.5 * (26 + x - 0.3) / 14, i.e. x >= 25.7 / 27
+    threshold = 25.7 / 27
+    for x, confirmed in ((threshold + 1e-6, True), (threshold - 1e-6, False)):
+        e = _armed_engine()
+        low = 2010.0 - x
+        pid = _feed(e, [_m5(2, 2009.9, 2009.95, 2009.5, 2009.6), _m5(3, 2009.6, 2009.7, low, 2009.4)])
+        assert (pid is not None) is confirmed
+
+
+def test_a_new_local_extreme_discards_an_untriggered_pullback():
+    e = _armed_engine()
+    assert _feed(e, [_m5(2, 2009.0, 2009.2, 2008.5, 2008.6), _m5(3, 2008.6, 2008.7, 2008.0, 2008.1)]) is not None
+    _feed(e, [_m5(4, 2008.1, 2011.0, 2008.0, 2010.8)])                         # new high 2011
+    assert e._pullback_id is None and e._extreme == 2011.0
+
+
+def test_an_m5_close_through_the_level_destroys_the_pullback_and_context():
+    e = _armed_engine()
+    _feed(e, [_m5(2, 2009.0, 2009.2, 2008.5, 2008.6), _m5(3, 2008.6, 2008.7, 2008.0, 2008.1)])
+    _feed(e, [_m5(4, 2008.1, 2008.2, 1989.0, 1989.5)])                         # level 1990
+    assert e.context is None and e._pullback_id is None
+
+
+def test_the_pullback_extreme_keeps_updating_until_the_decision():
+    e = _armed_engine()
+    _feed(e, [_m5(2, 2009.0, 2009.2, 2008.5, 2008.6), _m5(3, 2008.6, 2008.7, 2008.0, 2008.1),
+              _m5(4, 2008.1, 2008.3, 2007.2, 2007.3)])
+    assert e._swing == pytest.approx(2007.2) and e._pullback_id is not None
+
+
+def test_sell_pullback_is_the_mirror():
+    from collections import deque
+    e = h8.H8SignalEngine(store=h8.FingerprintStore())
+    e.context = h8.Context("XAUUSD:M15:SELL:0", "SELL", START, 2010.0)
+    e._tr = deque([2.0] * h8.ATR_LENGTH, maxlen=h8.ATR_LENGTH)
+    e._prev_m5_close = 2000.0
+    e.on_m5(_m5(1, 2000.0, 2000.1, 1990.0, 1990.1))                           # extreme low 1990
+    pid = _feed(e, [_m5(2, 1990.1, 1991.5, 1990.0, 1991.4), _m5(3, 1991.4, 1992.0, 1991.3, 1991.9)])
+    assert pid is not None and e._swing == pytest.approx(1992.0)
+
+
+# ---- M1
+def _m1(i, o, h, l, c):
+    return Bar(time=START + 300 * 10 + 60 * i, open=o, high=h, low=l, close=c, tick_volume=1, spread=10,
+               real_volume=0)
+
+
+def _armed_with_pullback():
+    e = _armed_engine()
+    _feed(e, [_m5(2, 2009.0, 2009.2, 2008.5, 2008.6), _m5(3, 2008.6, 2008.7, 2008.0, 2008.1)])
+    for b in (_m1(0, 2008.1, 2009.0, 2008.0, 2008.5), _m1(1, 2008.5, 2008.6, 2008.2, 2008.3),
+              _m1(2, 2008.3, 2008.4, 2008.1, 2008.2)):
+        assert e.on_m1(b) is None
+    return e
+
+
+def test_m1_trigger_compares_only_the_previous_3_completed_bars_and_fires_once():
+    e = _armed_with_pullback()
+    d = e.on_m1(_m1(3, 2008.2, 2012.0, 2008.2, 2009.01))                     # current high irrelevant; > 2009.0
+    assert d is not None and d.decided_at_utc == START + 3000 + 240
+    assert e.on_m1(_m1(4, 2009.0, 2013.0, 2009.0, 2012.9)) is None           # the same pullback never re-fires
+
+
+def test_m1_close_equal_to_the_previous_3_high_does_not_trigger():
+    e = _armed_with_pullback()
+    assert e.on_m1(_m1(3, 2008.2, 2009.5, 2008.2, 2009.0)) is None
+
+
+def test_no_m1_decision_before_the_pullback_is_confirmed():
+    e = _armed_engine()
+    for i, b in enumerate((_m1(0, 2009.0, 2009.1, 2008.9, 2009.0), _m1(1, 2009.0, 2009.1, 2008.9, 2009.0),
+                           _m1(2, 2009.0, 2009.1, 2008.9, 2009.0), _m1(3, 2009.0, 2012.0, 2009.0, 2011.0))):
+        assert e.on_m1(b) is None
+
+
+# ---- execution: structural stop across gaps (amendment items 3 and 6)
+@pytest.mark.parametrize("direction, level, fill, expected", [
+    ("BUY", 1995.0, 2001.0, 6.0),      # BUY gap up: structural distance grows
+    ("BUY", 1995.0, 1996.0, 1.0),      # BUY gap down: shrinks, stays beyond the level
+    ("SELL", 2005.0, 1999.0, 6.0),     # SELL gap down
+    ("SELL", 2005.0, 2004.0, 1.0),     # SELL gap up
+])
+def test_structural_distance_is_measured_from_the_fill_to_the_absolute_level(direction, level, fill, expected):
+    stop = h8.fill_stop_distance(direction, fill, {"structural_stop_price": level, "volatility": 0.5,
+                                                   "friction": 0.4})
+    assert stop["structural"] == pytest.approx(expected) and stop["distance"] == pytest.approx(max(expected, 0.5))
+    stop_price = fill - stop["distance"] if direction == "BUY" else fill + stop["distance"]
+    assert (stop_price <= level + 1e-9) if direction == "BUY" else (stop_price >= level - 1e-9)
+
+
+@pytest.mark.parametrize("direction, level, fill", [("BUY", 1995.0, 1994.9), ("SELL", 2005.0, 2005.1)])
+def test_a_fill_through_the_structural_level_has_no_valid_stop(direction, level, fill):
+    assert h8.fill_stop_distance(direction, fill, {"structural_stop_price": level, "volatility": 0.5,
+                                                   "friction": 0.4}) is None
+
+
+def test_a_gap_through_the_structural_level_rejects_the_entry():
+    k, clean = _trigger_index()
+    level = clean["trades"][0].stop["structural_stop_price"]
+    m1 = m1_bars(path(LONG))
+    b = m1[k + 1]
+    m1[k + 1] = Bar(time=b.time, open=level - 1.0, high=max(b.high, level), low=level - 1.2, close=b.close,
+                    tick_volume=1, spread=SPREAD_PTS, real_volume=0)
+    result = h8.run_h8_fold(aggregate(m1, 900), aggregate(m1, 300), m1, spec(), cfg(), fold=0)
+    assert h8.REJECT_GAP_THROUGH_STRUCTURAL in [r["reason"] for r in result["rejected"]]
+    assert all(t.decision.pullback_id != clean["trades"][0].decision.pullback_id for t in result["trades"])
+
+
+def test_the_stop_is_fixed_at_entry_and_consistent_with_the_fill_stop():
+    for t in run()["trades"]:
+        assert t.stop["distance"] >= t.stop["structural"] - 1e-12
+        assert t.trade.entry_price - t.stop["distance"] <= t.stop["structural_stop_price"] + 1e-9
+    source = (ROOT / "adaptive_scalper" / "research" / "v2" / "h8.py").read_text(encoding="utf-8")
+    assert ".stop_price =" not in source and ".target_price =" not in source   # nothing moves an open stop
+
+
+def test_range_end_closes_an_open_trade_at_the_last_close():
+    prices = path([(30, 2010.0), (30, 2012.0), (30, 2006.0), (4, 2007.2), (10, 2007.4)])
+    t = run(prices)["trades"][0]
+    assert t.trade.exit_reason == "BACKTEST_RANGE_ENDED"
+
+
+# ---- cost at the fill (amendment item 6)
+def test_a_wider_fill_bar_spread_rejects_at_fill_and_never_rewidens_the_stop():
+    k, clean = _trigger_index()
+    store = h8.FingerprintStore()
+    result = run(spreads={k + 1: 40}, store=store)
+    rej = [r for r in result["rejected"] if r["reason"] == h8.REJECT_COST_R_AT_FILL]
+    assert rej and rej[0]["fill_cost_r"] > h8.MAX_COST_R and rej[0]["cost_r"] <= h8.MAX_COST_R
+    assert store.is_consumed(clean["trades"][0].decision.fingerprint)
+    assert all(t.decision.pullback_id != clean["trades"][0].decision.pullback_id for t in result["trades"])
+
+
+def test_a_narrower_fill_bar_spread_is_allowed():
+    k, _ = _trigger_index()
+    spreads = {i: 40 for i in range(2000)}
+    spreads[k + 1] = 10
+    t = run(spreads=spreads)["trades"][0]
+    assert t.fill_cost_r < t.cost_r <= h8.MAX_COST_R
+    assert t.fill_round_trip_cost < t.round_trip_cost
+
+
+def test_unknown_fill_bar_spread_is_rejected():
+    k, _ = _trigger_index()
+    result = run(spreads={k + 1: 0})
+    assert h8.REJECT_COST_UNKNOWN_AT_FILL in [r["reason"] for r in result["rejected"]]
+
+
+def test_each_stop_component_can_bind():
+    assert h8._combine(3.0, 1.0, 2.0)["binding"] == h8.STRUCTURAL
+    assert h8._combine(1.0, 3.0, 2.0)["binding"] == h8.VOLATILITY
+    assert h8._combine(1.0, 2.0, 3.0)["binding"] == h8.FRICTION
+
+
+# ---- risk
+def test_daily_loss_and_drawdown_ceilings_halt_new_entries():
+    from adaptive_scalper.backtest.engine import _risk_halt_reason
+    from adaptive_scalper.backtest.types import RiskState
+    limits = cfg().risk_limits
+    assert limits.max_total_open_risk_pct == 0.75
+    assert _risk_halt_reason(RiskState(peak_equity=10000, day_utc=1, day_realized_pnl=-200.0), 9800, limits)
+    assert _risk_halt_reason(RiskState(peak_equity=10000, day_utc=1, day_realized_pnl=0.0), 9500, limits)
+    assert _risk_halt_reason(RiskState(peak_equity=10000, day_utc=1, day_realized_pnl=-10.0), 9990, limits) is None
+
+
+def test_a_risk_halt_consumes_the_fingerprint(monkeypatch):
+    _, clean = _trigger_index()
+    monkeypatch.setattr(h8, "_risk_halt_reason", lambda *a: "drawdown")
+    store = h8.FingerprintStore()
+    run(store=store)
+    assert store.is_consumed(clean["trades"][0].decision.fingerprint)
+
+
+# ---- data bounds
+def test_end_after_the_window_and_the_h7_interval_are_refused():
+    with pytest.raises(ValueError):
+        h8.assert_development_range(h8.DEV_START_UTC, h8.DEV_END_UTC + 1)
+    with pytest.raises(ValueError):
+        h8.assert_development_range(1655942400, 1717199999)                    # 2022-06-23 .. 2024-05-31
+    h8.assert_development_range(h8.DEV_START_UTC, h8.DEV_END_UTC)
+
+
+# ---- statistics
+def test_day_cluster_bootstrap_is_reported_and_folds_are_counted():
+    result = run(path(LONG + [(20, 2016.0), (30, 2030.0)]))
+    r = h8.evaluate(result["trades"], result["rejected"], n_folds=12, config=cfg(), prior_fold_net_r=[[0.0] * 12],
+                    family_trials=40, family_sharpe_variance=0.01, forbidden_access=False)
+    assert "gross_r_day" in r["ci95"] and "net_r_day" in r["ci95"]
+    assert len(r["by_fold_net_r"]) == 12
+
+
+@pytest.mark.parametrize("missing", ["dsr_ge_095", "pbo_le_020", "gross_episode_ci_positive"])
+def test_a_missing_or_none_criterion_is_never_strong_pass(missing):
+    ok = {name: True for name in h8.REQUIRED_CRITERIA}
+    assert h8.classify({k: v for k, v in ok.items() if k != missing}, trades=150, gross_r=0.3, net_r=0.2) == "MARGINAL"
+    assert h8.classify({**ok, missing: None}, trades=150, gross_r=0.3, net_r=0.2) == "MARGINAL"
+
+
+def test_extra_true_keys_cannot_create_a_strong_pass():
+    ok = {name: True for name in h8.REQUIRED_CRITERIA}
+    ok["psr_ge_095"] = False
+    assert h8.classify({**ok, "anything_else": True}, trades=150, gross_r=0.3, net_r=0.2) == "MARGINAL"
+    assert h8.classify({}, trades=150, gross_r=0.3, net_r=0.2) == "FAIL"     # safety keys absent: fail closed
+
+
+def test_gross_cost_ratio_and_cost_stress_math():
+    rows = [{"gross_r": 0.30, "cost_r": 0.09}, {"gross_r": 0.06, "cost_r": 0.02}]
+    assert h8.cost_stress(rows)["x2"] == pytest.approx(((0.30 - 0.18) + (0.06 - 0.04)) / 2)
+    assert sum(r["gross_r"] for r in rows) >= 3.0 * sum(r["cost_r"] for r in rows)
+
+
+def test_the_strategy_signal_carries_the_decision_close_timestamp(monkeypatch):
+    seen = []
+    real = h8.StrategySignal
+
+    def capture(**kwargs):
+        seen.append(kwargs["data_timestamp"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(h8, "StrategySignal", capture)
+    t = run()["trades"][0]
+    assert seen[0] == t.decision.decided_at_utc == t.decision.bar.time + 60
+
+
+@pytest.mark.parametrize("key", ["zero_safety_violations", "zero_forbidden_data_access"])
+def test_a_missing_safety_or_data_key_is_fail_not_marginal(key):
+    ok = {name: True for name in h8.REQUIRED_CRITERIA if name != key}
+    assert h8.classify(ok, trades=150, gross_r=0.3, net_r=0.2) == "FAIL"
+    assert h8.classify({**ok, key: None}, trades=150, gross_r=0.3, net_r=0.2) == "FAIL"
