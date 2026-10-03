@@ -101,7 +101,13 @@ from adaptive_scalper.runtime.state import (
     record_event,
     record_position_entry_context,
 )
-from adaptive_scalper.selector.selector import REJECTED_EDGE_UNVALIDATED, select_and_journal_proposal
+from adaptive_scalper.history.resolutions import resolution_seconds
+from adaptive_scalper.selector.selector import REJECTED_EDGE_UNVALIDATED, select_and_journal_proposal, select_proposal
+from adaptive_scalper.shadow.observer import LOST_TO_HIGHER_EDGE as SHADOW_LOST
+from adaptive_scalper.shadow.observer import NOT_EVALUATED as SHADOW_NOT_EVALUATED
+from adaptive_scalper.shadow.observer import REJECTED as SHADOW_REJECTED
+from adaptive_scalper.shadow.observer import SELECTED as SHADOW_SELECTED
+from adaptive_scalper.shadow.observer import ShadowCandidate, record_candidates, resolve_due
 from adaptive_scalper.strategies.base import StrategySignal
 
 logger = logging.getLogger(__name__)
@@ -233,6 +239,9 @@ class DemoRuntime:
     # proposal is FLAT (BLOCK_EDGE_UNVALIDATED); the legacy V1 raw-score
     # replay provider is refused at construction.
     edge_evidence: EdgeEvidenceProvider = NO_VALIDATED_EDGE_EVIDENCE
+    # Closed bars from the latest analysis, reused by the shadow observer so
+    # it needs no extra broker read.
+    shadow_bars: dict[str, list] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         require_executable_provider(self.edge_evidence, "DEMO runtime")
@@ -364,6 +373,7 @@ class DemoRuntime:
         analysis = SymbolAnalysis(bars[-1].time, features, raw, confirmed, numeric_feature_vector(features))
         self.latest[canonical] = analysis
         self.returns[canonical] = log_returns(bars)
+        self.shadow_bars[canonical] = bars
         return analysis
 
     # ------------------------------------------------------------------
@@ -562,6 +572,73 @@ class DemoRuntime:
     # entry cycle
     # ------------------------------------------------------------------
 
+    def _shadow_observe(self, canonical: str, analysis: SymbolAnalysis | None, now: int, *,
+                        global_block: str | None) -> None:
+        """Forward-only evidence (adaptive_scalper/shadow/observer.py): record
+        every active strategy's candidate for each NEW closed bar -- including
+        rejected and globally blocked ones -- and resolve outcomes whose
+        horizon has elapsed. Pure observation: no order path, no journal
+        decision, no state any gate reads. A failure here is journaled and
+        swallowed; it can never change a trading decision."""
+        try:
+            resolve_due(self.conn, canonical, self.shadow_bars.get(canonical, []), now_utc=now)
+            if analysis is None:
+                return
+            cursor = f"shadow_last_bar:{canonical}"
+            if analysis.bar_time <= get_state(self.conn, cursor, 0):
+                return
+            regime = RegimeClassification(analysis.confirmed_regime, analysis.raw_regime.confidence,
+                                          analysis.raw_regime.version, analysis.raw_regime.reason)
+            signals = [s for s in (st.evaluate(analysis.features, regime) for st in self.registry.all_active())
+                       if s is not None]
+            if signals:
+                broker = self.symbols[canonical]
+                tick = self.gateway.symbol_info_tick(broker)
+                spec = self.gateway.symbol_info(broker)
+                cost = live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
+                                          max_hold_seconds=max_hold_horizon_seconds(self.exit_params))
+                dispositions: dict[int, tuple[str, str | None]] = {}
+                if global_block is not None:
+                    dispositions = {id(s): (SHADOW_NOT_EVALUATED, global_block) for s in signals}
+                else:
+                    selection = select_proposal(signals, {canonical: cost}, edge_evidence=self.edge_evidence)
+                    for e in selection.candidates:
+                        if e.rejected:
+                            dispositions[id(e.signal)] = (SHADOW_REJECTED, e.rejection_reason)
+                        elif e.signal is selection.selected:
+                            dispositions[id(e.signal)] = (SHADOW_SELECTED, None)
+                        else:
+                            dispositions[id(e.signal)] = (SHADOW_LOST, "lost_to_higher_expected_net_edge")
+                news = self.news.block_for(canonical, now)
+                lag = ((get_state(self.conn, "engine", {}) or {}).get("tasks", {}).get("entry_cycle", {})
+                       .get("last_lag_seconds"))
+                f = analysis.features
+                costs = self.config.cost_for(canonical)
+                record_candidates(self.conn, [ShadowCandidate(
+                    canonical_symbol=canonical, resolution=self.resolution,
+                    bar_seconds=resolution_seconds(self.resolution), decision_bar_time_utc=analysis.bar_time,
+                    strategy_key=s.strategy_key, strategy_version=s.strategy_version, direction=s.direction,
+                    raw_score=s.raw_confidence, stop_distance=s.stop_distance, target_distance=s.target_distance,
+                    expected_duration_seconds=s.expected_duration_seconds,
+                    raw_regime=analysis.raw_regime.regime, confirmed_regime=analysis.confirmed_regime,
+                    regime_confidence=analysis.raw_regime.confidence, session=getattr(f, "session", None),
+                    news_status=news.decision, news_detail=news.reason,
+                    spread_points=getattr(f, "spread_current", None),
+                    spread_percentile=getattr(f, "spread_percentile", None), atr=getattr(f, "atr", None),
+                    realized_volatility=getattr(f, "realized_volatility", None),
+                    movement_to_cost=getattr(f, "movement_to_cost", None),
+                    estimated_round_trip_cost_price=cost.total_cost if cost is not None else None,
+                    cost_horizon=cost.horizon if cost is not None else None, cost_provenance=costs.provenance,
+                    edge_model=self.edge_evidence.model_id, scheduler_lag_seconds=lag,
+                    selector_disposition=dispositions[id(s)][0], rejection_reason=dispositions[id(s)][1],
+                    model_observer_score=None, features=analysis.feature_vector,
+                ) for s in signals], mode=MODE, now_utc=now)
+            put_state(self.conn, cursor, analysis.bar_time, now_utc=now)
+        except Exception as exc:  # observation must never affect trading
+            logger.exception("shadow observer failed for %s", canonical)
+            record_event(self.conn, "WARNING", "shadow", "SHADOW_OBSERVER_FAILED", f"{type(exc).__name__}: {exc}",
+                         canonical_symbol=canonical, dedup_key=f"shadow_failed:{canonical}", now_utc=now)
+
     def entry_cycle(self) -> dict:
         now = self.now()
         snapshot = {"at": now, "mode": MODE, "global_block": None, "symbols": {}}
@@ -572,9 +649,10 @@ class DemoRuntime:
             record_event(self.conn, "BLOCKED", "entry", "NEW_ENTRIES_BLOCKED", f"{code}: {reason}",
                          dedup_key="entry:global_block", now_utc=now)
             record_entry_decision(self.conn, mode=MODE, stage="GLOBAL", decision=code, reason=reason, now_utc=now)
-            # Keep bar-close analysis fresh for position reviews anyway.
+            # Keep bar-close analysis fresh for position reviews anyway, and
+            # keep collecting shadow evidence (candidates NOT_EVALUATED).
             for canonical in self.symbols:
-                self.analyze(canonical, now)
+                self._shadow_observe(canonical, self.analyze(canonical, now), now, global_block=code)
             self._refresh_correlation()
             put_state(self.conn, "why_no_trade", snapshot, now_utc=now)
             self._publish_readiness(now)
@@ -583,6 +661,8 @@ class DemoRuntime:
         clear_event(self.conn, "entry:global_block", now_utc=now)
 
         analyses = {c: self.analyze(c, now) for c in self.symbols}
+        for canonical, analysis in analyses.items():
+            self._shadow_observe(canonical, analysis, now, global_block=None)
         self._refresh_correlation()
         for canonical, analysis in analyses.items():
             try:
