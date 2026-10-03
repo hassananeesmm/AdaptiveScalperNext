@@ -23,12 +23,26 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-10-03, branch `fix/integrated-forward-edge-shadow`) — RELEASE CANDIDATE, NOT DEPLOYED
+## Current phase (2026-10-03, branch `hardening/flat-shadow-release`) — HARDENED RELEASE CANDIDATE, NOT DEPLOYED
+
+**Strategy status: NO VALIDATED NET EDGE — FLAT.** Final FLAT/SHADOW release hardening on top of `bd4cfc7`
+(docs/audits/FINAL_FLAT_SHADOW_RELEASE_HARDENING.md):
+- edge certificates are Ed25519 (`edge_certificate/v2`): offline issuer holds the private seed, the runtime only the
+  PUBLIC key (`ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE`); no key → FLAT; HMAC removed, no fallback;
+- the certificate binds the exact model/calibrator artifacts (SHA-256) and feature schema/transform; the gate
+  recomputes P(win) from them — a valid certificate with an invented probability is BLOCK_EDGE_UNVALIDATED;
+- the executable path has no protocol parameter (always `CURRENT_PROTOCOL`);
+- shadow candidate identity includes mode, strategy version, observer and lifecycle version (migration 0032,
+  unreleased, edited in place; rehearsed fresh and 31→32 on a production copy).
+No model artifact, key or certificate exists, so nothing can verify: FLAT by construction (ASN-031). Deployed runtime
+0.2.7, production DB and REAL untouched.
+
+## Previous phase (2026-10-03, branch `fix/integrated-forward-edge-shadow`) — RELEASE CANDIDATE, NOT DEPLOYED
 
 **Strategy status: NO VALIDATED NET EDGE — FLAT.** Integrated FLAT/SHADOW release candidate for human review
 (docs/audits/INTEGRATED_FORWARD_EDGE_RELEASE_AUDIT.md). PR #7 (`55f6d53`) + release 0.2.8 (`ed15d76`) merged
 deliberately (`3c0dc53`, all conflicts kept both sides), then `0cbc31b`:
-- sealed edge-validation certificates (HMAC key outside Git; no key or any failed check → FLAT; status string alone
+- sealed edge-validation certificates (HMAC key outside Git — superseded by Ed25519 above; no key or any failed check → FLAT; status string alone
   authorizes nothing; re-verified at use against the current protocol);
 - microstructure_acceleration suspended before the selector (0.2.8) **and** blocked in final permission
   (BLOCK_STRATEGY_SUSPENDED), even with verified evidence; still observed in shadow;

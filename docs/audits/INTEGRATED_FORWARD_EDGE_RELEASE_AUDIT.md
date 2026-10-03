@@ -57,7 +57,9 @@ and terminal identity, every V1 strategy file (digests unchanged), and executabl
   blocks; Brier, log loss and ECE; calibration result; mean gross and net R; net-R lower 95 % bound; average realized
   win and loss (R); max single-trade share; cost-model version; cost provenance; cost-stress net R; ledger trial
   count; PSR, DSR and PBO; safety result; forbidden-data flag.
-- **Seal.** HMAC-SHA256 over canonical JSON with `allow_nan=False`. The key lives in a file outside Git
+- **Seal.** *(Superseded 2026-10-03 by Ed25519 public-key signatures, `edge_certificate/v2`; see
+  docs/audits/FINAL_FLAT_SHADOW_RELEASE_HARDENING.md. Kept as the historical record of `0cbc31b`.)*
+  HMAC-SHA256 over canonical JSON with `allow_nan=False`. The key lives in a file outside Git
   (`ASN_EDGE_CERTIFICATE_KEY_FILE`, at least 32 bytes). No key means nothing verifies (FLAT). Only `validation/` may
   seal (AST test).
 - **Verification at the moment of use** (final permission → `executable_edge_check` → `verify_certificate`). The

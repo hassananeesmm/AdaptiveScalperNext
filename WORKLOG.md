@@ -3031,3 +3031,26 @@ check or order send occurred.
 - Raw-score audit: no executable EV path reads raw_confidence; min_raw_confidence (selector) and re-entry thresholds
   only narrow; everything else is journaling/persistence/research/display.
 - Not done (operator): PR/merge, release build, restart, kill switch, certificate pipeline/key. REAL untouched.
+
+## 2026-10-03 -- final FLAT/SHADOW release hardening (branch `hardening/flat-shadow-release`, no deployment)
+
+- Base `bd4cfc7` (integrated release candidate). Worktree `.worktrees/hardening`; deployed runtime, production DB,
+  release/0.2.7, tags, H1-H9 evidence, research ledger and OOS history untouched. REAL untouched.
+- `59efcd4` Ed25519 primitive (RFC 8032 section 6 reference code, pure Python because the shared .venv has no
+  crypto package; RFC 8032 section 7.1 vectors 1-3 pass; s < L enforced; verify never raises).
+- `b73c0a6` certificates `edge_certificate/v2`: Ed25519 signature over sorted NaN-free canonical JSON of all 49
+  fields; runtime holds only the PUBLIC key (`ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE`, `ed25519-public:<hex>`; a
+  private-key file is refused); HMAC removed, no fallback. Certificate binds model + calibrator artifact SHA-256,
+  calibration method, feature schema/transform version, lifecycle id/version, horizon, cost model, protocol version.
+  The executable gate recomputes P(win) from the certified artifacts and the proposal's feature vector; any other
+  probability is PROBABILITY_NOT_FROM_CERTIFIED_MODEL. `validation_protocol`/`protocol` removed from
+  FinalPermissionInput, DemoRuntime, RuntimeComponents, verify_certificate, executable_edge_check,
+  evaluate_cost_gate; tests relax only the freeze date (conftest), a clean-interpreter test pins production.
+  No model artifact, key or certificate created: production FLAT.
+- `e09ea00` shadow identity: composite UNIQUE (mode, symbol, resolution, decision bar, strategy key + version,
+  direction, observer version, lifecycle version); outcome observer/lifecycle version bound to the candidate by
+  triggers; lifecycle outcomes unique per (candidate, lifecycle version, evaluator version). Migration 0032 edited
+  in place (never deployed).
+- Migrations: fresh 1->32 quick_check ok / 0 FK violations; online-backup copy of production (read-only source)
+  31->32: only schema_migrations changed across 42 non-sealed tables, shadow schema identical to fresh; copy deleted.
+- ASN-032 design note: docs/design/ASN-032_SHADOW_PROCESS_ISOLATION.md (not implemented).

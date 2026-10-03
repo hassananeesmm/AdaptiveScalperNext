@@ -8,10 +8,15 @@ delete) once fixed, with the fixing commit/date noted.
 ASN-031 [P1, validation — 2026-10-03, by design] No certificate-issuing validation pipeline exists, so no evidence can
 ever verify and the system is FLAT by construction. Building it (forward-only data, preregistered protocol,
 time-ordered purged calibration, key provisioned outside Git) is a separate, human-reviewed task.
+2026-10-03 hardening: certificates are now Ed25519 (`edge_certificate/v2`); the issuer holds the private seed
+offline, the runtime only the public key (`ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE`); the certificate binds the model
+and calibrator artifact SHA-256 and the gate recomputes P(win) from those artifacts. No artifact, key or
+certificate has been created — still FLAT by construction.
 
 ASN-032 [LOW, architecture — 2026-10-03] The shadow observer and lifecycle evaluator are proven unable to reach a
 broker mutation at MODULE level (transitive import walk), but run inside the DEMO runtime process. A separate
-read-only shadow process would make the isolation physical (proposal only).
+read-only shadow process would make the isolation physical (proposal only; design note
+docs/design/ASN-032_SHADOW_PROCESS_ISOLATION.md, not implemented).
 
 ASN-028 [P1, position_management — audit D5/D7, 2026-10-03, NOT changed executably] The V1 review treats "entry
 trigger no longer fires" as "thesis invalidated" and measures remaining edge as distance-to-target minus cost (no
