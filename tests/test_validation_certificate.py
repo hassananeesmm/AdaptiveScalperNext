@@ -643,3 +643,60 @@ def test_validation_package_cannot_reach_risk_kill_switch_gateway_or_execution()
 
 def test_artifact_hash_is_plain_sha256():
     assert artifact_sha256(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+
+# --- remaining section-9 / section-21 controls ---------------------------------------------
+
+@pytest.mark.parametrize("field, value", [("model_id", "SOME_OTHER_MODEL"), ("model_version", "2")])
+def test_wrong_model_or_model_version_is_refused(field, value):
+    """A signed certificate naming another model/version than the artifact
+    it is presented with cannot produce an executable probability."""
+    artifacts = fixture_artifacts()
+    cert = fixture_certificate(artifacts=artifacts, **{field: value})
+    assert _verify(cert).ok                                              # sound as a document ...
+    assert certified_probability(cert, *artifacts, {}).reason == "MODEL_IDENTITY_MISMATCH"   # ... not for this model
+
+
+def test_wrong_calibration_method_is_refused():
+    artifacts = fixture_artifacts()
+    cert = fixture_certificate(artifacts=artifacts, calibration_method="isotonic")
+    assert certified_probability(cert, *artifacts, {}).reason == "CALIBRATOR_IDENTITY_MISMATCH"
+
+
+def test_executable_permission_rejects_a_protocol_argument():
+    from adaptive_scalper.core.final_permission import FinalPermissionInput
+    from test_final_permission import _full_allow_input
+
+    weak = dataclasses.replace(PREREGISTERED_PROTOCOL, min_effective_observations=1, min_psr=0.0, min_dsr=0.0)
+    with pytest.raises(TypeError):
+        _full_allow_input(validation_protocol=weak)
+    with pytest.raises(TypeError):
+        executable_edge_check(_signal(), fixture_validated_evidence(), public_key=TEST_PUBLIC_KEY, now_utc=NOW,
+                              proposal_features={}, protocol=weak)
+    with pytest.raises(TypeError):
+        verify_certificate(fixture_certificate(), public_key=TEST_PUBLIC_KEY, now_utc=NOW, strategy_key="x",
+                           strategy_version=1, canonical_symbol="XAUUSD", direction="BUY", protocol=weak)
+    assert "validation_protocol" not in {f.name for f in dataclasses.fields(FinalPermissionInput)}
+
+
+def test_an_under_powered_certificate_fails_even_though_tests_relax_the_freeze_date():
+    """The only test-session relaxation is the evidence-start date; an
+    under-powered certificate still fails the executable gate."""
+    evidence = fixture_validated_evidence(effective_observations=299)
+    assert _gate(evidence).reason == "INSUFFICIENT_SAMPLE"
+
+
+def test_test_fixture_identities_never_appear_in_production_code():
+    for rel, _tree in _production_trees():
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        for marker in ("TEST_FIXTURE_ONLY", "edge_fixtures", "TEST_SIGNING_SEED", "TEST_PUBLIC_KEY",
+                       TEST_PUBLIC_KEY.hex()):
+            assert marker not in source, (rel, marker)
+
+
+def test_production_runtime_without_a_key_file_has_no_public_key(monkeypatch):
+    monkeypatch.delenv(PUBLIC_KEY_ENV, raising=False)
+    assert load_certificate_public_key() is None
+    from adaptive_scalper.costs.edge_evidence import NO_VALIDATED_EDGE_EVIDENCE
+
+    assert NO_VALIDATED_EDGE_EVIDENCE.for_signal(_signal()) is None    # production default: no evidence at all
