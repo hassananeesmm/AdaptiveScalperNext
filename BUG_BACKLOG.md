@@ -5,6 +5,14 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
+ASN-031 [P1, validation — 2026-10-03, by design] No certificate-issuing validation pipeline exists, so no evidence can
+ever verify and the system is FLAT by construction. Building it (forward-only data, preregistered protocol,
+time-ordered purged calibration, key provisioned outside Git) is a separate, human-reviewed task.
+
+ASN-032 [LOW, architecture — 2026-10-03] The shadow observer and lifecycle evaluator are proven unable to reach a
+broker mutation at MODULE level (transitive import walk), but run inside the DEMO runtime process. A separate
+read-only shadow process would make the isolation physical (proposal only).
+
 ASN-028 [P1, position_management — audit D5/D7, 2026-10-03, NOT changed executably] The V1 review treats "entry
 trigger no longer fires" as "thesis invalidated" and measures remaining edge as distance-to-target minus cost (no
 probability, ignores the stop). 161 of 408 DEMO positions closed one bar after entry this way (−759.89 USD). The
