@@ -47,6 +47,8 @@ class StrategyLifecycle:
     thesis_valid_condition: str | None       # 5. NOT derived from the entry trigger when THESIS_EXPLICIT
     thesis_invalidated_condition: str | None  # 6.
     profit_management: str | None            # 7. optional
+    # Bumped whenever any of 1-7 changes; validation certificates bind to it.
+    lifecycle_version: str = "V1_THESIS_COUPLED/1"
 
     def __post_init__(self) -> None:
         if self.thesis_mode not in THESIS_MODES:

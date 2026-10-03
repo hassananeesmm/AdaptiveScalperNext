@@ -22,7 +22,7 @@ from adaptive_scalper.runtime.engine import RuntimeComponents, RuntimeStartupErr
 from adaptive_scalper.runtime.scheduler import Scheduler
 from adaptive_scalper.runtime.state import get_state
 from chaos_harness import demo_account
-from edge_fixtures import FixtureValidatedProvider
+from edge_fixtures import TEST_CERTIFICATE_KEY, TEST_PROTOCOL, FixtureValidatedProvider
 from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, StaticNewsProvider, build_engine, default_market, step
 
 START_AT = T0 + 60 * STEP + 10  # 60 closed bars already exist
@@ -289,10 +289,12 @@ def _execution_outcomes(tmp_path, components):
 
 
 def test_rag_ml_and_okf_failures_degrade_advisory_context_but_never_change_decisions(tmp_path):
-    healthy, _, _ = _execution_outcomes(tmp_path / "a", RuntimeComponents(edge_evidence=FixtureValidatedProvider()))
+    healthy, _, _ = _execution_outcomes(tmp_path / "a", RuntimeComponents(edge_evidence=FixtureValidatedProvider(), certificate_key=TEST_CERTIFICATE_KEY,
+                                      validation_protocol=TEST_PROTOCOL))
     broken = _Broken()
     degraded, conn, engine = _execution_outcomes(
-        tmp_path / "b", RuntimeComponents(rag=broken, observer=broken, okf=broken, edge_evidence=FixtureValidatedProvider()),
+        tmp_path / "b", RuntimeComponents(rag=broken, observer=broken, okf=broken, edge_evidence=FixtureValidatedProvider(),
+                          certificate_key=TEST_CERTIFICATE_KEY, validation_protocol=TEST_PROTOCOL),
     )
     assert healthy and degraded == healthy
     statuses = {e.payload["status"] for e in get_chain_events(conn, _decisions(conn, stage="EXECUTION")[0]["chain_key"])

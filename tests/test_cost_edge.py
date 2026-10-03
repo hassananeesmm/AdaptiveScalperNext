@@ -27,13 +27,13 @@ from adaptive_scalper.costs.edge_evidence import (
     NO_VALIDATED_EDGE_EVIDENCE,
     CalibratedWinProbability,
     EdgeEvidence,
-    LifecyclePayoff,
     executable_evidence,
     provider_for_model,
     require_executable_provider,
 )
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.strategies.base import StrategySignal
+from edge_fixtures import TEST_CERTIFICATE_KEY, TEST_PROTOCOL, fixture_certificate, fixture_validated_evidence
 
 
 def _signal(**overrides) -> StrategySignal:
@@ -52,11 +52,15 @@ def _cost(spread=0.1):
                          swap_price_equivalent=0.0, uncertainty_margin_pct=0.0)
 
 
-def _validated(p=0.55, win=2.0, loss=1.0, status=EVIDENCE_VALIDATED) -> EdgeEvidence:
-    return EdgeEvidence.from_calibration(
-        CalibratedWinProbability(p, "cal-test", "platt", 1200),
-        LifecyclePayoff(win, loss, 1200, "forward-test"), model_id="test-model", status=status,
-    )
+def _validated(p=0.55, win=2.0, loss=1.0) -> EdgeEvidence:
+    # Sealed fixture certificate; stop 1.0 so R and price units coincide.
+    return fixture_validated_evidence(p, avg_win=win, avg_loss=loss)
+
+
+def _gate(signal, cost, evidence, **kw):
+    """The executable gate with the TEST key/clock/protocol the fixtures verify against."""
+    return evaluate_cost_gate(signal, cost, evidence=evidence, certificate_key=TEST_CERTIFICATE_KEY, now_utc=10_000,
+                              protocol=TEST_PROTOCOL, **kw)
 
 
 def _legacy(signal):
@@ -101,8 +105,8 @@ def test_raw_score_cannot_enter_the_executable_ev_gate():
 
 
 def test_test_fixture_evidence_is_never_executable():
-    fixture = _validated(status=EVIDENCE_TEST_FIXTURE)
-    assert evaluate_cost_gate(_signal(), _cost(), evidence=fixture)[0] == BLOCK_EDGE_UNVALIDATED
+    fixture = EdgeEvidence(5.0, EVIDENCE_TEST_FIXTURE, "fixture")
+    assert _gate(_signal(), _cost(), fixture)[0] == BLOCK_EDGE_UNVALIDATED
     assert executable_evidence(fixture) is None
 
 
@@ -111,20 +115,20 @@ def test_validated_evidence_uses_realized_payoff_not_configured_target():
     # payoff (win 0.5, loss 1.0) at p=0.55 is negative: 0.275 - 0.45 = -0.175.
     signal = _signal(raw_confidence=0.99, target_distance=10.0, stop_distance=1.0)
     evidence = _validated(p=0.55, win=0.5, loss=1.0)
-    decision, evaluation = evaluate_cost_gate(signal, _cost(0.0), evidence=evidence)
+    decision, evaluation = _gate(signal, _cost(0.0), evidence)
     assert decision == BLOCK_EXPECTED_EDGE
     assert evaluation.expected_gross_edge == pytest.approx(-0.175)
 
 
 def test_validated_positive_evidence_allows_and_reports_its_model():
-    decision, evaluation = evaluate_cost_gate(_signal(), _cost(), evidence=_validated(p=0.55, win=2.0, loss=1.0))
+    decision, evaluation = _gate(_signal(), _cost(), _validated(p=0.55, win=2.0, loss=1.0))
     assert decision == ALLOW
     assert evaluation.expected_net_edge == pytest.approx(0.55 * 2.0 - 0.45 * 1.0 - 0.1)
-    assert evaluation.evidence_status == EVIDENCE_VALIDATED and evaluation.edge_model == "test-model"
+    assert evaluation.evidence_status == EVIDENCE_VALIDATED and evaluation.edge_model == "TEST_FIXTURE_ONLY"
 
 
 def test_cost_unknown_still_blocks_first():
-    assert evaluate_cost_gate(_signal(), None, evidence=_validated()) == (BLOCK_COST, None)
+    assert _gate(_signal(), None, _validated()) == (BLOCK_COST, None)
 
 
 def test_min_net_edge_threshold_still_applies():
@@ -135,18 +139,21 @@ def test_min_net_edge_threshold_still_applies():
 
 def test_reason_string_names_costs_and_evidence():
     result = evaluate_expected_edge(_signal(), _cost(), _validated())
-    for token in ("gross_edge=", "total_cost=", "net_edge=", "edge_model=test-model", "evidence=VALIDATED"):
+    for token in ("gross_edge=", "total_cost=", "net_edge=", "edge_model=TEST_FIXTURE_ONLY", "evidence=VALIDATED"):
         assert token in result.reason
 
 
 # --- evidence types ------------------------------------------------------------------
 
-def test_validated_evidence_requires_probability_and_payoff():
+def test_validated_evidence_requires_probability_certificate_and_stop():
+    cert = fixture_certificate()
     with pytest.raises(ValueError):
-        EdgeEvidence(0.1, EVIDENCE_VALIDATED, "m")
-    with pytest.raises(ValueError):  # stated EV inconsistent with p/payoff
-        EdgeEvidence(5.0, EVIDENCE_VALIDATED, "m", CalibratedWinProbability(0.5, "c", "platt", 10),
-                     LifecyclePayoff(1.0, 1.0, 10, "s"))
+        EdgeEvidence(0.1, EVIDENCE_VALIDATED, "m")                       # bare status string
+    with pytest.raises(ValueError):                                        # stated EV inconsistent with the certificate
+        EdgeEvidence(5.0, EVIDENCE_VALIDATED, cert.model_id,
+                     CalibratedWinProbability(0.5, f"{cert.model_id}:{cert.model_version}", "platt", 10), cert, 1.0)
+    with pytest.raises(ValueError):                                        # probability from another model
+        EdgeEvidence.from_certificate(cert, CalibratedWinProbability(0.5, "other:1", "platt", 10), stop_distance_price=1.0)
 
 
 @pytest.mark.parametrize("value", [0.0, 1.0, -0.1, 1.5, float("nan")])

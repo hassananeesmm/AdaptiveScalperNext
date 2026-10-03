@@ -81,6 +81,7 @@ half spread either side). Every fill records its causal reference
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 import time
 
 from adaptive_scalper.backtest.dataset import build_dataset_snapshot
@@ -396,12 +397,11 @@ def run_backtest(
         # 1. Fill whatever was decided at the PRIOR bar's close, at THIS
         # bar's open -- the earliest causal fill.
         if open_trade is not None and open_trade.pending_exit_reason is not None:
-            fill = simulate_fill(bar, _opposite(open_trade.direction), point, fills)
+            ex = fill_pending_exit(open_trade, bar, point, fills)
             close(
-                open_trade, bar.time, fill.price, open_trade.pending_exit_reason,
-                exit_spread_price=fill.spread_cost_price / 2.0, exit_slippage_price=fill.slippage_cost_price,
-                fill_reference=FILL_NEXT_BAR_OPEN,
-                decision_time=open_trade.pending_exit_decision_time_utc or bar.time,
+                open_trade, bar.time, ex.exit_price, ex.reason, exit_spread_price=ex.exit_spread_price,
+                exit_slippage_price=ex.exit_slippage_price, fill_reference=ex.fill_reference,
+                decision_time=ex.decision_time_utc,
             )
             open_trade = None
         elif pending_entry is not None and open_trade is None and entry_block_reason is not None:
@@ -433,17 +433,16 @@ def run_backtest(
         # positions have priority over new-entry scanning). An entry bar
         # is managed too: its whole range printed after the open fill.
         if open_trade is not None:
-            intrabar = _intrabar_stop_or_target_hit(open_trade, bar, point, fills.slippage_price)
-            if intrabar is not None:
-                reason, exit_price, exit_spread, exit_slippage, reference = intrabar
+            ex = manage_open_trade(open_trade, bar, features=features, confirmed_regime=confirmed_regime,
+                                   active_strategies=active_strategies, symbol_spec=symbol_spec, config=config,
+                                   bar_seconds=resolution_seconds(resolution))
+            if ex is not None:
                 close(
-                    open_trade, bar.time, exit_price, reason, exit_spread_price=exit_spread,
-                    exit_slippage_price=exit_slippage, fill_reference=reference, decision_time=bar.time,
+                    open_trade, bar.time, ex.exit_price, ex.reason, exit_spread_price=ex.exit_spread_price,
+                    exit_slippage_price=ex.exit_slippage_price, fill_reference=ex.fill_reference,
+                    decision_time=ex.decision_time_utc,
                 )
                 open_trade = None
-            else:
-                _review_open_trade(open_trade, bar, features, confirmed_regime, active_strategies, symbol_spec, config,
-                                   bar_seconds=resolution_seconds(resolution))
 
         # 4. Scan for a new entry only when flat, outside any supplied
         # news-block window, and while no daily-loss/drawdown ceiling is
@@ -608,17 +607,6 @@ def _revalidate_and_open(
         if corr_decision != _CORRELATION_ALLOW:
             return REJECT_CORRELATION, corr_reason
 
-    fill = simulate_fill(bar, pending.direction, symbol_spec.point, config.fill_assumptions)
-    sign = 1.0 if pending.direction == "BUY" else -1.0
-
-    def money(price_distance: float) -> float:
-        return money_from_price_distance(
-            price_distance, safe_volume.volume,
-            tick_size=symbol_spec.trade_tick_size, tick_value=symbol_spec.trade_tick_value,
-        )
-
-    entry_spread_cost = money(fill.spread_cost_price / 2.0)
-    entry_slippage_cost = money(fill.slippage_cost_price)
     evidence = {
         "strategy": {
             "key": pending.strategy_key, "version": pending.strategy_version, "raw_confidence": pending.raw_confidence,
@@ -637,16 +625,78 @@ def _revalidate_and_open(
         "ml_observer": NOT_CONSULTED, "rag": NOT_CONSULTED, "okf": NOT_CONSULTED,
         "fill_model_version": FILL_MODEL_VERSION, "config_fingerprint": config_fingerprint,
     }
+    return open_simulated_trade(
+        strategy_key=pending.strategy_key, strategy_version=pending.strategy_version, direction=pending.direction,
+        stop_distance=pending.stop_distance, target_distance=pending.target_distance, regime=pending.regime,
+        raw_confidence=pending.raw_confidence, signal_time_utc=pending.signal_time_utc,
+        entry_features=pending.entry_features, bar=bar, volume=safe_volume.volume,
+        monetary_risk=safe_volume.monetary_risk, symbol_spec=symbol_spec, fills=config.fill_assumptions,
+        evidence=evidence,
+    )
+
+
+@dataclass(frozen=True)
+class LifecycleExit:
+    """How an open simulated trade ends on a bar (the caller books it)."""
+    reason: str
+    exit_price: float
+    exit_spread_price: float
+    exit_slippage_price: float
+    fill_reference: str
+    decision_time_utc: int
+
+
+def fill_pending_exit(trade: _OpenTrade, bar: Bar, point: float, fills: FillAssumptions) -> LifecycleExit | None:
+    """Bar OPEN: an exit decided at the prior bar's close fills here.
+    Shared by run_backtest/PAPER and the shadow lifecycle evaluator."""
+    if trade.pending_exit_reason is None:
+        return None
+    fill = simulate_fill(bar, _opposite(trade.direction), point, fills)
+    return LifecycleExit(trade.pending_exit_reason, fill.price, fill.spread_cost_price / 2.0, fill.slippage_cost_price,
+                         FILL_NEXT_BAR_OPEN, trade.pending_exit_decision_time_utc or bar.time)
+
+
+def manage_open_trade(
+    trade: _OpenTrade, bar: Bar, *, features, confirmed_regime: str, active_strategies, symbol_spec: SymbolSpec,
+    config: BacktestConfig, bar_seconds: int,
+) -> LifecycleExit | None:
+    """Within the bar: broker stop/target first (stop wins a same-bar tie,
+    gap-through stops fill at the open), else the bar-close adaptive review
+    (thesis, regime, remaining edge, 1 R, giveback, breakeven, max hold),
+    which may set a pending exit for the next open or move the stop.
+    Shared by run_backtest/PAPER and the shadow lifecycle evaluator."""
+    intrabar = _intrabar_stop_or_target_hit(trade, bar, symbol_spec.point, config.fill_assumptions.slippage_price)
+    if intrabar is not None:
+        reason, exit_price, exit_spread, exit_slippage, reference = intrabar
+        return LifecycleExit(reason, exit_price, exit_spread, exit_slippage, reference, bar.time)
+    _review_open_trade(trade, bar, features, confirmed_regime, active_strategies, symbol_spec, config,
+                       bar_seconds=bar_seconds)
+    return None
+
+
+def open_simulated_trade(
+    *, strategy_key: str, strategy_version: int | None, direction: str, stop_distance: float, target_distance: float,
+    regime: str, raw_confidence: float, signal_time_utc: int, entry_features, bar: Bar, volume: float,
+    monetary_risk: float, symbol_spec: SymbolSpec, fills: FillAssumptions, evidence: dict | None = None,
+) -> _OpenTrade:
+    """Market entry at `bar`'s open (spread + slippage against the trader)."""
+    fill = simulate_fill(bar, direction, symbol_spec.point, fills)
+    sign = 1.0 if direction == "BUY" else -1.0
+
+    def money(price_distance: float) -> float:
+        return money_from_price_distance(price_distance, volume, tick_size=symbol_spec.trade_tick_size,
+                                         tick_value=symbol_spec.trade_tick_value)
+
+    entry_spread_cost = money(fill.spread_cost_price / 2.0)
+    entry_slippage_cost = money(fill.slippage_cost_price)
     return _OpenTrade(
-        strategy_key=pending.strategy_key, direction=pending.direction, entry_time_utc=bar.time,
-        entry_price=fill.price, volume=safe_volume.volume, initial_monetary_risk=safe_volume.monetary_risk,
-        entry_regime=pending.regime, stop_price=fill.price - sign * pending.stop_distance,
-        target_price=fill.price + sign * pending.target_distance,
-        initial_stop_distance_price=pending.stop_distance,
-        total_cost=entry_spread_cost + entry_slippage_cost,
-        entry_features=pending.entry_features, entry_raw_confidence=pending.raw_confidence,
-        peak_r=0.0, strategy_version=pending.strategy_version, signal_time_utc=pending.signal_time_utc,
-        entry_spread_cost=entry_spread_cost, entry_slippage_cost=entry_slippage_cost, entry_evidence=evidence,
+        strategy_key=strategy_key, direction=direction, entry_time_utc=bar.time, entry_price=fill.price,
+        volume=volume, initial_monetary_risk=monetary_risk, entry_regime=regime,
+        stop_price=fill.price - sign * stop_distance, target_price=fill.price + sign * target_distance,
+        initial_stop_distance_price=stop_distance, total_cost=entry_spread_cost + entry_slippage_cost,
+        entry_features=entry_features, entry_raw_confidence=raw_confidence, peak_r=0.0,
+        strategy_version=strategy_version, signal_time_utc=signal_time_utc, entry_spread_cost=entry_spread_cost,
+        entry_slippage_cost=entry_slippage_cost, entry_evidence=evidence or {},
     )
 
 

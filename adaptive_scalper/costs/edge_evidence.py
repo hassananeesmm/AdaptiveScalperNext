@@ -13,10 +13,12 @@ An executable EV therefore needs two pieces of independent evidence:
 - `CalibratedWinProbability`: P(realized win) for THIS proposal, from a
   calibration fitted and evaluated on data disjoint from anything used to
   design the strategy, with its sample size and method recorded;
-- `LifecyclePayoff`: the average realized win and loss (price units) of the
-  lifecycle the runtime actually follows, from the same kind of evidence.
+- a sealed `validation.certificate.ValidationCertificate` for the
+  calibrator and the lifecycle the runtime actually follows: binding,
+  freshness, the preregistered protocol statistics, and the average realized
+  win and loss (R units) of that lifecycle.
 
-    EV_gross = p * avg_realized_win - (1 - p) * avg_realized_loss
+    EV_gross = stop * (p * avg_realized_win_r - (1 - p) * avg_realized_loss_r)
 
 Until such evidence exists the provider is `NoValidatedEdgeEvidence`, which
 returns None for every signal, and every executable gate fails closed (FLAT).
@@ -37,6 +39,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from adaptive_scalper.strategies.base import StrategySignal
+from adaptive_scalper.validation.certificate import ValidationCertificate
 
 EDGE_MODEL_NONE = "NONE"
 EDGE_MODEL_LEGACY_V1_RAW_SCORE = "LEGACY_V1_RAW_SCORE"
@@ -65,28 +68,24 @@ class CalibratedWinProbability:
 
 
 @dataclass(frozen=True)
-class LifecyclePayoff:
-    avg_realized_win_price: float
-    avg_realized_loss_price: float   # positive magnitude
-    n_observations: int
-    source_id: str
-
-    def __post_init__(self) -> None:
-        for name in ("avg_realized_win_price", "avg_realized_loss_price"):
-            value = getattr(self, name)
-            if not math.isfinite(value) or value < 0:
-                raise ValueError(f"{name} must be a finite non-negative price distance, got {value!r}")
-        if self.n_observations < 1 or not self.source_id:
-            raise ValueError("a lifecycle payoff needs observations and a source_id")
-
-
-@dataclass(frozen=True)
 class EdgeEvidence:
+    """VALIDATED evidence = a calibrated probability for THIS proposal + the
+    sealed `ValidationCertificate` of the calibrator/lifecycle it came from +
+    the proposal's stop distance. The realized payoff is the certificate's
+    (R units):
+
+        EV_gross_price = stop * (p * avg_realized_win_r - (1 - p) * avg_realized_loss_r)
+
+    The status string alone authorizes nothing: every executable gate re-runs
+    `validation.certificate.verify_certificate` (seal, binding, freshness,
+    current protocol) at the moment of use."""
+
     expected_gross_edge_price: float
     status: str
     model_id: str
     probability: CalibratedWinProbability | None = None
-    payoff: LifecyclePayoff | None = None
+    certificate: ValidationCertificate | None = None
+    stop_distance_price: float | None = None
 
     def __post_init__(self) -> None:
         if self.status not in EVIDENCE_STATUSES:
@@ -94,20 +93,29 @@ class EdgeEvidence:
         if not math.isfinite(self.expected_gross_edge_price):
             raise ValueError("expected_gross_edge_price must be finite")
         if self.status == EVIDENCE_VALIDATED:
-            if self.probability is None or self.payoff is None:
-                raise ValueError("VALIDATED evidence needs both a calibrated probability and a lifecycle payoff")
-            p = self.probability.value
-            ev = p * self.payoff.avg_realized_win_price - (1 - p) * self.payoff.avg_realized_loss_price
-            if not math.isclose(ev, self.expected_gross_edge_price, rel_tol=1e-12, abs_tol=1e-12):
-                raise ValueError("VALIDATED expected edge must equal p*avg_win - (1-p)*avg_loss")
+            if self.probability is None or not isinstance(self.certificate, ValidationCertificate):
+                raise ValueError("VALIDATED evidence needs a calibrated probability and a ValidationCertificate")
+            if self.stop_distance_price is None or not self.stop_distance_price > 0:
+                raise ValueError("VALIDATED evidence needs the proposal's positive stop distance")
+            cert = self.certificate
+            if self.probability.calibration_id != f"{cert.model_id}:{cert.model_version}":
+                raise ValueError("the probability must come from the certificate's model and version")
+            if self.model_id != cert.model_id:
+                raise ValueError("model_id must match the certificate")
+            if not math.isclose(_ev_price(self.probability.value, cert, self.stop_distance_price),
+                                self.expected_gross_edge_price, rel_tol=1e-12, abs_tol=1e-12):
+                raise ValueError("VALIDATED expected edge must equal stop*(p*avg_win_r - (1-p)*avg_loss_r)")
 
     @classmethod
-    def from_calibration(
-        cls, probability: CalibratedWinProbability, payoff: LifecyclePayoff, *, model_id: str, status: str,
+    def from_certificate(
+        cls, certificate: ValidationCertificate, probability: CalibratedWinProbability, *, stop_distance_price: float,
     ) -> "EdgeEvidence":
-        p = probability.value
-        return cls(p * payoff.avg_realized_win_price - (1 - p) * payoff.avg_realized_loss_price, status, model_id,
-                   probability, payoff)
+        return cls(_ev_price(probability.value, certificate, stop_distance_price), EVIDENCE_VALIDATED,
+                   certificate.model_id, probability, certificate, stop_distance_price)
+
+
+def _ev_price(p: float, cert: ValidationCertificate, stop_distance_price: float) -> float:
+    return stop_distance_price * (p * cert.avg_realized_win_r - (1 - p) * cert.avg_realized_loss_r)
 
 
 class EdgeEvidenceProvider(Protocol):

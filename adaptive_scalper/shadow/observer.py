@@ -82,6 +82,8 @@ class ShadowCandidate:
     rejection_reason: str | None
     model_observer_score: float | None
     features: dict
+    final_permission_result: str = "NOT_REACHED"
+    chain_key: str = ""
 
     @property
     def decision_time_utc(self) -> int:
@@ -114,7 +116,8 @@ def record_candidates(conn: sqlite3.Connection, candidates: list[ShadowCandidate
             "news_status, news_detail, spread_points, spread_percentile, atr, realized_volatility, movement_to_cost, "
             "stop_distance, target_distance, expected_duration_seconds, estimated_round_trip_cost_price, cost_horizon, "
             "cost_provenance, edge_model, scheduler_lag_seconds, selector_disposition, rejection_reason, "
-            "model_observer_score, features_json) VALUES (" + ",".join("?" * 36) + ")",
+            "final_permission_result, chain_key, model_observer_score, features_json) VALUES ("
+            + ",".join("?" * 38) + ")",
             (c.key, OBSERVER_VERSION, now_utc, mode, c.canonical_symbol, c.resolution, c.bar_seconds,
              c.decision_bar_time_utc, c.decision_time_utc, c.strategy_key, c.strategy_version, c.direction,
              float(c.raw_score), c.raw_regime, c.confirmed_regime, _finite_or_none(c.regime_confidence), c.session,
@@ -123,6 +126,7 @@ def record_candidates(conn: sqlite3.Connection, candidates: list[ShadowCandidate
              c.stop_distance, c.target_distance, c.expected_duration_seconds,
              _finite_or_none(c.estimated_round_trip_cost_price), c.cost_horizon, c.cost_provenance, c.edge_model,
              _finite_or_none(c.scheduler_lag_seconds), c.selector_disposition, c.rejection_reason,
+             c.final_permission_result, c.chain_key or c.key,
              _finite_or_none(c.model_observer_score), json.dumps(features, sort_keys=True)),
         )
         written += cur.rowcount

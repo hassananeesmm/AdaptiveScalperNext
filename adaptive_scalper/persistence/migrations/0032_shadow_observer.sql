@@ -55,6 +55,12 @@ CREATE TABLE shadow_candidates (
     selector_disposition            TEXT NOT NULL CHECK (selector_disposition IN
                                         ('SELECTED', 'LOST_TO_HIGHER_EDGE', 'REJECTED', 'NOT_EVALUATED')),
     rejection_reason                TEXT,
+    -- Final permission is evaluated only by the entry path (broker-truth reads)
+    -- and only for a SELECTED candidate: NOT_REACHED for everything else, or
+    -- DECIDED_IN_ENTRY_DECISIONS -> join entry_decisions / journal on chain_key.
+    final_permission_result         TEXT NOT NULL CHECK (final_permission_result IN
+                                        ('NOT_REACHED', 'DECIDED_IN_ENTRY_DECISIONS')),
+    chain_key                       TEXT NOT NULL,
     model_observer_score            REAL,
     features_json                   TEXT NOT NULL
 );
@@ -81,6 +87,44 @@ CREATE TABLE shadow_outcomes (
     bars_used               INTEGER,
     UNIQUE (candidate_id, horizon_seconds)
 );
+
+-- shadow_lifecycle_outcomes: one row per candidate -- the exit the EXECUTABLE
+-- position-management lifecycle would have taken (shadow/lifecycle_counterfactual.py,
+-- the same exit functions as backtest/PAPER, the same decision core as DEMO),
+-- written only once that counterfactual exit has happened in closed bars.
+-- R = multiples of the candidate's own stop distance; net_r NULL = a required
+-- cost is unknown (never priced as zero).
+CREATE TABLE shadow_lifecycle_outcomes (
+    id                      INTEGER PRIMARY KEY,
+    candidate_id            INTEGER NOT NULL UNIQUE REFERENCES shadow_candidates(id),
+    status                  TEXT NOT NULL CHECK (status IN ('RESOLVED', 'INSUFFICIENT_DATA')),
+    evaluator_version       TEXT NOT NULL,
+    lifecycle_version       TEXT NOT NULL,
+    resolved_at_utc         INTEGER NOT NULL,
+    entry_time_utc          INTEGER,
+    entry_price             REAL,                 -- executable side incl. slippage
+    initial_stop_price      REAL,
+    initial_target_price    REAL,
+    stop_distance_price     REAL,                 -- 1 R
+    mfe_r                   REAL,
+    mae_r                   REAL,
+    time_to_mfe_seconds     INTEGER,
+    time_to_mae_seconds     INTEGER,
+    exit_time_utc           INTEGER,
+    exit_price              REAL,
+    exit_reason             TEXT,
+    gross_r                 REAL,
+    cost_r                  REAL,
+    net_r                   REAL,
+    holding_seconds         INTEGER,
+    cost_provenance         TEXT,
+    bars_used               INTEGER
+);
+
+CREATE TRIGGER trg_shadow_lifecycle_no_update BEFORE UPDATE ON shadow_lifecycle_outcomes
+BEGIN SELECT RAISE(ABORT, 'shadow_lifecycle_outcomes is append-only'); END;
+CREATE TRIGGER trg_shadow_lifecycle_no_delete BEFORE DELETE ON shadow_lifecycle_outcomes
+BEGIN SELECT RAISE(ABORT, 'shadow_lifecycle_outcomes is append-only'); END;
 
 CREATE TRIGGER trg_shadow_candidates_no_update BEFORE UPDATE ON shadow_candidates
 BEGIN SELECT RAISE(ABORT, 'shadow_candidates is append-only'); END;

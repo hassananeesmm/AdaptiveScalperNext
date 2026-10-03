@@ -42,7 +42,7 @@ from adaptive_scalper.portfolio.correlation import CorrelationResult
 from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits, PositionExposure
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits
 from adaptive_scalper.strategies.base import StrategySignal
-from edge_fixtures import fixture_validated_evidence
+from edge_fixtures import TEST_CERTIFICATE_KEY, TEST_PROTOCOL, fixture_validated_evidence
 
 
 def _signal(**overrides) -> StrategySignal:
@@ -130,6 +130,7 @@ def _full_allow_input(**overrides) -> FinalPermissionInput:
         # Gates AFTER the edge gate are under test here; the edge gate's
         # fail-closed default is tested in test_edge_gate_* below.
         edge_evidence=fixture_validated_evidence(),
+        certificate_key=TEST_CERTIFICATE_KEY, now_utc=10_000, validation_protocol=TEST_PROTOCOL,
     )
     defaults.update(overrides)
     return FinalPermissionInput(**defaults)

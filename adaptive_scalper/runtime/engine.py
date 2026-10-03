@@ -113,6 +113,10 @@ class RuntimeComponents:
     # None -> NO validated expected-edge evidence: every proposal is FLAT
     # (issue #6). DemoRuntime/PaperRuntime refuse the legacy V1 replay provider.
     edge_evidence: object | None = None
+    # Tests only: an explicit certificate key / protocol. Production leaves
+    # both None -> key from ASN_EDGE_CERTIFICATE_KEY_FILE, CURRENT_PROTOCOL.
+    certificate_key: bytes | None = None
+    validation_protocol: object | None = None
 
 
 class RuntimeEngine:
@@ -303,10 +307,13 @@ class RuntimeEngine:
             self.okf = self._load_knowledge()
         advisory = AdvisoryPanel(rag=self.rag, observer=self.observer, okf=self.okf)
         if self.mode == "DEMO":
-            edge = self.components.edge_evidence
+            optional = {name: value for name, value in (
+                ("edge_evidence", self.components.edge_evidence),
+                ("certificate_key", self.components.certificate_key),
+                ("validation_protocol", self.components.validation_protocol),
+            ) if value is not None}
             self.demo = DemoRuntime(self.conn, self.gateway, self.config, self.symbols, registry, self.news, advisory,
-                                    clock=self.clock,
-                                    **({"edge_evidence": edge} if edge is not None else {}))
+                                    clock=self.clock, **optional)
             self._add_task("position_cycle", self.config.runtime.position_cycle_seconds, 0, self.demo.position_cycle)
             self._add_task("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.demo.entry_cycle)
             self._add_task("cost_evidence_sweep", 60.0, 3, self._sweep_cost_evidence)

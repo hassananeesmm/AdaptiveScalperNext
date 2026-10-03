@@ -30,6 +30,7 @@ import json
 import logging
 import sqlite3
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -52,6 +53,7 @@ from adaptive_scalper.costs.edge_evidence import (
     require_executable_provider,
 )
 from adaptive_scalper.costs.swap_horizon import swap_price_for_horizon
+from adaptive_scalper.validation.certificate import CURRENT_PROTOCOL, ProtocolThresholds, load_certificate_key
 from adaptive_scalper.execution.reconciliation import (
     CLEAN,
     get_open_positions,
@@ -107,8 +109,9 @@ from adaptive_scalper.shadow.observer import LOST_TO_HIGHER_EDGE as SHADOW_LOST
 from adaptive_scalper.shadow.observer import NOT_EVALUATED as SHADOW_NOT_EVALUATED
 from adaptive_scalper.shadow.observer import REJECTED as SHADOW_REJECTED
 from adaptive_scalper.shadow.observer import SELECTED as SHADOW_SELECTED
+from adaptive_scalper.runtime.paper import paper_config
+from adaptive_scalper.shadow.lifecycle_counterfactual import resolve_lifecycles
 from adaptive_scalper.shadow.observer import ShadowCandidate, record_candidates, resolve_due
-from adaptive_scalper.selector.selector import select_and_journal_proposal
 from adaptive_scalper.selector.suspension import REJECTED_ENTRY_SUSPENDED, partition_suspended
 from adaptive_scalper.strategies.base import StrategySignal
 
@@ -244,9 +247,16 @@ class DemoRuntime:
     # Closed bars from the latest analysis, reused by the shadow observer so
     # it needs no extra broker read.
     shadow_bars: dict[str, list] = field(default_factory=dict)
+    # Edge-certificate verification (validation/certificate.py). None -> read
+    # the key file named by ASN_EDGE_CERTIFICATE_KEY_FILE; still none -> no
+    # certificate verifies -> every proposal stays FLAT.
+    certificate_key: bytes | None = None
+    validation_protocol: ProtocolThresholds = CURRENT_PROTOCOL
 
     def __post_init__(self) -> None:
         require_executable_provider(self.edge_evidence, "DEMO runtime")
+        if self.certificate_key is None:
+            self.certificate_key = load_certificate_key()
         self.risk_limits = risk_limits_from_config(self.config.risk)
         self.portfolio_limits = portfolio_risk_limits_from_risk_limits(self.risk_limits.max_total_open_risk_pct)
         self.resolution = self.config.runtime.entry_resolution
@@ -584,6 +594,16 @@ class DemoRuntime:
         swallowed; it can never change a trading decision."""
         try:
             resolve_due(self.conn, canonical, self.shadow_bars.get(canonical, []), now_utc=now)
+            spec_now = self.gateway.symbol_info(self.symbols[canonical])
+            if spec_now is not None:
+                costs = self.config.cost_for(canonical)
+                resolve_lifecycles(
+                    self.conn, canonical, self.shadow_bars.get(canonical, []), now_utc=now, symbol_spec=spec_now,
+                    config=dataclasses.replace(paper_config(self.config, canonical, ()),
+                                               adaptive_exit_params=self.exit_params),
+                    costs_known=costs.fully_known, cost_provenance=costs.provenance,
+                    strategies={s.key: s for s in self.registry.all_active()},
+                )
             if analysis is None:
                 return
             cursor = f"shadow_last_bar:{canonical}"
@@ -603,7 +623,13 @@ class DemoRuntime:
                 if global_block is not None:
                     dispositions = {id(s): (SHADOW_NOT_EVALUATED, global_block) for s in signals}
                 else:
-                    selection = select_proposal(signals, {canonical: cost}, edge_evidence=self.edge_evidence)
+                    # Same order as _decide: entry-suspended strategies are removed before the selector
+                    # (still observed here, recorded as REJECTED strategy_entry_suspended).
+                    kept, dropped = partition_suspended(signals, self.config.strategies.entry_suspended)
+                    for i in dropped:
+                        dispositions[id(signals[i])] = (SHADOW_REJECTED, REJECTED_ENTRY_SUSPENDED)
+                    selection = select_proposal([signals[i] for i in kept], {canonical: cost},
+                                                edge_evidence=self.edge_evidence)
                     for e in selection.candidates:
                         if e.rejected:
                             dispositions[id(e.signal)] = (SHADOW_REJECTED, e.rejection_reason)
@@ -633,6 +659,9 @@ class DemoRuntime:
                     cost_horizon=cost.horizon if cost is not None else None, cost_provenance=costs.provenance,
                     edge_model=self.edge_evidence.model_id, scheduler_lag_seconds=lag,
                     selector_disposition=dispositions[id(s)][0], rejection_reason=dispositions[id(s)][1],
+                    final_permission_result=("DECIDED_IN_ENTRY_DECISIONS" if dispositions[id(s)][0] == SHADOW_SELECTED
+                                             else "NOT_REACHED"),
+                    chain_key=f"entry:{canonical}:{analysis.bar_time}:{s.strategy_key}",
                     model_observer_score=None, features=analysis.feature_vector,
                 ) for s in signals], mode=MODE, now_utc=now)
             put_state(self.conn, cursor, analysis.bar_time, now_utc=now)
@@ -870,6 +899,8 @@ class DemoRuntime:
             cost_estimate=live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
                                              max_hold_seconds=max_hold_horizon_seconds(self.exit_params)),
             edge_evidence=executable_evidence(self.edge_evidence.for_signal(signal)),
+            certificate_key=self.certificate_key, now_utc=now, validation_protocol=self.validation_protocol,
+            entry_suspended_strategy_keys=frozenset(self.config.strategies.entry_suspended),
             open_or_pending_symbols=sorted({p.canonical_symbol for p in open_positions + pending}),
             correlation_matrix=self.correlation,
             risk_gate_input=RiskGateInput(
