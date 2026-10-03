@@ -23,7 +23,22 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-10-03, branch `fix/v1-loss-root-cause-correctness`, draft PR #7) — NOT DEPLOYED
+## Current phase (2026-10-03, branch `fix/integrated-forward-edge-shadow`) — RELEASE CANDIDATE, NOT DEPLOYED
+
+**Strategy status: NO VALIDATED NET EDGE — FLAT.** Integrated FLAT/SHADOW release candidate for human review
+(docs/audits/INTEGRATED_FORWARD_EDGE_RELEASE_AUDIT.md). PR #7 (`55f6d53`) + release 0.2.8 (`ed15d76`) merged
+deliberately (`3c0dc53`, all conflicts kept both sides), then `0cbc31b`:
+- sealed edge-validation certificates (HMAC key outside Git; no key or any failed check → FLAT; status string alone
+  authorizes nothing; re-verified at use against the current protocol);
+- microstructure_acceleration suspended before the selector (0.2.8) **and** blocked in final permission
+  (BLOCK_STRATEGY_SUSPENDED), even with verified evidence; still observed in shadow;
+- counterfactual lifecycle evaluator reusing the backtest/PAPER exit functions (equivalence-tested), table
+  `shadow_lifecycle_outcomes` in migration 0032 (schema 32).
+Full suite on `0cbc31b`: **1936 passed, 0 failed, 9 skipped, 2 warnings** (TESTED-FAKE, TESTED-WINDOWS). Migration
+31→32 rehearsed on an online-backup copy of the production DB (integrity ok, no row changes; copy deleted).
+Deployed runtime 0.2.7 untouched (not running since 2026-10-02 17:25 UTC, flat). REAL disabled.
+
+## Previous phase (2026-10-03, branch `fix/v1-loss-root-cause-correctness`, draft PR #7) — superseded by the integrated candidate above
 
 **Deployed runtime: 0.2.7 (`d9c1bd1`, schema 31), unchanged by this work.** Its process was found not running at
 the start of this audit (last heartbeat 2026-10-02 17:25:35 UTC, no ENGINE_STOPPED; consistent with a machine

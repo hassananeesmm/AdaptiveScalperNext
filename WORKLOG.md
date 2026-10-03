@@ -3012,3 +3012,22 @@ check or order send occurred.
   at a flat broker (backup, stop runtime, checkout, restart via the launcher, post-start gate).
 - This reduces trading activity and the main live loss source; it does NOT create a validated edge (H1-H9 found
   none). The remaining strategies are also unvalidated.
+
+## 2026-10-03 -- integrated FLAT/SHADOW release candidate (no deployment, no runtime change)
+
+- Branch `fix/integrated-forward-edge-shadow` (worktree `.worktrees/integrated-fes`) from PR #7 head `55f6d53`;
+  `release/0.2.8` merged with `--no-ff` as `3c0dc53` (4 "both sides added" conflicts, both kept). 0.2.8's suspension
+  test controls now opt in explicitly (V1 replay / verified fixture evidence).
+- `0cbc31b`: validation certificate (validation/certificate.py), EdgeEvidence hardened (LifecyclePayoff removed), final
+  permission verifies certificates + blocks suspended strategies, shadow mirrors the suspension and records
+  final_permission_result/chain_key, counterfactual lifecycle (shadow/lifecycle_counterfactual.py) on extracted shared
+  exit functions (`fill_pending_exit`, `manage_open_trade`, `open_simulated_trade`; backtest numbers unchanged: 204
+  backtest/PAPER/research tests identical), migration 0032 extended in place (never released).
+- Tests: +47 certificate, +10 lifecycle (equivalence with run_backtest, transitive import walk), +8 release controls.
+  Full suite 1936 passed / 9 skipped / 0 failed / 2 warnings (26 min). ruff F,E9 clean.
+- Migration 31 -> 32 rehearsed on an online backup of the production DB in %TEMP% (read-only source): quick_check ok,
+  0 FK violations, 40 non-sealed tables unchanged except schema_migrations; bars/ticks (sealed OOS) not queried; copy
+  deleted afterwards.
+- Raw-score audit: no executable EV path reads raw_confidence; min_raw_confidence (selector) and re-entry thresholds
+  only narrow; everything else is journaling/persistence/research/display.
+- Not done (operator): PR/merge, release build, restart, kill switch, certificate pipeline/key. REAL untouched.
