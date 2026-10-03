@@ -108,6 +108,8 @@ from adaptive_scalper.shadow.observer import NOT_EVALUATED as SHADOW_NOT_EVALUAT
 from adaptive_scalper.shadow.observer import REJECTED as SHADOW_REJECTED
 from adaptive_scalper.shadow.observer import SELECTED as SHADOW_SELECTED
 from adaptive_scalper.shadow.observer import ShadowCandidate, record_candidates, resolve_due
+from adaptive_scalper.selector.selector import select_and_journal_proposal
+from adaptive_scalper.selector.suspension import REJECTED_ENTRY_SUSPENDED, partition_suspended
 from adaptive_scalper.strategies.base import StrategySignal
 
 logger = logging.getLogger(__name__)
@@ -750,6 +752,19 @@ class DemoRuntime:
                 append_event(self.conn, chain, event_type, now, canonical,
                              {"source": evidence.source, "status": evidence.status, "evidence": evidence.summary,
                               "authority": "NONE (advisory evidence only)"}, strategy_key=signal.strategy_key)
+
+        # Entry-suspended strategies: journaled as evidence, never offered to the (frozen V1) selector.
+        kept, dropped = partition_suspended(signals, self.config.strategies.entry_suspended)
+        for i in dropped:
+            append_event(self.conn, chains[i], "SIGNAL_REJECTED", now, canonical, {
+                "strategy_key": signals[i].strategy_key, "direction": signals[i].direction,
+                "raw_confidence": signals[i].raw_confidence, "expected_net_edge": None,
+                "reason": REJECTED_ENTRY_SUSPENDED,
+            }, strategy_key=signals[i].strategy_key)
+        signals, chains = [signals[i] for i in kept], [chains[i] for i in kept]
+        if not signals:
+            return self._record(canonical, analysis.bar_time, "SELECTOR", "FLAT",
+                                f"every signal came from an entry-suspended strategy ({REJECTED_ENTRY_SUSPENDED})")
 
         broker = self.symbols[canonical]
         tick = self.gateway.symbol_info_tick(broker)

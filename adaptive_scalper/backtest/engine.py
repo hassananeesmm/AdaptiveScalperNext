@@ -142,6 +142,7 @@ from adaptive_scalper.regimes.classifier import RegimeTracker, classify_regime
 from adaptive_scalper.risk.governor import ALLOW as _RISK_ALLOW
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits, calculate_safe_volume, evaluate_risk_gate
 from adaptive_scalper.selector.selector import select_proposal
+from adaptive_scalper.selector.suspension import partition_suspended
 from adaptive_scalper.simulation.fill_model import (
     FILL_MODEL_VERSION,
     FillAssumptions,
@@ -458,6 +459,9 @@ def run_backtest(
                 signal = strategy.evaluate(features, regime_obj)
                 if signal is not None:
                     candidates.append(signal)
+            # Entry-suspended strategies never reach the (frozen V1) selector.
+            kept, _ = partition_suspended(candidates, config.suspended_strategy_keys)
+            candidates = [candidates[i] for i in kept]
             if candidates:
                 bar_seconds = resolution_seconds(resolution)
                 cost = _entry_cost(bar, symbol_spec, config, fill_time_utc=bar.time + bar_seconds,

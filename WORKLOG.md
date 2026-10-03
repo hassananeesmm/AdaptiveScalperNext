@@ -2994,3 +2994,21 @@ check or order send occurred.
 - Correctness replay preregistered (docs/audits/CORRECTNESS_REPLAY_PREREGISTRATION.md), NOT run (it consumes trial
   budget and cannot change the terminal state); awaiting a human decision.
 - Not done (needs the operator): merge, 0.2.8 integration, release, restart, kill-switch actions. REAL untouched.
+## 2026-10-02 (evening) -- Release candidate 0.2.8: entry suspension of microstructure_acceleration (NOT deployed)
+
+- Operator decision (2026-10-02): turn off `microstructure_acceleration`. Evidence: DEMO 2026-09-25..10-02, 391 closed
+  trades, -273.97 USD total; this strategy placed 377 of them (-277.58 USD; BTCUSD -265.80, XAUUSD -11.78); backtests
+  show no gross edge for it and the highest cost per trade (0.20-0.24 R).
+- Design: new config `[strategies] entry_suspended` (validated: distinct ACTIVE keys only, narrow-only). The strategy
+  stays registered and evaluated (directive section 9: six active families); its signals are journaled
+  (`SIGNAL_CREATED`, then `SIGNAL_REJECTED` reason `strategy_entry_suspended`) and removed BEFORE the selector, in
+  the DEMO runtime and in `run_backtest` (hence PAPER). The frozen V1 selector and strategies are byte-identical
+  (`test_v1_strategy_freeze.py` passes). PAPER/backtest config fingerprint gains `suspended_strategy_keys` only when
+  non-empty, so existing fingerprints are unchanged; a PAPER session started under 0.2.7 halts on the changed
+  fingerprint (designed behaviour) and needs a new session tag.
+- An earlier draft edited `selector.py`; the V1 freeze test caught it and the selector was restored from HEAD.
+- Verification: 15 new tests (`tests/test_entry_suspension.py`), call-site mutants caught; full suite 1812 passed /
+  9 skipped / 0 failed; compileall OK. No schema change. Not deployed: deployment needs explicit operator approval
+  at a flat broker (backup, stop runtime, checkout, restart via the launcher, post-start gate).
+- This reduces trading activity and the main live loss source; it does NOT create a validated edge (H1-H9 found
+  none). The remaining strategies are also unvalidated.

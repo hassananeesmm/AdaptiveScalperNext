@@ -76,6 +76,9 @@ class BacktestConfig:
     # a test fixture); its `model_id` enters the config fingerprint. PAPER
     # passes the runtime's vetted provider here.
     edge_provider: object | None = None
+    # Config `strategies.entry_suspended`: active strategies whose signals are
+    # evaluated but never selected for an entry (the same rule DEMO applies).
+    suspended_strategy_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         from adaptive_scalper.costs.edge_evidence import EDGE_MODELS

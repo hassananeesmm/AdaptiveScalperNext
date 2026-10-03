@@ -42,7 +42,7 @@ def describe_config(
     config: BacktestConfig, *, canonical_symbol: str, resolutions: tuple[str, ...],
     strategies: tuple[tuple[str, int], ...],
 ) -> dict:
-    return {
+    description = {
         "canonical_symbol": canonical_symbol,
         "resolutions": sorted(resolutions),
         "strategies": sorted([key, version] for key, version in strategies),
@@ -65,6 +65,10 @@ def describe_config(
         "swap_rollover_rule": config.server_time_rule,
         "edge_model": edge_model_id_of(config),
     }
+    # Only when set, so every fingerprint without a suspension is unchanged.
+    if config.suspended_strategy_keys:
+        description["suspended_strategy_keys"] = sorted(config.suspended_strategy_keys)
+    return description
 
 
 def compute_config_fingerprint(

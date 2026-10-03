@@ -69,6 +69,7 @@ def paper_config(
         news_windows=news_windows,
         server_time_rule=config.mt5.server_time_rule,
         edge_provider=edge_provider,
+        suspended_strategy_keys=tuple(sorted(config.strategies.entry_suspended)),
     )
 
 

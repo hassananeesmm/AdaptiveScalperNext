@@ -16,6 +16,13 @@ symbols = ["XAUUSD", "BTCUSD"]
 
 [strategies]
 retired = ["failed_breakout_fade", "support_resistance_reaction"]
+# Entry suspension (release 0.2.8, operator decision 2026-10-02): the strategy
+# stays active and its signals are still journaled, but it never opens a
+# position. Evidence: no gross edge in backtests (V1 baseline, H4), highest cost
+# per trade (0.20-0.24 R), and on DEMO 2026-09-25..10-02 it placed 377 of 391
+# trades for -277.58 USD of the -273.97 USD total. Narrow-only: keys must be
+# active strategies. Removing a key re-enables entries (operator decision).
+entry_suspended = ["microstructure_acceleration"]
 
 [risk]
 risk_per_trade_pct = 0.25

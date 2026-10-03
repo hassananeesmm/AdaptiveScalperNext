@@ -69,6 +69,24 @@ class StrategiesConfig(BaseModel):
             )
         return value
 
+    # Active strategies that may still SIGNAL (journaled as evidence) but may
+    # never open a position. Narrow-only: a key must be an active strategy, so
+    # this list can never add, rename or revive anything.
+    entry_suspended: list[str] = Field(default_factory=list)
+
+    @field_validator("entry_suspended")
+    @classmethod
+    def _suspended_keys_must_be_active(cls, value: list[str]) -> list[str]:
+        from adaptive_scalper.strategies import build_active_registry
+
+        active = build_active_registry().active_keys()
+        unknown = sorted(set(value) - active)
+        if unknown:
+            raise ValueError(f"strategies.entry_suspended names non-active strategies {unknown}; active: {sorted(active)}")
+        if len(set(value)) != len(value):
+            raise ValueError(f"strategies.entry_suspended has duplicate keys: {value}")
+        return value
+
 
 class RiskConfig(BaseModel):
     risk_per_trade_pct: float = 0.25
