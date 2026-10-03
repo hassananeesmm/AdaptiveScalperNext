@@ -66,7 +66,9 @@ from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, ALLOWED
 from adaptive_scalper.core.kill_switch import KillSwitchState
 from adaptive_scalper.core.permission import ActionKind, evaluate_kill_switch_permission
 from adaptive_scalper.costs.edge import ALLOW as _COST_ALLOW
+from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED as _COST_BLOCK_EDGE_UNVALIDATED
 from adaptive_scalper.costs.edge import evaluate_cost_gate
+from adaptive_scalper.costs.edge_evidence import EdgeEvidence
 from adaptive_scalper.costs.model import CostEstimate
 from adaptive_scalper.execution.reconciliation import CLEAN as _RECONCILIATION_CLEAN
 from adaptive_scalper.gateway.demo_gate import DemoVerificationResult
@@ -123,6 +125,10 @@ class FinalPermissionInput:
     pending_positions: list[PositionExposure]
     portfolio_risk_limits: PortfolioRiskLimits
     min_net_edge_price: float = 0.0
+    # VALIDATED expected-edge evidence for this proposal (costs/edge_evidence.py).
+    # None -- the default, and the only possibility until a calibration has
+    # passed a preregistered protocol -- blocks with BLOCK_EDGE_UNVALIDATED.
+    edge_evidence: EdgeEvidence | None = None
     # (decision, reason) from position_management.re_entry.evaluate_reentry,
     # or None when this proposal is not a re-entry scenario (no relevant
     # prior exit exists) and the check is simply not applicable.
@@ -194,11 +200,18 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
     if inp.news_result.decision != _NEWS_ALLOW:
         return FinalPermissionResult(inp.news_result.decision, inp.news_result.reason)
 
-    cost_decision, edge_eval = evaluate_cost_gate(inp.signal, inp.cost_estimate, inp.min_net_edge_price)
+    # executable=True: only VALIDATED edge evidence can authorize a broker
+    # order; missing/legacy/test evidence is BLOCK_EDGE_UNVALIDATED (issue #6).
+    cost_decision, edge_eval = evaluate_cost_gate(inp.signal, inp.cost_estimate, inp.min_net_edge_price,
+                                                  evidence=inp.edge_evidence, executable=True)
     if cost_decision != _COST_ALLOW:
-        return FinalPermissionResult(
-            cost_decision, edge_eval.reason if edge_eval is not None else "cost could not be determined"
-        )
+        if edge_eval is not None:
+            detail = edge_eval.reason
+        elif cost_decision == _COST_BLOCK_EDGE_UNVALIDATED:
+            detail = "no validated calibrated edge evidence for this proposal (raw score is not a probability)"
+        else:
+            detail = "cost could not be determined"
+        return FinalPermissionResult(cost_decision, detail)
 
     corr_decision, corr_reason = evaluate_correlation_gate(
         inp.signal.canonical_symbol, inp.open_or_pending_symbols, inp.correlation_matrix

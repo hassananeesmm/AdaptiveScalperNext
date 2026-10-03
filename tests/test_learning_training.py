@@ -19,6 +19,7 @@ from adaptive_scalper.learning.training import (
     train_entry_outcome_model,
 )
 from adaptive_scalper.persistence import connect, migrate
+from edge_fixtures import v1_replay_config
 
 
 def _separable_rows(n: int, *, start_time: int = 1_000_000, seed: int = 0) -> list[TrainingRow]:
@@ -197,8 +198,7 @@ def test_train_and_register_entry_model_from_trades_end_to_end_with_real_backtes
             price = close_price
         return bars
 
-    from adaptive_scalper.backtest.types import BacktestConfig
-    config = BacktestConfig(fill_assumptions=FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0))
+    config = v1_replay_config(fill_assumptions=FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0))
 
     # Several independent trending runs (alternating direction/start
     # price) to accumulate more than one real trade -- proves the

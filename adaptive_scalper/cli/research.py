@@ -41,7 +41,8 @@ def _inputs(args, conn, cfg):
     windows = tuple(sorted(_event_window(e, cfg.news.pre_high_impact_minutes, cfg.news.post_high_impact_minutes)
                            for e in events))
     config = paper_config(cfg, args.symbol, windows)
-    config = dataclasses.replace(config, initial_equity=args.equity)
+    config = dataclasses.replace(config, initial_equity=args.equity,
+                                 edge_model=getattr(args, "edge_model", "NONE"))
     return bars, stored[0], config, len(windows)
 
 
@@ -344,6 +345,12 @@ def _range_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--start", required=True, help="epoch seconds or ISO date (UTC)")
     p.add_argument("--end", required=True, help="epoch seconds or ISO date (UTC)")
     p.add_argument("--equity", type=float, default=10_000.0)
+    p.add_argument(
+        "--edge-model", default="NONE", choices=("NONE", "LEGACY_V1_RAW_SCORE"),
+        help="expected-edge evidence (issue #6). NONE (default): no validated calibration exists, so the run is "
+             "FLAT. LEGACY_V1_RAW_SCORE: replay the frozen V1 formula (raw score read as p) -- research replay "
+             "only, recorded in the config fingerprint, never executable",
+    )
 
 
 def register(sub) -> None:

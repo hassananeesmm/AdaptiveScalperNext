@@ -2970,3 +2970,27 @@ check or order send occurred.
   risk limits 0.25 / 0.75 / 2.0 / 5.0 %, 2 positions, 1 per symbol; 0 open positions / incidents / unresolved
   closes; exit-cost sweep OK (369 economic exit events recorded, cost_evidence component OK); dashboard HTTP 200.
 - Rollback (not needed): checkout e3b1250 and restore the backup above.
+
+## 2026-10-03 -- profitability-recovery audit on PR #7 (no deployment, no runtime change)
+
+- Start state (read-only): root checkout `d9c1bd1` (v0.2.7); PR #7 head `3834d93` on `release/0.2.7`; `release/0.2.8`
+  (`ed15d76`) exists as a sibling. No runtime, dashboard or MT5 process running (0.2.7 last heartbeat 2026-10-02
+  17:25:35 UTC, no ENGINE_STOPPED); DB flat (0 positions, 0 working orders, 0 incidents, reconciliation CLEAN,
+  kill switch DISENGAGED, schema 31). Worktree `.worktrees/profit-recovery`.
+- Baseline at `3834d93`: 1801 passed / 1 failed / 9 skipped. The failure was the V1 freeze digest of `selector.py`,
+  changed by this session's edit while the 25-minute run was in flight. The committed digest matches the pin, so
+  the effective baseline is 1802 / 0 / 9. Lesson logged as task-observer 0014: freeze the tree during long runs.
+- Recomputed every research claim from `data/research/independent_*_r1.json` (scripts/audit/research_recompute.py)
+  and the DEMO exit economics from broker deals, read-only (scripts/audit/demo_exit_economics.py): 408 positions,
+  −234.00 USD; 161 closed one bar after entry because the entry trigger stopped firing (−759.89 USD); broker TP hit once.
+- `7ba9dce`: cost horizons in DEMO + backtest/PAPER, horizon-aware swap, PAPER BLOCK_COST, fill_model/v3,
+  evidence-only EV (default FLAT), V1 legacy replay, selector freeze re-pin with an equivalence test; 3 mutation
+  checks killed. Full suite 1841 / 0 / 9.
+- `1ee1f65`: shadow observer + migration 0032, lifecycle contract. Full suite 1858 / 0 / 9.
+- Scheduler lag: not a demonstrated P/L cause (R lost decision→fill ≈ 0; max lag 2.4 s).
+  `threshold_cross_at_utc` is never written (observability gap).
+- Sealed BTC OOS not accessed. One exploratory query that would have aggregated MIN/MAX(time) over the whole bars
+  table errored on a column name before returning anything and was removed. Ledger read, not written (262 trials).
+- Correctness replay preregistered (docs/audits/CORRECTNESS_REPLAY_PREREGISTRATION.md), NOT run (it consumes trial
+  budget and cannot change the terminal state); awaiting a human decision.
+- Not done (needs the operator): merge, 0.2.8 integration, release, restart, kill-switch actions. REAL untouched.

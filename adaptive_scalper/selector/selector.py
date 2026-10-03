@@ -27,8 +27,8 @@ import time
 from dataclasses import dataclass
 
 from adaptive_scalper.config.constants import RETIRED_STRATEGY_KEYS
-from adaptive_scalper.costs.edge import expected_gross_edge_price
-from adaptive_scalper.costs.model import CostEstimate
+from adaptive_scalper.costs.edge_evidence import NO_VALIDATED_EDGE_EVIDENCE, EdgeEvidenceProvider
+from adaptive_scalper.costs.model import HORIZON_FULL_ROUND_TRIP, CostEstimate, require_horizon
 from adaptive_scalper.journal.events import append_event
 from adaptive_scalper.strategies.base import StrategySignal
 
@@ -36,6 +36,7 @@ REJECTED_RETIRED = "retired_strategy_key"
 REJECTED_LOW_CONFIDENCE = "raw_confidence_below_minimum"
 REJECTED_UNKNOWN_COST = "cost_unknown_for_this_symbol"
 REJECTED_INSUFFICIENT_EDGE = "expected_net_edge_below_minimum"
+REJECTED_EDGE_UNVALIDATED = "no_validated_edge_evidence"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ def select_proposal(
     *,
     min_net_edge_price: float = 0.0,
     min_raw_confidence: float = 0.0,
+    edge_evidence: EdgeEvidenceProvider = NO_VALIDATED_EDGE_EVIDENCE,
 ) -> SelectionResult:
     """`cost_estimates` is keyed by `canonical_symbol` — candidates may
     span more than one of the three symbols in a single evaluation
@@ -66,6 +68,12 @@ def select_proposal(
     estimate would be wrong. A symbol missing from `cost_estimates` (or
     mapped to `None`) rejects every candidate for that symbol with
     `REJECTED_UNKNOWN_COST` rather than guessing.
+
+    Expected edge comes only from `edge_evidence` (costs/edge_evidence.py),
+    never from `raw_confidence` read as a probability. The default provider
+    has no validated evidence, so every candidate is rejected with
+    `REJECTED_EDGE_UNVALIDATED` and the result is FLAT. `min_raw_confidence`
+    is a raw-SCORE floor, not a probability threshold.
     """
     evaluations: list[CandidateEvaluation] = []
     best: StrategySignal | None = None
@@ -81,12 +89,16 @@ def select_proposal(
             continue
 
         cost = cost_estimates.get(signal.canonical_symbol)
+        require_horizon(cost, HORIZON_FULL_ROUND_TRIP, "selector")
         if cost is None:
             evaluations.append(CandidateEvaluation(signal, None, True, REJECTED_UNKNOWN_COST))
             continue
 
-        gross = expected_gross_edge_price(signal)
-        net = gross - cost.total_cost
+        evidence = edge_evidence.for_signal(signal)
+        if evidence is None:
+            evaluations.append(CandidateEvaluation(signal, None, True, REJECTED_EDGE_UNVALIDATED))
+            continue
+        net = evidence.expected_gross_edge_price - cost.total_cost
         if net <= min_net_edge_price:
             evaluations.append(CandidateEvaluation(signal, net, True, REJECTED_INSUFFICIENT_EDGE))
             continue
@@ -118,6 +130,7 @@ def select_and_journal_proposal(
     min_net_edge_price: float = 0.0,
     min_raw_confidence: float = 0.0,
     now_utc: int | None = None,
+    edge_evidence: EdgeEvidenceProvider = NO_VALIDATED_EDGE_EVIDENCE,
 ) -> SelectionResult:
     """Same as `select_proposal()`, plus journaling every candidate's
     outcome (directive: "Persist/journal: candidates, rejections,
@@ -137,7 +150,8 @@ def select_and_journal_proposal(
         raise ValueError("chain_keys must have exactly one entry per candidate, in the same order")
 
     result = select_proposal(
-        candidates, cost_estimates, min_net_edge_price=min_net_edge_price, min_raw_confidence=min_raw_confidence
+        candidates, cost_estimates, min_net_edge_price=min_net_edge_price, min_raw_confidence=min_raw_confidence,
+        edge_evidence=edge_evidence,
     )
     now = now_utc if now_utc is not None else int(time.time())
 
@@ -145,7 +159,10 @@ def select_and_journal_proposal(
         signal = evaluation.signal
         payload = {
             "strategy_key": signal.strategy_key, "direction": signal.direction,
-            "raw_confidence": signal.raw_confidence, "expected_net_edge": evaluation.expected_net_edge,
+            # Persisted name kept for compatibility; it is a heuristic raw
+            # score, not a probability (issue #6).
+            "raw_confidence": signal.raw_confidence, "raw_score_is_probability": False,
+            "edge_model": edge_evidence.model_id, "expected_net_edge": evaluation.expected_net_edge,
         }
         if evaluation.rejected:
             event_type, payload["reason"] = "SIGNAL_REJECTED", evaluation.rejection_reason

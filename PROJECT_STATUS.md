@@ -23,7 +23,33 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
+## Current phase (2026-10-03, branch `fix/v1-loss-root-cause-correctness`, draft PR #7) — NOT DEPLOYED
+
+**Deployed runtime: 0.2.7 (`d9c1bd1`, schema 31), unchanged by this work.** Its process was found not running at
+the start of this audit (last heartbeat 2026-10-02 17:25:35 UTC, no ENGINE_STOPPED; consistent with a machine
+restart), leaving the account flat: 0 positions, 0 working orders, 0 unresolved incidents, reconciliation CLEAN,
+kill switch DISENGAGED. Restarting it is an operator decision.
+
+Profitability-recovery audit (docs/audits/PROFITABILITY_RECOVERY_FINAL_REPORT.md,
+docs/audits/PROFITABILITY_ROOT_CAUSE_FINAL.md). Terminal state **B: CORRECTNESS VERIFIED — NO VALIDATED EDGE —
+SHADOW COLLECTION READY**. The evidence supports **NO VALIDATED POSITIVE NET EDGE**.
+
+- `7ba9dce` (TESTED-FAKE, TESTED-WINDOWS): typed cost horizons in DEMO **and** backtest/PAPER (the simulator still
+  charged per-fill slippage once and re-charged sunk costs in reviews); horizon-aware swap at broker server midnight
+  (unknown + can cross → BLOCK_COST; issue #8); PAPER BLOCK_COST on unknown cost; `fill_model/v3`; raw score is no
+  longer read as P(win) — executable EV needs VALIDATED `EdgeEvidence`, default **FLAT** (`BLOCK_EDGE_UNVALIDATED`,
+  issue #6); V1 kept only as the labelled `LEGACY_V1_RAW_SCORE` research replay (selector freeze pin updated with an
+  equivalence test).
+- `1ee1f65` (TESTED-FAKE, TESTED-WINDOWS): shadow observer (migration **0032**, append-only candidate + outcome
+  evidence, no order path) and the strategy lifecycle contract (V1 recorded as thesis = entry trigger; executable
+  exits unchanged).
+- Full suite on `1ee1f65`: **1858 passed, 0 failed, 9 skipped** (local Windows, canonical venv).
+- Not included: release 0.2.8's microstructure entry suspension (`ed15d76`, a sibling of this branch).
+- Deploying this branch makes DEMO FLAT by design while the shadow observer collects forward evidence. It needs:
+  PR review, integration with 0.2.8, a release build, a verified backup, migration 0032 rehearsal, and a flat,
+  operator-started restart.
+
+## Previous phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO; superseded by 0.2.7 on 2026-10-02)
 
 **Running: 0.2.6 (`e3b1250`)**, DEMO runtime + dashboard started by the operator's launcher 10:30:13 UTC after a
 verified online backup (`data/backups/pre_0_2_6_deploy_20260929T102622Z.sqlite3`, integrity ok) and a successful

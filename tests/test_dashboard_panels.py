@@ -19,6 +19,7 @@ from adaptive_scalper.dashboard.page import PAGE_HTML
 from adaptive_scalper.dashboard.panels import PANELS, compute_all
 from adaptive_scalper.persistence.database import connect, connect_readonly, migrate
 from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+from edge_fixtures import FixtureValidatedProvider
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "adaptive_scalper" / "dashboard"
 
@@ -60,7 +61,7 @@ def test_every_panel_renders_honestly_on_an_empty_database(db):
 
 def test_panels_reflect_a_running_paper_runtime(tmp_path):
     clock = FakeClock(T0 + 60 * STEP + 10)
-    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock)
+    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     step(engine, clock, seconds=STEP * 25, tick=4)

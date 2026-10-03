@@ -42,6 +42,7 @@ from adaptive_scalper.portfolio.correlation import CorrelationResult
 from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits, PositionExposure
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits
 from adaptive_scalper.strategies.base import StrategySignal
+from edge_fixtures import fixture_validated_evidence
 
 
 def _signal(**overrides) -> StrategySignal:
@@ -126,6 +127,9 @@ def _full_allow_input(**overrides) -> FinalPermissionInput:
         open_or_pending_symbols=[], correlation_matrix={},
         risk_gate_input=_risk_input(), risk_limits=_risk_limits(),
         open_positions=[], pending_positions=[], portfolio_risk_limits=_portfolio_risk_limits(),
+        # Gates AFTER the edge gate are under test here; the edge gate's
+        # fail-closed default is tested in test_edge_gate_* below.
+        edge_evidence=fixture_validated_evidence(),
     )
     defaults.update(overrides)
     return FinalPermissionInput(**defaults)
@@ -221,9 +225,11 @@ def test_blocks_on_unknown_cost():
 
 
 def test_blocks_on_insufficient_expected_edge():
-    # A poor-quality signal whose EV can't clear even a tiny cost.
-    poor_signal = _signal(raw_confidence=0.4, stop_distance=2.0, target_distance=1.0)
-    result = evaluate_final_permission(_full_allow_input(signal=poor_signal))
+    # Validated evidence whose EV can't clear even a tiny cost (issue #6: the
+    # edge comes from the evidence, not from the signal's raw score):
+    # 0.4*1.0 - 0.6*2.0 < 0.
+    poor = fixture_validated_evidence(p=0.4, avg_win=1.0, avg_loss=2.0)
+    result = evaluate_final_permission(_full_allow_input(edge_evidence=poor))
     assert result.decision == "BLOCK_EXPECTED_EDGE"
 
 
@@ -386,3 +392,21 @@ def test_journaled_event_carries_strategy_key(db):
     evaluate_and_journal_final_permission(db, "chain-3", _full_allow_input(), now_utc=1000)
     events = get_chain_events(db, "chain-3")
     assert events[0].strategy_key == "momentum_continuation"
+
+
+# --------------------------------------------------------------------------
+# Issue #6: only VALIDATED edge evidence can authorize an order
+# --------------------------------------------------------------------------
+
+def test_edge_gate_blocks_without_evidence_even_when_everything_else_passes():
+    result = evaluate_final_permission(_full_allow_input(edge_evidence=None))
+    assert result.decision == "BLOCK_EDGE_UNVALIDATED"
+    assert "not a probability" in result.reason
+
+
+def test_edge_gate_refuses_legacy_raw_score_evidence():
+    from adaptive_scalper.costs.edge_evidence import LEGACY_V1_RAW_SCORE_EVIDENCE
+
+    signal = _full_allow_input().signal
+    result = evaluate_final_permission(_full_allow_input(edge_evidence=LEGACY_V1_RAW_SCORE_EVIDENCE.for_signal(signal)))
+    assert result.decision == "BLOCK_EDGE_UNVALIDATED"

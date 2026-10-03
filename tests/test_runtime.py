@@ -22,6 +22,7 @@ from adaptive_scalper.runtime.engine import RuntimeComponents, RuntimeStartupErr
 from adaptive_scalper.runtime.scheduler import Scheduler
 from adaptive_scalper.runtime.state import get_state
 from chaos_harness import demo_account
+from edge_fixtures import FixtureValidatedProvider
 from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, StaticNewsProvider, build_engine, default_market, step
 
 START_AT = T0 + 60 * STEP + 10  # 60 closed bars already exist
@@ -121,7 +122,7 @@ def test_an_unresolvable_symbol_is_excluded_never_substituted(tmp_path):
 
 def test_paper_never_calls_order_check_or_order_send(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="PAPER", clock=clock)
+    engine, conn, gateway = build_engine(tmp_path, mode="PAPER", clock=clock, edge_evidence=FixtureValidatedProvider())
     _operator_bootstrap(conn)
     engine.startup()
     step(engine, clock, seconds=STEP * 25, tick=4)
@@ -172,7 +173,7 @@ def test_paper_config_change_halts_that_session_instead_of_mixing_state(tmp_path
 
 def test_demo_full_pipeline_fills_journals_and_manages_a_position(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
+    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     _operator_bootstrap(conn)
     engine.startup()
     step(engine, clock, seconds=STEP * 4, tick=4)
@@ -239,7 +240,7 @@ def test_demo_account_switching_to_real_mid_run_blocks_every_broker_mutation(tmp
 
 def test_demo_kill_switch_engaged_mid_run_blocks_entries_but_keeps_managing(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
+    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     _operator_bootstrap(conn)
     engine.startup()
     step(engine, clock, seconds=STEP * 3, tick=4)
@@ -288,10 +289,10 @@ def _execution_outcomes(tmp_path, components):
 
 
 def test_rag_ml_and_okf_failures_degrade_advisory_context_but_never_change_decisions(tmp_path):
-    healthy, _, _ = _execution_outcomes(tmp_path / "a", RuntimeComponents())
+    healthy, _, _ = _execution_outcomes(tmp_path / "a", RuntimeComponents(edge_evidence=FixtureValidatedProvider()))
     broken = _Broken()
     degraded, conn, engine = _execution_outcomes(
-        tmp_path / "b", RuntimeComponents(rag=broken, observer=broken, okf=broken),
+        tmp_path / "b", RuntimeComponents(rag=broken, observer=broken, okf=broken, edge_evidence=FixtureValidatedProvider()),
     )
     assert healthy and degraded == healthy
     statuses = {e.payload["status"] for e in get_chain_events(conn, _decisions(conn, stage="EXECUTION")[0]["chain_key"])
@@ -302,7 +303,7 @@ def test_rag_ml_and_okf_failures_degrade_advisory_context_but_never_change_decis
 
 def test_a_failing_entry_cycle_never_starves_position_management(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
+    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     _operator_bootstrap(conn)
     engine.startup()
     step(engine, clock, seconds=STEP * 3, tick=4)

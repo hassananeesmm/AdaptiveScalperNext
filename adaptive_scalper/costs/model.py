@@ -17,6 +17,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# What a CostEstimate's total covers. Every estimate carries exactly one, and
+# each consumer requires the one it means (costs.edge / selector refuse
+# anything but a full round trip; the position reviews refuse anything but
+# remaining exit friction), so one number can no longer mean "whole trade" at
+# entry and "what is still payable" after entry.
+HORIZON_FULL_ROUND_TRIP = "FULL_ROUND_TRIP"   # entry + exit, decided before entry
+HORIZON_REMAINING_EXIT = "REMAINING_EXIT"     # exit friction still payable on an open position
+COST_HORIZONS = (HORIZON_FULL_ROUND_TRIP, HORIZON_REMAINING_EXIT)
+
+# A market entry followed by a market/stop exit fills twice; the shipped
+# slippage evidence (`[costs.*] slippage_price`) is measured per fill.
+FILLS_PER_ROUND_TRIP = 2
+
 
 @dataclass(frozen=True)
 class CostEstimate:
@@ -26,6 +39,19 @@ class CostEstimate:
     swap_cost: float            # price-equivalent units
     uncertainty_margin: float   # price units
     total_cost: float           # sum of all of the above
+    horizon: str = HORIZON_FULL_ROUND_TRIP
+
+    def __post_init__(self) -> None:
+        if self.horizon not in COST_HORIZONS:
+            raise ValueError(f"horizon must be one of {COST_HORIZONS}, got {self.horizon!r}")
+
+
+def require_horizon(cost: CostEstimate | None, horizon: str, consumer: str) -> None:
+    """Raise if a consumer is handed an estimate built for another horizon.
+    `None` (unknown cost) passes through: the consumer's own fail-closed
+    handling (BLOCK_COST / thesis unknown) applies to it."""
+    if cost is not None and cost.horizon != horizon:
+        raise ValueError(f"{consumer} needs a {horizon} cost estimate, got {cost.horizon}")
 
 
 def price_equivalent_of_monetary_cost(monetary_cost_per_lot: float, tick_size: float, tick_value: float) -> float:
@@ -49,9 +75,22 @@ def estimate_cost(
     expected_slippage_price: float,
     swap_price_equivalent: float,
     uncertainty_margin_pct: float = 0.10,
+    horizon: str = HORIZON_FULL_ROUND_TRIP,
 ) -> CostEstimate:
     """Combine every cost component into one estimate.
 
+    Low-level: the caller has already turned per-fill evidence into horizon
+    totals. Runtime, PAPER and backtest code use `round_trip_cost_from_evidence`
+    / `remaining_exit_cost_from_evidence` instead, which take PER-FILL inputs
+    and apply the multiplicity themselves.
+
+    expected_slippage_price is the TOTAL expected slippage for the
+    decision horizon represented by this estimate. For a pre-entry market
+    trade that expects a later market/stop exit, callers must include both
+    fills (normally entry_slippage + exit_slippage). For an already-open
+    position, callers pass only the remaining exit slippage. This explicit
+    contract prevents a per-fill observation from being silently treated as
+    a full round-trip cost.
     Per external review: every component is a REQUIRED keyword argument,
     with no default of `0.0` — a caller must always make an explicit,
     deliberate choice for each one. A prior version defaulted commission/
@@ -95,6 +134,7 @@ def estimate_cost(
         swap_cost=swap_price_equivalent,
         uncertainty_margin=uncertainty_margin,
         total_cost=total_cost,
+        horizon=horizon,
     )
 
 
@@ -133,3 +173,55 @@ def estimate_cost_from_evidence(
         swap_price_equivalent=swap_price_equivalent,
         uncertainty_margin_pct=uncertainty_margin_pct,
     )
+
+
+def round_trip_cost_from_evidence(
+    *,
+    spread_price: float | None,
+    per_fill_slippage_price: float | None,
+    round_trip_commission_price: float | None,
+    swap_price_equivalent: float | None,
+    uncertainty_margin_pct: float = 0.10,
+) -> CostEstimate | None:
+    """PRE-ENTRY cost of the whole trade: a market entry plus a market/stop
+    exit. `spread_price` is the full bid/ask spread (paid half at each fill
+    against the mid, i.e. once in total); slippage is charged once PER FILL;
+    commission is the configured round-trip amount. Unknown -> None."""
+    if per_fill_slippage_price is None:
+        return None
+    return _tagged(estimate_cost_from_evidence(
+        spread_price=spread_price, commission_price_equivalent=round_trip_commission_price,
+        expected_slippage_price=FILLS_PER_ROUND_TRIP * per_fill_slippage_price,
+        swap_price_equivalent=swap_price_equivalent, uncertainty_margin_pct=uncertainty_margin_pct,
+    ), HORIZON_FULL_ROUND_TRIP)
+
+
+def remaining_exit_cost_from_evidence(
+    *,
+    exit_spread_price: float | None,
+    per_fill_slippage_price: float | None,
+    round_trip_commission_price: float | None,
+    swap_price_equivalent: float | None,
+    uncertainty_margin_pct: float = 0.10,
+) -> CostEstimate | None:
+    """Friction still payable on an ALREADY OPEN position: one exit fill's
+    slippage, the exit half of the round-trip commission, swap for the
+    remaining horizon, and `exit_spread_price` -- 0.0 when the caller's mark
+    is already the executable closing side of the quote (bid for a long,
+    ask for a short), half the spread when the mark is a mid price. The
+    entry spread, entry slippage and entry commission are sunk and are
+    never part of this estimate. Unknown -> None."""
+    if per_fill_slippage_price is None or round_trip_commission_price is None:
+        return None
+    return _tagged(estimate_cost_from_evidence(
+        spread_price=exit_spread_price, commission_price_equivalent=round_trip_commission_price / 2.0,
+        expected_slippage_price=per_fill_slippage_price, swap_price_equivalent=swap_price_equivalent,
+        uncertainty_margin_pct=uncertainty_margin_pct,
+    ), HORIZON_REMAINING_EXIT)
+
+
+def _tagged(cost: CostEstimate | None, horizon: str) -> CostEstimate | None:
+    if cost is None:
+        return None
+    return CostEstimate(cost.spread_cost, cost.commission_cost, cost.slippage_cost, cost.swap_cost,
+                        cost.uncertainty_margin, cost.total_cost, horizon)
