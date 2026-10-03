@@ -110,6 +110,9 @@ class RuntimeComponents:
     rag: RagService | None = None
     observer: EntryObserver | None = None
     okf: object | None = None             # None -> KnowledgeAdvisor over the Git-tracked `knowledge/` bundle
+    # None -> NO validated expected-edge evidence: every proposal is FLAT
+    # (issue #6). DemoRuntime/PaperRuntime refuse the legacy V1 replay provider.
+    edge_evidence: object | None = None
 
 
 class RuntimeEngine:
@@ -300,14 +303,18 @@ class RuntimeEngine:
             self.okf = self._load_knowledge()
         advisory = AdvisoryPanel(rag=self.rag, observer=self.observer, okf=self.okf)
         if self.mode == "DEMO":
+            edge = self.components.edge_evidence
             self.demo = DemoRuntime(self.conn, self.gateway, self.config, self.symbols, registry, self.news, advisory,
-                                    clock=self.clock)
+                                    clock=self.clock,
+                                    **({"edge_evidence": edge} if edge is not None else {}))
             self._add_task("position_cycle", self.config.runtime.position_cycle_seconds, 0, self.demo.position_cycle)
             self._add_task("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.demo.entry_cycle)
             self._add_task("cost_evidence_sweep", 60.0, 3, self._sweep_cost_evidence)
         else:
+            edge = self.components.edge_evidence
             self.paper = PaperRuntime(self.conn, self.gateway, self.config, self.symbols, self.news,
-                                      clock=self.clock)
+                                      clock=self.clock,
+                                      **({"edge_evidence": edge} if edge is not None else {}))
             self._add_task("entry_cycle", self.config.runtime.entry_cycle_seconds, 1, self.paper.cycle)
         self._add_task("live_telemetry", 5.0, 2, self._publish_telemetry)
         self._add_task("news_refresh", self.config.runtime.news_refresh_seconds, 2, self._refresh_news_bounded)

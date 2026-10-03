@@ -119,12 +119,17 @@ def app_config(tmp_path, *, mode: str, costs: bool = True, **runtime) -> AppConf
 
 
 def build_engine(tmp_path, *, mode: str, clock: FakeClock, gateway=None, bars=None, news=None, costs=True,
-                 components: RuntimeComponents | None = None, **runtime):
+                 components: RuntimeComponents | None = None, edge_evidence=None, **runtime):
+    """`edge_evidence`: None keeps the production default (no validated
+    evidence -> every proposal FLAT). Pipeline tests that need a proposal
+    to reach execution pass `edge_fixtures.FixtureValidatedProvider()`."""
     config = app_config(tmp_path, mode=mode, costs=costs, **runtime)
     conn = connect(config.database.path)
     migrate(conn)
     gateway = gateway or LiveMarketGateway(clock, bars or default_market())
     components = components or RuntimeComponents()
+    if edge_evidence is not None:
+        components.edge_evidence = edge_evidence
     if components.news_providers is None:
         components.news_providers = news if news is not None else [StaticNewsProvider()]
     engine = RuntimeEngine(config, conn, gateway, clock=clock, monotonic=clock, components=components)

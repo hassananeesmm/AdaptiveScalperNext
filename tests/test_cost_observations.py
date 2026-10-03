@@ -14,6 +14,7 @@ from adaptive_scalper.costs.observations import (
     sweep_exit_costs,
 )
 from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+from edge_fixtures import FixtureValidatedProvider
 
 START_AT = T0 + 60 * STEP + 10
 
@@ -34,7 +35,7 @@ def test_news_proximity():
 
 def _demo(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
+    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     return engine, conn, gateway, clock

@@ -12,6 +12,7 @@ from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.execution.reconciliation import get_open_positions
 from adaptive_scalper.news.types import EconomicEvent, Impact
 from runtime_helpers import STEP, FakeClock, LiveMarketGateway, StaticNewsProvider, build_engine, step
+from edge_fixtures import FixtureValidatedProvider
 from test_multi_position import START_AT, StubRegistry, StubStrategy, _latest, _open_symbols, independent_market
 
 
@@ -29,7 +30,8 @@ def _start_with_news(tmp_path, currency: str):
     # scheduled 5 minutes after the first entry scan: inside the pre-event block window
     news = [StaticNewsProvider(events=[_event(currency, START_AT + 2 * STEP + 300)])]
     engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock,
-                                         gateway=LiveMarketGateway(clock, independent_market()), news=news)
+                                         gateway=LiveMarketGateway(clock, independent_market()), news=news,
+                                         edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     stub = StubStrategy()

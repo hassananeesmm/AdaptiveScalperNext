@@ -158,10 +158,15 @@ def test_news_status_and_upcoming_read_the_cache(env, capsys):
 # ---------------------------------------------------------------------------
 
 def test_backtest_walk_forward_path_stress_and_purged_validation(env, capsys):
+    # Default (issue #6): no validated edge evidence -> the run is FLAT.
     assert run(env, "backtest", "--symbol", "XAUUSD", *_range(0, 1999)) == 0
+    assert out_json(capsys)["trades"] == 0
+    # The research pipeline itself is exercised on an explicit V1 replay.
+    v1 = ("--edge-model", "LEGACY_V1_RAW_SCORE")
+    assert run(env, "backtest", "--symbol", "XAUUSD", *_range(0, 1999), *v1) == 0
     bt = out_json(capsys)
     assert bt["trades"] > 10 and bt["cost_provenance"] == "UNVERIFIED_ASSUMPTION"
-    assert run(env, "walk-forward", "--symbol", "XAUUSD", *_range(0, 1999), "--folds", "3") == 0
+    assert run(env, "walk-forward", "--symbol", "XAUUSD", *_range(0, 1999), "--folds", "3", *v1) == 0
     wf = out_json(capsys)
     assert len(wf["folds"]) == 3 and "nothing is re-fit" in wf["note"]
     assert run(env, "path-stress", "--symbol", "XAUUSD", "--simulations", "200") == 0

@@ -19,6 +19,7 @@ from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.types import BacktestConfig
 from adaptive_scalper.gateway.types import Bar, SymbolSpec, SymbolTradeMode
 from adaptive_scalper.simulation.fill_model import FillAssumptions
+from edge_fixtures import v1_replay_config
 
 CANONICAL_SYMBOL = "XAUUSD"
 RESOLUTION = "M5"
@@ -71,7 +72,7 @@ def _config(**overrides) -> BacktestConfig:
         fill_assumptions=FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0),
     )
     defaults.update(overrides)
-    return BacktestConfig(**defaults)
+    return v1_replay_config(**defaults)
 
 
 def test_run_backtest_on_a_trending_series_produces_at_least_one_trade():

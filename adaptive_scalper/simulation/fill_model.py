@@ -30,8 +30,12 @@ from adaptive_scalper.gateway.types import Bar
 # Bumped whenever a fill/cost convention changes, so persisted simulated
 # trades always say which convention produced them. v2: next-bar-open
 # exits, entry-bar SL/TP, bid/ask triggers, gap-through stops, costs
-# charged once with a per-component breakdown.
-FILL_MODEL_VERSION = "fill_model/v2"
+# charged once with a per-component breakdown. v3: the entry decision's
+# expected cost charges per-fill slippage on both fills (was once), the
+# open-position review charges only remaining exit friction (was the whole
+# round trip again), swap is charged per broker-server rollover crossed and
+# an unknown swap on a horizon that can cross one blocks the entry.
+FILL_MODEL_VERSION = "fill_model/v3"
 
 # Where the cost numbers in a FillAssumptions came from. A result is only
 # as trustworthy as its least-verified cost, and every result reports it.
@@ -56,12 +60,17 @@ class FillAssumptions:
 
     slippage_price: float               # adverse price movement applied on every fill, PRICE units
     commission_monetary_per_lot: float  # flat monetary commission per lot, ROUND TRIP (entry+exit combined)
-    swap_monetary_per_lot_per_day: float = 0.0  # only relevant for multi-day holds; 0.0 is a real, assertable fact for a pure scalping horizon
+    # Per broker-server rollover crossed. None = UNKNOWN: an entry whose
+    # maximum hold can cross a rollover is then blocked (costs/swap_horizon.py).
+    swap_monetary_per_lot_per_day: float | None = 0.0
     provenance: str = COST_UNVERIFIED_ASSUMPTION
 
     def __post_init__(self) -> None:
         for name in ("slippage_price", "commission_monetary_per_lot", "swap_monetary_per_lot_per_day"):
-            if getattr(self, name) < 0:
+            value = getattr(self, name)
+            if value is None and name == "swap_monetary_per_lot_per_day":
+                continue
+            if value < 0:
                 raise ValueError(f"{name} must be non-negative, got {getattr(self, name)!r}")
         if self.provenance not in COST_PROVENANCES:
             raise ValueError(f"provenance must be one of {sorted(COST_PROVENANCES)}, got {self.provenance!r}")

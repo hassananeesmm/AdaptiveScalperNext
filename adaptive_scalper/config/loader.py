@@ -161,13 +161,17 @@ _COST_PROVENANCES = ("UNVERIFIED_ASSUMPTION", "BROKER_SPEC_ESTIMATE", "BROKER_DE
 class SymbolCostConfig(BaseModel):
     """Per-symbol execution-cost evidence (directive section 34: never one
     generic cost for all markets). `None` means UNKNOWN, never zero: DEMO
-    blocks new entries with BLOCK_COST while any component is unknown;
-    PAPER simulates with 0.0 for it but labels every result
-    UNVERIFIED_ASSUMPTION. Spread always comes from the live quote/bar."""
+    and PAPER both block new entries with BLOCK_COST while commission or
+    slippage is unknown. Spread always comes from the live quote/bar.
+
+    `slippage_price` is PER FILL (costs/model.py FILLS_PER_ROUND_TRIP).
+    `swap_per_lot_per_day` is the conservative per-rollover cost; unknown
+    (None) is only acceptable for decisions whose maximum hold cannot cross
+    the broker's server-midnight rollover (costs/swap_horizon.py, issue #8)."""
 
     commission_per_lot_round_trip: float | None = None
     slippage_price: float | None = None
-    swap_per_lot_per_day: float = 0.0
+    swap_per_lot_per_day: float | None = None
     provenance: str = "UNVERIFIED_ASSUMPTION"
 
     @field_validator("commission_per_lot_round_trip", "slippage_price", "swap_per_lot_per_day")

@@ -24,6 +24,7 @@ from adaptive_scalper.gateway.types import Bar, OrderSendResult
 from adaptive_scalper.runtime.state import get_state
 from adaptive_scalper.strategies.base import StrategySignal
 from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, build_engine, step
+from edge_fixtures import FixtureValidatedProvider
 
 START_AT = T0 + 150 * STEP + 10
 
@@ -94,7 +95,7 @@ class StubRegistry:
 def _start(tmp_path, *, bars=None, costs=True, **runtime):
     clock = FakeClock(START_AT)
     gateway = LiveMarketGateway(clock, bars or independent_market())
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway, costs=costs, **runtime)
+    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway, costs=costs, **runtime, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     stub = StubStrategy()
@@ -391,7 +392,7 @@ def _gold_closed_until_reopen(clock: FakeClock) -> LiveMarketGateway:
 def _start_with_gold_closed(tmp_path, mode="DEMO"):
     clock = FakeClock(START_AT)
     gateway = _gold_closed_until_reopen(clock)
-    engine, conn, gateway = build_engine(tmp_path, mode=mode, clock=clock, gateway=gateway)
+    engine, conn, gateway = build_engine(tmp_path, mode=mode, clock=clock, gateway=gateway, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     summary = engine.startup()
     stub = StubStrategy()  # nothing fires until a test says so
@@ -437,7 +438,7 @@ def test_identity_failures_are_never_readmitted(tmp_path):
     gateway = LiveMarketGateway(clock, independent_market())
     from runtime_helpers import spec_for
     gateway.set_symbol(spec_for("XAUUSD", currency_profit="EUR"))
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway)
+    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway, edge_evidence=FixtureValidatedProvider())
     summary = engine.startup()
     assert "XAUUSD" not in summary["symbols"]
     step(engine, clock, seconds=4 * STEP, tick=4)

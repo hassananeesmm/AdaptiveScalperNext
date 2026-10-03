@@ -65,6 +65,9 @@ def config(**overrides) -> BacktestConfig:
             slippage_price=0.0, commission_monetary_per_lot=0.0, provenance=COST_EXPLICIT_TEST_FIXTURE,
         ),
         adaptive_exit_params=QUIET_EXIT,
+        # Scripted-strategy mechanics tests replay the frozen V1 edge formula
+        # explicitly (issue #6: the production default is NONE = FLAT).
+        edge_model="LEGACY_V1_RAW_SCORE",
     )
     defaults.update(overrides)
     return BacktestConfig(**defaults)

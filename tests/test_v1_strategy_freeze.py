@@ -33,7 +33,15 @@ V1_SOURCE_DIGESTS = {
     "strategies/volatility_expansion.py": "ef41d9ba612412a6fd14eb08347414d28d471642267caa7ce092ac2fd0dbc8fc",
     "strategies/__init__.py": "c3141196246f4e40ef2fb5ff60daf37fa7952f64e734e67f44d4bae4d977301d",
     "strategies/base.py": "05a9646ef2b9e7ea0a936dc47b2d638bf6632429202c7c817b84590fd1a448d1",
-    "selector/selector.py": "367da84ebcbe56099a729bce631ac7568fdfaadd32a2bfc5bda4ea8369e38abe",
+    # Re-pinned 2026-10-03 (issue #6, PR #7 branch; operator-directed P0 audit):
+    # the selector no longer reads raw_confidence as P(win). Expected edge
+    # comes from an EdgeEvidenceProvider; the default has no validated
+    # evidence (FLAT) and the frozen V1 formula is the labelled
+    # LEGACY_V1_RAW_SCORE replay. V1 stays reproducible bit-for-bit:
+    # tests/test_selector.py::test_legacy_replay_is_numerically_identical_to_the_frozen_v1_selector.
+    # Previous pin (0.2.2..0.2.8): 367da84ebcbe56099a729bce631ac7568fdfaadd32a2bfc5bda4ea8369e38abe.
+    # No strategy file changed, so no STRATEGY_VERSION bump.
+    "selector/selector.py": "9d0ea8c7b0aba8a0a9c403dc95d2bed37142abc89ca622b49e989a6d90b989a8",
 }
 
 V1_ACTIVE = {

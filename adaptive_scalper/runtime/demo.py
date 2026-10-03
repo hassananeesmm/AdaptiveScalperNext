@@ -36,7 +36,22 @@ from typing import Callable
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.final_permission import FinalPermissionInput
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
-from adaptive_scalper.costs.model import CostEstimate, estimate_cost_from_evidence, price_equivalent_of_monetary_cost
+from adaptive_scalper.costs.model import (
+    HORIZON_REMAINING_EXIT,
+    CostEstimate,
+    price_equivalent_of_monetary_cost,
+    remaining_exit_cost_from_evidence,
+    require_horizon,
+    round_trip_cost_from_evidence,
+)
+from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED
+from adaptive_scalper.costs.edge_evidence import (
+    NO_VALIDATED_EDGE_EVIDENCE,
+    EdgeEvidenceProvider,
+    executable_evidence,
+    require_executable_provider,
+)
+from adaptive_scalper.costs.swap_horizon import swap_price_for_horizon
 from adaptive_scalper.execution.reconciliation import (
     CLEAN,
     get_open_positions,
@@ -86,7 +101,7 @@ from adaptive_scalper.runtime.state import (
     record_event,
     record_position_entry_context,
 )
-from adaptive_scalper.selector.selector import select_and_journal_proposal
+from adaptive_scalper.selector.selector import REJECTED_EDGE_UNVALIDATED, select_and_journal_proposal
 from adaptive_scalper.strategies.base import StrategySignal
 
 logger = logging.getLogger(__name__)
@@ -125,65 +140,77 @@ class SymbolAnalysis:
     feature_vector: dict
 
 
-def live_cost_estimate(config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None) -> CostEstimate | None:
-    """Conservative PRE-ENTRY round-trip cost estimate.
+# Allowance between "max hold reached" and the closing fill: one position
+# cycle plus broker round trip, generously rounded up.
+CLOSE_LATENCY_ALLOWANCE_SECONDS = 60
 
-    SymbolCostConfig.slippage_price is measured per fill (the shipped
-    config records p90 adverse slippage from individual market-order fills).
-    A market entry followed by a market/stop exit therefore has TWO slippage
-    opportunities. The previous implementation charged only one, while the
-    simulator correctly charged slippage on every fill. That made the live
-    selector/final-permission cost estimate systematically optimistic.
 
-    The bid/ask spread is charged once for an immediate round trip: buy at ask
-    and sell at bid loses one full spread. Commission is already configured
-    as a round-trip amount. Any unknown required component still fails closed.
+def max_hold_horizon_seconds(params: AdaptiveExitParams) -> int | None:
+    """The longest a newly opened position can be held by design, or None
+    when no maximum is enforced (then every swap question is "can cross")."""
+    if not params.max_holding_enabled:
+        return None
+    return params.max_holding_seconds + CLOSE_LATENCY_ALLOWANCE_SECONDS
+
+
+def _commission_price(costs, spec: SymbolSpec) -> float | None:
+    if costs.commission_per_lot_round_trip is None:
+        return None
+    return price_equivalent_of_monetary_cost(costs.commission_per_lot_round_trip, spec.trade_tick_size,
+                                             spec.trade_tick_value)
+
+
+def live_cost_estimate(
+    config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None, *,
+    now_utc: int, max_hold_seconds: int | None,
+) -> CostEstimate | None:
+    """Conservative PRE-ENTRY cost of the whole trade (HORIZON_FULL_ROUND_TRIP).
+
+    `slippage_price` is per fill, so a market entry plus a market/stop exit
+    pays it twice (costs/model.py FILLS_PER_ROUND_TRIP); the full bid/ask
+    spread is paid once across the two fills; commission is the configured
+    round trip; swap is charged only if `now_utc + max_hold_seconds` can
+    cross the broker's server-midnight rollover, and an unknown swap on such
+    a horizon -- like any other unknown component -- returns None (BLOCK_COST).
     """
     if spec is None or tick is None or tick.ask <= 0 or tick.bid <= 0:
         return None
     costs = config.cost_for(canonical_symbol)
-    commission = (
-        price_equivalent_of_monetary_cost(costs.commission_per_lot_round_trip, spec.trade_tick_size, spec.trade_tick_value)
-        if costs.commission_per_lot_round_trip is not None else None
+    swap = swap_price_for_horizon(
+        server_time_rule=config.mt5.server_time_rule, start_utc=now_utc, max_hold_seconds=max_hold_seconds,
+        swap_per_lot_per_day=costs.swap_per_lot_per_day, tick_size=spec.trade_tick_size,
+        tick_value=spec.trade_tick_value,
     )
-    swap = price_equivalent_of_monetary_cost(costs.swap_per_lot_per_day, spec.trade_tick_size, spec.trade_tick_value)
-    round_trip_slippage = None if costs.slippage_price is None else 2.0 * costs.slippage_price
-    return estimate_cost_from_evidence(
-        spread_price=tick.ask - tick.bid, commission_price_equivalent=commission,
-        expected_slippage_price=round_trip_slippage, swap_price_equivalent=swap,
+    return round_trip_cost_from_evidence(
+        spread_price=tick.ask - tick.bid, per_fill_slippage_price=costs.slippage_price,
+        round_trip_commission_price=_commission_price(costs, spec), swap_price_equivalent=swap,
     )
 
 
 def live_remaining_exit_cost_estimate(
-    config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None
+    config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None, *,
+    now_utc: int, remaining_hold_seconds: int | None,
 ) -> CostEstimate | None:
-    """Incremental cost still payable for an ALREADY OPEN position.
+    """Friction still payable on an ALREADY OPEN position (HORIZON_REMAINING_EXIT).
 
-    Entry spread/slippage and the entry-side commission are sunk and must not
-    be charged again when asking whether the position is worth continuing to
-    hold. _review marks a long at bid and a short at ask, i.e. at the
-    executable closing side of the quote, so the current spread is already in
-    the mark. Remaining friction is one expected exit slippage, one half of
-    the configured round-trip commission, plus the conservative configured
-    swap allowance.
-
-    Keeping this separate from live_cost_estimate prevents the same cost
-    object from meaning full trade lifecycle at entry and remaining cost
-    after entry.
+    Entry spread, entry slippage and the entry half of the commission are
+    sunk and never charged again. _review marks a long at bid and a short
+    at ask -- the executable closing side -- so the exit spread is already in
+    the mark (exit_spread_price=0.0). Remaining: one exit slippage, the exit
+    half of the commission, and swap only if the remaining hold can cross
+    a rollover.
     """
     if spec is None or tick is None or tick.ask <= 0 or tick.bid <= 0:
         return None
     costs = config.cost_for(canonical_symbol)
-    commission = (
-        price_equivalent_of_monetary_cost(
-            costs.commission_per_lot_round_trip / 2.0, spec.trade_tick_size, spec.trade_tick_value
-        )
-        if costs.commission_per_lot_round_trip is not None else None
+    swap = swap_price_for_horizon(
+        server_time_rule=config.mt5.server_time_rule, start_utc=now_utc, max_hold_seconds=remaining_hold_seconds,
+        swap_per_lot_per_day=costs.swap_per_lot_per_day, tick_size=spec.trade_tick_size,
+        tick_value=spec.trade_tick_value,
     )
-    swap = price_equivalent_of_monetary_cost(costs.swap_per_lot_per_day, spec.trade_tick_size, spec.trade_tick_value)
-    return estimate_cost_from_evidence(
-        spread_price=0.0, commission_price_equivalent=commission,
-        expected_slippage_price=costs.slippage_price, swap_price_equivalent=swap,
+    return remaining_exit_cost_from_evidence(
+        exit_spread_price=0.0, per_fill_slippage_price=costs.slippage_price,
+        round_trip_commission_price=_commission_price(costs, spec), swap_price_equivalent=swap,
     )
 
 
@@ -202,8 +229,13 @@ class DemoRuntime:
     latest: dict[str, SymbolAnalysis] = field(default_factory=dict)
     correlation: dict[tuple[str, str], CorrelationResult] = field(default_factory=dict)
     returns: dict[str, dict[int, float]] = field(default_factory=dict)
+    # Expected-edge evidence (issue #6). The default has none, so every
+    # proposal is FLAT (BLOCK_EDGE_UNVALIDATED); the legacy V1 raw-score
+    # replay provider is refused at construction.
+    edge_evidence: EdgeEvidenceProvider = NO_VALIDATED_EDGE_EVIDENCE
 
     def __post_init__(self) -> None:
+        require_executable_provider(self.edge_evidence, "DEMO runtime")
         self.risk_limits = risk_limits_from_config(self.config.risk)
         self.portfolio_limits = portfolio_risk_limits_from_risk_limits(self.risk_limits.max_total_open_risk_pct)
         self.resolution = self.config.runtime.entry_resolution
@@ -493,7 +525,12 @@ class DemoRuntime:
         if strategy is not None:
             fresh = strategy.evaluate(analysis.features, RegimeClassification(analysis.confirmed_regime, 1.0, 1, "re-evaluation"))
             setup_valid = fresh is not None and fresh.direction == local.direction
-        cost = live_remaining_exit_cost_estimate(self.config, canonical, spec, tick)
+        horizon = max_hold_horizon_seconds(self.exit_params)
+        cost = live_remaining_exit_cost_estimate(
+            self.config, canonical, spec, tick, now_utc=now,
+            remaining_hold_seconds=None if horizon is None else max(0, horizon - (now - local.opened_at_utc)),
+        )
+        require_horizon(cost, HORIZON_REMAINING_EXIT, "DEMO position review")
         target = live.take_profit or (
             local.entry_price + context["target_distance_price"] if local.direction == "BUY"
             else local.entry_price - context["target_distance_price"]
@@ -637,10 +674,17 @@ class DemoRuntime:
         broker = self.symbols[canonical]
         tick = self.gateway.symbol_info_tick(broker)
         spec = self.gateway.symbol_info(broker)
-        cost = live_cost_estimate(self.config, canonical, spec, tick)
-        selection = select_and_journal_proposal(self.conn, signals, chains, {canonical: cost}, now_utc=now)
+        cost = live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
+                                  max_hold_seconds=max_hold_horizon_seconds(self.exit_params))
+        selection = select_and_journal_proposal(self.conn, signals, chains, {canonical: cost}, now_utc=now,
+                                                edge_evidence=self.edge_evidence)
         if selection.selected is None:
-            decision = BLOCK_COST if cost is None else "FLAT"
+            if cost is None:
+                decision = BLOCK_COST
+            elif all(e.rejection_reason == REJECTED_EDGE_UNVALIDATED for e in selection.candidates):
+                decision = BLOCK_EDGE_UNVALIDATED
+            else:
+                decision = "FLAT"
             return self._record(canonical, analysis.bar_time, "SELECTOR", decision, selection.reason)
         signal = selection.selected
         chain = chains[signals.index(signal)]
@@ -728,7 +772,9 @@ class DemoRuntime:
             execution_quote=validate_execution_quote(tick, max_quote_age_seconds=DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS,
                                                      now=self.clock()),
             news_result=self.news.block_for(canonical, now),
-            cost_estimate=live_cost_estimate(self.config, canonical, spec, tick),
+            cost_estimate=live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
+                                             max_hold_seconds=max_hold_horizon_seconds(self.exit_params)),
+            edge_evidence=executable_evidence(self.edge_evidence.for_signal(signal)),
             open_or_pending_symbols=sorted({p.canonical_symbol for p in open_positions + pending}),
             correlation_matrix=self.correlation,
             risk_gate_input=RiskGateInput(

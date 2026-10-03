@@ -23,6 +23,7 @@ from dataclasses import asdict
 from adaptive_scalper.backtest.types import BacktestConfig
 from adaptive_scalper.features.bar_features import FEATURE_SCHEMA_VERSION
 from adaptive_scalper.regimes.classifier import REGIME_VERSION
+from adaptive_scalper.costs.edge_evidence import edge_model_id_of
 from adaptive_scalper.simulation.fill_model import FILL_MODEL_VERSION
 
 # Bumped whenever the meaning of RiskLimits/its enforcement changes.
@@ -61,6 +62,8 @@ def describe_config(
         "min_raw_confidence": config.min_raw_confidence,
         "uncertainty_margin_pct": config.uncertainty_margin_pct,
         "max_entry_fill_delay_seconds": config.max_entry_fill_delay_seconds,
+        "swap_rollover_rule": config.server_time_rule,
+        "edge_model": edge_model_id_of(config),
     }
 
 

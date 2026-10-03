@@ -33,6 +33,7 @@ from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParam
 from adaptive_scalper.simulation.fill_model import FillAssumptions
 from adaptive_scalper.simulation.types import EvidenceOrigin
 from adaptive_scalper.strategies.base import StrategySignal
+from edge_fixtures import v1_replay_config
 
 SYMBOL = "XAUUSD"
 RES = "M5"
@@ -77,7 +78,7 @@ def _config(**overrides) -> BacktestConfig:
         adaptive_exit_params=_QUIET_EXIT,
     )
     defaults.update(overrides)
-    return BacktestConfig(**defaults)
+    return v1_replay_config(**defaults)
 
 
 class _ScriptedStrategy:
@@ -441,7 +442,7 @@ def test_swap_is_charged_per_utc_rollover_crossed(script):
 
 def test_metrics_gross_minus_cost_equals_net_on_real_strategies():
     bars = _random_walk_bars(600, seed=7)
-    config = BacktestConfig(fill_assumptions=FillAssumptions(slippage_price=0.03, commission_monetary_per_lot=7.0))
+    config = v1_replay_config(fill_assumptions=FillAssumptions(slippage_price=0.03, commission_monetary_per_lot=7.0))
     result = run_backtest(bars, SYMBOL, RES, _spec(), config=config, now_utc=START)
     assert result.metrics.closed_trade_count > 0
     m = result.metrics
@@ -465,7 +466,7 @@ def _record_usage(db, bars, used_for, *, symbol=SYMBOL, resolution=RES, run_id="
 
 
 def _oos(db, bars, run_id="oos", **kwargs):
-    return run_untouched_oos(bars, SYMBOL, RES, _spec(), conn=db, run_id=run_id, config=BacktestConfig(),
+    return run_untouched_oos(bars, SYMBOL, RES, _spec(), conn=db, run_id=run_id, config=v1_replay_config(),
                              now_utc=START, **kwargs)
 
 
@@ -554,7 +555,7 @@ def _trade_key(t):
 @pytest.mark.parametrize("chunk", [1, 2, 3, 7, 25])
 def test_incremental_paper_cycles_match_a_single_continuous_run(db, seed, chunk):
     bars = _random_walk_bars(500, seed=seed)
-    config = BacktestConfig(fill_assumptions=FillAssumptions(slippage_price=0.02, commission_monetary_per_lot=7.0))
+    config = v1_replay_config(fill_assumptions=FillAssumptions(slippage_price=0.02, commission_monetary_per_lot=7.0))
     reference = run_backtest(bars, SYMBOL, RES, _spec(), config=config, now_utc=START, force_close_at_range_end=False)
     assert len(reference.trades) >= 3  # the property is vacuous without real trading activity
 
@@ -588,9 +589,9 @@ def test_paper_cycle_processes_a_single_new_bar(db):
     # [context] + [1 new bar] was below the engine's minimum, so every
     # single-bar cycle was a no-op and PAPER ran permanently a bar behind.
     bars = _random_walk_bars(120, seed=21)
-    run_paper_cycle(db, bars[:100], SYMBOL, RES, _spec(), config=BacktestConfig(), now_utc=START)
+    run_paper_cycle(db, bars[:100], SYMBOL, RES, _spec(), config=v1_replay_config(), now_utc=START)
     for n in range(101, 121):
-        result = run_paper_cycle(db, bars[:n], SYMBOL, RES, _spec(), config=BacktestConfig(), now_utc=START)
+        result = run_paper_cycle(db, bars[:n], SYMBOL, RES, _spec(), config=v1_replay_config(), now_utc=START)
         assert result.ran is True
         assert result.last_processed_bar_time_utc == bars[n - 1].time
 
@@ -599,9 +600,9 @@ def test_paper_cycle_refuses_a_history_too_short_to_give_the_new_bars_context(db
     # Supplying only the most recent few bars would make the engine start
     # deciding PAST the new bars while the cursor jumps over them.
     bars = _random_walk_bars(120, seed=22)
-    run_paper_cycle(db, bars[:100], SYMBOL, RES, _spec(), config=BacktestConfig(), now_utc=START)
+    run_paper_cycle(db, bars[:100], SYMBOL, RES, _spec(), config=v1_replay_config(), now_utc=START)
     with pytest.raises(ValueError, match="already-processed"):
-        run_paper_cycle(db, bars[95:110], SYMBOL, RES, _spec(), config=BacktestConfig(), now_utc=START)
+        run_paper_cycle(db, bars[95:110], SYMBOL, RES, _spec(), config=v1_replay_config(), now_utc=START)
     assert get_session(db, f"PAPER:{SYMBOL}:{RES}").last_processed_bar_time_utc == bars[99].time
 
 
