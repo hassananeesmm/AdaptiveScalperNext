@@ -90,9 +90,30 @@ class ShadowCandidate:
         return self.decision_bar_time_utc + self.bar_seconds
 
     @property
-    def key(self) -> str:
-        return (f"{self.canonical_symbol}:{self.resolution}:{self.decision_bar_time_utc}:"
-                f"{self.strategy_key}:{self.direction}")
+    def lifecycle_version(self) -> str:
+        from adaptive_scalper.shadow.lifecycle import lifecycle_for
+
+        try:
+            return lifecycle_for(self.strategy_key).lifecycle_version
+        except KeyError:
+            return UNDECLARED_LIFECYCLE
+
+    def identity_key(self, mode: str) -> str:
+        return candidate_identity_key(mode, self.canonical_symbol, self.resolution, self.decision_bar_time_utc,
+                                      self.strategy_key, self.strategy_version, self.direction, OBSERVER_VERSION,
+                                      self.lifecycle_version)
+
+
+UNDECLARED_LIFECYCLE = "UNDECLARED"
+
+
+def candidate_identity_key(mode: str, canonical_symbol: str, resolution: str, decision_bar_time_utc: int,
+                           strategy_key: str, strategy_version: int, direction: str, observer_version: str,
+                           lifecycle_version: str) -> str:
+    """The full candidate identity (migration 0032's composite UNIQUE, as a
+    string). Every component that can change what a candidate means is in it."""
+    return (f"{mode}|{canonical_symbol}|{resolution}|{decision_bar_time_utc}|{strategy_key}|v{strategy_version}|"
+            f"{direction}|{observer_version}|{lifecycle_version}")
 
 
 def _finite_or_none(value):
@@ -103,22 +124,28 @@ def _finite_or_none(value):
 
 def record_candidates(conn: sqlite3.Connection, candidates: list[ShadowCandidate], *, mode: str,
                       now_utc: int) -> int:
-    """Insert each candidate once (idempotent on its key). Returns rows written."""
+    """Insert each candidate once (idempotent on its full identity: mode,
+    symbol, resolution, decision bar, strategy key + version, direction,
+    observer version, lifecycle version). Returns rows written."""
+    if mode not in ("DEMO", "PAPER"):
+        raise ValueError(f"shadow mode must be DEMO or PAPER, got {mode!r}")
     written = 0
     for c in candidates:
         if c.direction not in ("BUY", "SELL") or not (c.stop_distance > 0 and c.target_distance > 0):
             continue
         features = {k: _finite_or_none(v) for k, v in sorted(c.features.items())}
+        key = c.identity_key(mode)
         cur = conn.execute(
-            "INSERT OR IGNORE INTO shadow_candidates (candidate_key, observer_version, observed_at_utc, mode, "
+            "INSERT OR IGNORE INTO shadow_candidates (candidate_key, observer_version, lifecycle_version, "
+            "observed_at_utc, mode, "
             "canonical_symbol, resolution, bar_seconds, decision_bar_time_utc, decision_time_utc, strategy_key, "
             "strategy_version, direction, raw_score, raw_regime, confirmed_regime, regime_confidence, session, "
             "news_status, news_detail, spread_points, spread_percentile, atr, realized_volatility, movement_to_cost, "
             "stop_distance, target_distance, expected_duration_seconds, estimated_round_trip_cost_price, cost_horizon, "
             "cost_provenance, edge_model, scheduler_lag_seconds, selector_disposition, rejection_reason, "
             "final_permission_result, chain_key, model_observer_score, features_json) VALUES ("
-            + ",".join("?" * 38) + ")",
-            (c.key, OBSERVER_VERSION, now_utc, mode, c.canonical_symbol, c.resolution, c.bar_seconds,
+            + ",".join("?" * 39) + ")",
+            (key, OBSERVER_VERSION, c.lifecycle_version, now_utc, mode, c.canonical_symbol, c.resolution, c.bar_seconds,
              c.decision_bar_time_utc, c.decision_time_utc, c.strategy_key, c.strategy_version, c.direction,
              float(c.raw_score), c.raw_regime, c.confirmed_regime, _finite_or_none(c.regime_confidence), c.session,
              c.news_status, c.news_detail, _finite_or_none(c.spread_points), _finite_or_none(c.spread_percentile),
@@ -126,7 +153,7 @@ def record_candidates(conn: sqlite3.Connection, candidates: list[ShadowCandidate
              c.stop_distance, c.target_distance, c.expected_duration_seconds,
              _finite_or_none(c.estimated_round_trip_cost_price), c.cost_horizon, c.cost_provenance, c.edge_model,
              _finite_or_none(c.scheduler_lag_seconds), c.selector_disposition, c.rejection_reason,
-             c.final_permission_result, c.chain_key or c.key,
+             c.final_permission_result, c.chain_key or key,
              _finite_or_none(c.model_observer_score), json.dumps(features, sort_keys=True)),
         )
         written += cur.rowcount
@@ -204,9 +231,10 @@ def resolve_due(conn: sqlite3.Connection, canonical_symbol: str, bars: list[Bar]
     rows = conn.execute(
         "SELECT c.id, c.direction, c.decision_time_utc, c.stop_distance, c.target_distance, "
         "c.estimated_round_trip_cost_price, c.bar_seconds FROM shadow_candidates c "
-        "WHERE c.canonical_symbol = ? AND (SELECT COUNT(*) FROM shadow_outcomes o WHERE o.candidate_id = c.id) < ? "
+        "WHERE c.canonical_symbol = ? AND c.observer_version = ? "
+        "AND (SELECT COUNT(*) FROM shadow_outcomes o WHERE o.candidate_id = c.id) < ? "
         "AND c.decision_time_utc <= ?",
-        (canonical_symbol, len(horizons), now_utc),
+        (canonical_symbol, OBSERVER_VERSION, len(horizons), now_utc),
     ).fetchall()
     written = 0
     for cid, direction, decision_time, stop, target, cost, bar_seconds in rows:

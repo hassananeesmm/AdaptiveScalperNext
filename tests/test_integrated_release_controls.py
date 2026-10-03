@@ -104,12 +104,14 @@ def test_a_fresh_database_migrates_to_32_with_append_only_shadow_tables(tmp_path
                     "trg_shadow_outcomes_no_update", "trg_shadow_outcomes_no_delete",
                     "trg_shadow_lifecycle_no_update", "trg_shadow_lifecycle_no_delete"):
         assert trigger in names
-    with pytest.raises(sqlite3.IntegrityError):    # the final-permission column is constrained
-        conn.execute("INSERT INTO shadow_candidates (candidate_key, observer_version, observed_at_utc, mode, "
-                     "canonical_symbol, resolution, bar_seconds, decision_bar_time_utc, decision_time_utc, "
-                     "strategy_key, strategy_version, direction, raw_score, stop_distance, target_distance, "
-                     "edge_model, selector_disposition, final_permission_result, chain_key, features_json) VALUES "
-                     "('k','v',1,'DEMO','XAUUSD','M5',300,1,301,'s',1,'BUY',0.5,1,2,'NONE','REJECTED','ALLOW','c','{}')")
+    insert = ("INSERT INTO shadow_candidates (candidate_key, observer_version, lifecycle_version, observed_at_utc, "
+              "mode, canonical_symbol, resolution, bar_seconds, decision_bar_time_utc, decision_time_utc, "
+              "strategy_key, strategy_version, direction, raw_score, stop_distance, target_distance, "
+              "edge_model, selector_disposition, final_permission_result, chain_key, features_json) VALUES "
+              "('k','v','l',1,'DEMO','XAUUSD','M5',300,1,301,'s',1,'BUY',0.5,1,2,'NONE','REJECTED',?,'c','{}')")
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):    # the final-permission column is constrained
+        conn.execute(insert, ("ALLOW",))
+    conn.execute(insert, ("NOT_REACHED",))                        # control: the same row with a legal value
 
 
 # --- 21: incompatible PAPER fingerprint ------------------------------------------------------

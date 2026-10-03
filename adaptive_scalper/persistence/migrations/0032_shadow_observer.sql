@@ -17,10 +17,19 @@
 -- Both tables are append-only (triggers below): rows are evidence, not state.
 -- raw_score is the strategy's heuristic score; the CHECK makes it impossible
 -- to store it as a probability.
+--
+-- Candidate IDENTITY (release hardening): one row per
+-- (mode, symbol, resolution, decision bar, strategy key, strategy VERSION,
+-- direction, observer VERSION, lifecycle VERSION) -- enforced by a composite
+-- UNIQUE constraint, not only by the derived candidate_key string. PAPER and
+-- DEMO, v1 and v2 of a strategy, two observer or lifecycle versions, opposite
+-- directions and different resolutions can therefore never collapse into one
+-- row; re-recording the same identity is a no-op (INSERT OR IGNORE).
 CREATE TABLE shadow_candidates (
     id                              INTEGER PRIMARY KEY,
-    candidate_key                   TEXT NOT NULL UNIQUE,  -- <symbol>:<resolution>:<bar_time>:<strategy>:<direction>
+    candidate_key                   TEXT NOT NULL UNIQUE,  -- shadow/observer.py candidate_identity_key()
     observer_version                TEXT NOT NULL,
+    lifecycle_version               TEXT NOT NULL,         -- shadow/lifecycle.py, or UNDECLARED
     observed_at_utc                 INTEGER NOT NULL,      -- wall clock when written
     mode                            TEXT NOT NULL CHECK (mode IN ('DEMO', 'PAPER')),
     canonical_symbol                TEXT NOT NULL,
@@ -62,7 +71,9 @@ CREATE TABLE shadow_candidates (
                                         ('NOT_REACHED', 'DECIDED_IN_ENTRY_DECISIONS')),
     chain_key                       TEXT NOT NULL,
     model_observer_score            REAL,
-    features_json                   TEXT NOT NULL
+    features_json                   TEXT NOT NULL,
+    UNIQUE (mode, canonical_symbol, resolution, decision_bar_time_utc, strategy_key, strategy_version,
+            direction, observer_version, lifecycle_version)
 );
 CREATE INDEX idx_shadow_candidates_symbol_time ON shadow_candidates(canonical_symbol, decision_time_utc);
 
@@ -88,7 +99,13 @@ CREATE TABLE shadow_outcomes (
     UNIQUE (candidate_id, horizon_seconds)
 );
 
--- shadow_lifecycle_outcomes: one row per candidate -- the exit the EXECUTABLE
+-- An outcome is computed by the observer version that recorded its candidate.
+CREATE TRIGGER trg_shadow_outcomes_observer_version BEFORE INSERT ON shadow_outcomes
+WHEN NEW.observer_version IS NOT (SELECT observer_version FROM shadow_candidates WHERE id = NEW.candidate_id)
+BEGIN SELECT RAISE(ABORT, 'shadow outcome observer_version must equal its candidate''s'); END;
+
+-- shadow_lifecycle_outcomes: one row per (candidate, lifecycle version,
+-- evaluator version) -- the exit the EXECUTABLE
 -- position-management lifecycle would have taken (shadow/lifecycle_counterfactual.py,
 -- the same exit functions as backtest/PAPER, the same decision core as DEMO),
 -- written only once that counterfactual exit has happened in closed bars.
@@ -96,7 +113,7 @@ CREATE TABLE shadow_outcomes (
 -- cost is unknown (never priced as zero).
 CREATE TABLE shadow_lifecycle_outcomes (
     id                      INTEGER PRIMARY KEY,
-    candidate_id            INTEGER NOT NULL UNIQUE REFERENCES shadow_candidates(id),
+    candidate_id            INTEGER NOT NULL REFERENCES shadow_candidates(id),
     status                  TEXT NOT NULL CHECK (status IN ('RESOLVED', 'INSUFFICIENT_DATA')),
     evaluator_version       TEXT NOT NULL,
     lifecycle_version       TEXT NOT NULL,
@@ -118,8 +135,14 @@ CREATE TABLE shadow_lifecycle_outcomes (
     net_r                   REAL,
     holding_seconds         INTEGER,
     cost_provenance         TEXT,
-    bars_used               INTEGER
+    bars_used               INTEGER,
+    UNIQUE (candidate_id, lifecycle_version, evaluator_version)
 );
+
+-- A lifecycle outcome evaluates its candidate's OWN lifecycle version.
+CREATE TRIGGER trg_shadow_lifecycle_version BEFORE INSERT ON shadow_lifecycle_outcomes
+WHEN NEW.lifecycle_version IS NOT (SELECT lifecycle_version FROM shadow_candidates WHERE id = NEW.candidate_id)
+BEGIN SELECT RAISE(ABORT, 'shadow lifecycle outcome lifecycle_version must equal its candidate''s'); END;
 
 CREATE TRIGGER trg_shadow_lifecycle_no_update BEFORE UPDATE ON shadow_lifecycle_outcomes
 BEGIN SELECT RAISE(ABORT, 'shadow_lifecycle_outcomes is append-only'); END;

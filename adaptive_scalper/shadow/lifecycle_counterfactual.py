@@ -162,28 +162,36 @@ def resolve_lifecycles(
 ) -> int:
     """Persist the counterfactual lifecycle outcome of every shadow candidate
     of `canonical_symbol` whose exit has happened in closed bars. Append-only
-    and idempotent (one row per candidate). A candidate that still cannot be
+    and idempotent (one row per candidate, lifecycle version and evaluator
+    version). Only candidates recorded under the strategy version and lifecycle
+    version this process runs are evaluated -- a v1 candidate is never scored
+    with v2 code. A candidate that still cannot be
     resolved `grace_bars` after its maximum possible hold is recorded as
     INSUFFICIENT_DATA rather than guessed. Returns rows written."""
     from adaptive_scalper.shadow.lifecycle import lifecycle_for
 
     params = config.adaptive_exit_params
     rows = conn.execute(
-        "SELECT c.id, c.resolution, c.bar_seconds, c.decision_time_utc, c.strategy_key, c.direction, "
-        "c.stop_distance, c.target_distance, c.raw_score, c.confirmed_regime FROM shadow_candidates c "
-        "LEFT JOIN shadow_lifecycle_outcomes l ON l.candidate_id = c.id "
+        "SELECT c.id, c.resolution, c.bar_seconds, c.decision_time_utc, c.strategy_key, c.strategy_version, "
+        "c.lifecycle_version, c.direction, c.stop_distance, c.target_distance, c.raw_score, c.confirmed_regime "
+        "FROM shadow_candidates c "
+        "LEFT JOIN shadow_lifecycle_outcomes l ON l.candidate_id = c.id AND l.lifecycle_version = c.lifecycle_version "
+        "AND l.evaluator_version = ? "
         "WHERE c.canonical_symbol = ? AND l.id IS NULL AND c.decision_time_utc <= ?",
-        (canonical_symbol, now_utc),
+        (LIFECYCLE_EVALUATOR_VERSION, canonical_symbol, now_utc),
     ).fetchall()
     written = 0
-    for cid, resolution, bar_seconds, decision, key, direction, stop, target, score, regime in rows:
+    for (cid, resolution, bar_seconds, decision, key, strategy_version, lifecycle_version, direction, stop, target,
+         score, regime) in rows:
         limit = (params.max_holding_seconds if params.max_holding_enabled else 86_400) + bar_seconds
         expired = now_utc > decision + limit + grace_bars * bar_seconds
         strategy = strategies.get(key)
         try:
-            lifecycle_version = lifecycle_for(key).lifecycle_version
+            current_lifecycle = lifecycle_for(key).lifecycle_version
         except KeyError:
-            lifecycle_version = "UNDECLARED"
+            current_lifecycle = "UNDECLARED"
+        if strategy is not None and (strategy.version != strategy_version or current_lifecycle != lifecycle_version):
+            continue                                   # recorded under other code; never re-scored with this one
         if strategy is None:
             outcome = LifecycleOutcome(INSUFFICIENT_DATA)
         else:
