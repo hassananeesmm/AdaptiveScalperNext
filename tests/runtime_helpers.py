@@ -130,9 +130,8 @@ def build_engine(tmp_path, *, mode: str, clock: FakeClock, gateway=None, bars=No
     components = components or RuntimeComponents()
     if edge_evidence is not None:
         components.edge_evidence = edge_evidence
-        # A test provider carries the test-only key/protocol its certificates verify against.
-        components.certificate_key = getattr(edge_evidence, "certificate_key", None)
-        components.validation_protocol = getattr(edge_evidence, "validation_protocol", None)
+        # A test provider carries the test-only PUBLIC key its certificates verify against.
+        components.certificate_public_key = getattr(edge_evidence, "certificate_public_key", None)
     if components.news_providers is None:
         components.news_providers = news if news is not None else [StaticNewsProvider()]
     engine = RuntimeEngine(config, conn, gateway, clock=clock, monotonic=clock, components=components)

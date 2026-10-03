@@ -69,7 +69,6 @@ from adaptive_scalper.costs.edge import ALLOW as _COST_ALLOW
 from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED as _COST_BLOCK_EDGE_UNVALIDATED
 from adaptive_scalper.costs.edge import evaluate_cost_gate, executable_edge_check
 from adaptive_scalper.costs.edge_evidence import EdgeEvidence
-from adaptive_scalper.validation.certificate import CURRENT_PROTOCOL, ProtocolThresholds
 from adaptive_scalper.costs.model import CostEstimate
 from adaptive_scalper.execution.reconciliation import CLEAN as _RECONCILIATION_CLEAN
 from adaptive_scalper.gateway.demo_gate import DemoVerificationResult
@@ -131,11 +130,14 @@ class FinalPermissionInput:
     # None -- the default, and the only possibility until a calibration has
     # passed a preregistered protocol -- blocks with BLOCK_EDGE_UNVALIDATED.
     edge_evidence: EdgeEvidence | None = None
-    # Certificate verification inputs (validation/certificate.py). No key ->
-    # nothing verifies -> BLOCK_EDGE_UNVALIDATED.
-    certificate_key: bytes | None = None
+    # Certificate verification inputs (validation/certificate.py): the Ed25519
+    # PUBLIC key only (no key -> nothing verifies) and the proposal's causal
+    # feature vector, from which P(win) is recomputed with the certified
+    # model. The protocol is NOT an input: verification always uses the
+    # module's CURRENT_PROTOCOL.
+    public_key: bytes | None = None
     now_utc: int | None = None
-    validation_protocol: ProtocolThresholds = CURRENT_PROTOCOL
+    proposal_features: dict | None = None
     # Config `strategies.entry_suspended` (release 0.2.8). Checked here too, so
     # a suspended strategy can never reach broker exposure even if a caller
     # skipped the pre-selector filter or holds verified evidence for it.
@@ -220,14 +222,14 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
     # BLOCK_EDGE_UNVALIDATED (issue #6, audit section 8).
     cost_decision, edge_eval = evaluate_cost_gate(
         inp.signal, inp.cost_estimate, inp.min_net_edge_price, evidence=inp.edge_evidence, executable=True,
-        certificate_key=inp.certificate_key, now_utc=inp.now_utc, protocol=inp.validation_protocol,
+        public_key=inp.public_key, now_utc=inp.now_utc, proposal_features=inp.proposal_features,
     )
     if cost_decision != _COST_ALLOW:
         if edge_eval is not None:
             detail = edge_eval.reason
         elif cost_decision == _COST_BLOCK_EDGE_UNVALIDATED:
-            check = executable_edge_check(inp.signal, inp.edge_evidence, certificate_key=inp.certificate_key,
-                                          now_utc=inp.now_utc, protocol=inp.validation_protocol)
+            check = executable_edge_check(inp.signal, inp.edge_evidence, public_key=inp.public_key,
+                                          now_utc=inp.now_utc, proposal_features=inp.proposal_features)
             detail = (f"no verified edge evidence for this proposal ({check.reason}); "
                       f"a raw score is not a probability")
         else:

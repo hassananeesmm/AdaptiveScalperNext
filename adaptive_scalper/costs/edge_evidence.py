@@ -77,7 +77,7 @@ class EdgeEvidence:
         EV_gross_price = stop * (p * avg_realized_win_r - (1 - p) * avg_realized_loss_r)
 
     The status string alone authorizes nothing: every executable gate re-runs
-    `validation.certificate.verify_certificate` (seal, binding, freshness,
+    `validation.certificate.verify_certificate` (Ed25519 signature, binding, freshness,
     current protocol) at the moment of use."""
 
     expected_gross_edge_price: float
@@ -86,6 +86,12 @@ class EdgeEvidence:
     probability: CalibratedWinProbability | None = None
     certificate: ValidationCertificate | None = None
     stop_distance_price: float | None = None
+    # The exact certified artifacts (their SHA-256 are signed in the
+    # certificate). The executable gate RECOMPUTES p from these and the
+    # proposal's causal features; `probability` is only the provider's
+    # claim and must equal the recomputation.
+    model_artifact: bytes | None = None
+    calibrator_artifact: bytes | None = None
 
     def __post_init__(self) -> None:
         if self.status not in EVIDENCE_STATUSES:
@@ -95,6 +101,8 @@ class EdgeEvidence:
         if self.status == EVIDENCE_VALIDATED:
             if self.probability is None or not isinstance(self.certificate, ValidationCertificate):
                 raise ValueError("VALIDATED evidence needs a calibrated probability and a ValidationCertificate")
+            if not isinstance(self.model_artifact, bytes) or not isinstance(self.calibrator_artifact, bytes):
+                raise ValueError("VALIDATED evidence needs the certified model and calibrator artifacts")
             if self.stop_distance_price is None or not self.stop_distance_price > 0:
                 raise ValueError("VALIDATED evidence needs the proposal's positive stop distance")
             cert = self.certificate
@@ -109,9 +117,11 @@ class EdgeEvidence:
     @classmethod
     def from_certificate(
         cls, certificate: ValidationCertificate, probability: CalibratedWinProbability, *, stop_distance_price: float,
+        model_artifact: bytes, calibrator_artifact: bytes,
     ) -> "EdgeEvidence":
         return cls(_ev_price(probability.value, certificate, stop_distance_price), EVIDENCE_VALIDATED,
-                   certificate.model_id, probability, certificate, stop_distance_price)
+                   certificate.model_id, probability, certificate, stop_distance_price, model_artifact,
+                   calibrator_artifact)
 
 
 def _ev_price(p: float, cert: ValidationCertificate, stop_distance_price: float) -> float:

@@ -53,7 +53,7 @@ from adaptive_scalper.costs.edge_evidence import (
     require_executable_provider,
 )
 from adaptive_scalper.costs.swap_horizon import swap_price_for_horizon
-from adaptive_scalper.validation.certificate import CURRENT_PROTOCOL, ProtocolThresholds, load_certificate_key
+from adaptive_scalper.validation.certificate import load_certificate_public_key
 from adaptive_scalper.execution.reconciliation import (
     CLEAN,
     get_open_positions,
@@ -247,16 +247,17 @@ class DemoRuntime:
     # Closed bars from the latest analysis, reused by the shadow observer so
     # it needs no extra broker read.
     shadow_bars: dict[str, list] = field(default_factory=dict)
-    # Edge-certificate verification (validation/certificate.py). None -> read
-    # the key file named by ASN_EDGE_CERTIFICATE_KEY_FILE; still none -> no
-    # certificate verifies -> every proposal stays FLAT.
-    certificate_key: bytes | None = None
-    validation_protocol: ProtocolThresholds = CURRENT_PROTOCOL
+    # Edge-certificate verification (validation/certificate.py): the Ed25519
+    # PUBLIC key only. None -> read the file named by
+    # ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE; still none -> no certificate
+    # verifies -> every proposal stays FLAT. The runtime never holds the
+    # private signing seed and has no way to choose the validation protocol.
+    public_key: bytes | None = None
 
     def __post_init__(self) -> None:
         require_executable_provider(self.edge_evidence, "DEMO runtime")
-        if self.certificate_key is None:
-            self.certificate_key = load_certificate_key()
+        if self.public_key is None:
+            self.public_key = load_certificate_public_key()
         self.risk_limits = risk_limits_from_config(self.config.risk)
         self.portfolio_limits = portfolio_risk_limits_from_risk_limits(self.risk_limits.max_total_open_risk_pct)
         self.resolution = self.config.runtime.entry_resolution
@@ -899,7 +900,8 @@ class DemoRuntime:
             cost_estimate=live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
                                              max_hold_seconds=max_hold_horizon_seconds(self.exit_params)),
             edge_evidence=executable_evidence(self.edge_evidence.for_signal(signal)),
-            certificate_key=self.certificate_key, now_utc=now, validation_protocol=self.validation_protocol,
+            public_key=self.public_key, now_utc=now,
+            proposal_features=(self.latest[canonical].feature_vector if canonical in self.latest else None),
             entry_suspended_strategy_keys=frozenset(self.config.strategies.entry_suspended),
             open_or_pending_symbols=sorted({p.canonical_symbol for p in open_positions + pending}),
             correlation_matrix=self.correlation,

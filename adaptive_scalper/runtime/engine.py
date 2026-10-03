@@ -114,9 +114,10 @@ class RuntimeComponents:
     # (issue #6). DemoRuntime/PaperRuntime refuse the legacy V1 replay provider.
     edge_evidence: object | None = None
     # Tests only: an explicit certificate key / protocol. Production leaves
-    # both None -> key from ASN_EDGE_CERTIFICATE_KEY_FILE, CURRENT_PROTOCOL.
-    certificate_key: bytes | None = None
-    validation_protocol: object | None = None
+    # None -> public key from ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE. There is no
+    # protocol component: the executable path always verifies against
+    # validation.certificate.CURRENT_PROTOCOL.
+    certificate_public_key: bytes | None = None
 
 
 class RuntimeEngine:
@@ -309,8 +310,7 @@ class RuntimeEngine:
         if self.mode == "DEMO":
             optional = {name: value for name, value in (
                 ("edge_evidence", self.components.edge_evidence),
-                ("certificate_key", self.components.certificate_key),
-                ("validation_protocol", self.components.validation_protocol),
+                ("public_key", self.components.certificate_public_key),
             ) if value is not None}
             self.demo = DemoRuntime(self.conn, self.gateway, self.config, self.symbols, registry, self.news, advisory,
                                     clock=self.clock, **optional)

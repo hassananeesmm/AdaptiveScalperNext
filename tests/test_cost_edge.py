@@ -33,7 +33,7 @@ from adaptive_scalper.costs.edge_evidence import (
 )
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.strategies.base import StrategySignal
-from edge_fixtures import TEST_CERTIFICATE_KEY, TEST_PROTOCOL, fixture_certificate, fixture_validated_evidence
+from edge_fixtures import TEST_PUBLIC_KEY, fixture_certificate, fixture_validated_evidence
 
 
 def _signal(**overrides) -> StrategySignal:
@@ -58,9 +58,9 @@ def _validated(p=0.55, win=2.0, loss=1.0) -> EdgeEvidence:
 
 
 def _gate(signal, cost, evidence, **kw):
-    """The executable gate with the TEST key/clock/protocol the fixtures verify against."""
-    return evaluate_cost_gate(signal, cost, evidence=evidence, certificate_key=TEST_CERTIFICATE_KEY, now_utc=10_000,
-                              protocol=TEST_PROTOCOL, **kw)
+    """The executable gate with the TEST public key/clock the fixtures verify against."""
+    return evaluate_cost_gate(signal, cost, evidence=evidence, public_key=TEST_PUBLIC_KEY, now_utc=10_000,
+                              proposal_features=kw.pop("proposal_features", {}), **kw)
 
 
 def _legacy(signal):
@@ -145,15 +145,22 @@ def test_reason_string_names_costs_and_evidence():
 
 # --- evidence types ------------------------------------------------------------------
 
+def cert_ev(cert, p, stop=1.0):
+    return stop * (p * cert.avg_realized_win_r - (1 - p) * cert.avg_realized_loss_r)
+
+
 def test_validated_evidence_requires_probability_certificate_and_stop():
     cert = fixture_certificate()
     with pytest.raises(ValueError):
         EdgeEvidence(0.1, EVIDENCE_VALIDATED, "m")                       # bare status string
-    with pytest.raises(ValueError):                                        # stated EV inconsistent with the certificate
-        EdgeEvidence(5.0, EVIDENCE_VALIDATED, cert.model_id,
-                     CalibratedWinProbability(0.5, f"{cert.model_id}:{cert.model_version}", "platt", 10), cert, 1.0)
+    probability = CalibratedWinProbability(0.5, f"{cert.model_id}:{cert.model_version}", "platt", 10)
+    with pytest.raises(ValueError, match="artifacts"):                     # no certified artifacts
+        EdgeEvidence(cert_ev(cert, 0.5), EVIDENCE_VALIDATED, cert.model_id, probability, cert, 1.0)
+    with pytest.raises(ValueError, match="expected edge"):                 # stated EV inconsistent with the certificate
+        EdgeEvidence(5.0, EVIDENCE_VALIDATED, cert.model_id, probability, cert, 1.0, b"{}", b"{}")
     with pytest.raises(ValueError):                                        # probability from another model
-        EdgeEvidence.from_certificate(cert, CalibratedWinProbability(0.5, "other:1", "platt", 10), stop_distance_price=1.0)
+        EdgeEvidence.from_certificate(cert, CalibratedWinProbability(0.5, "other:1", "platt", 10), stop_distance_price=1.0,
+                                      model_artifact=b"{}", calibrator_artifact=b"{}")
 
 
 @pytest.mark.parametrize("value", [0.0, 1.0, -0.1, 1.5, float("nan")])
