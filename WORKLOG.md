@@ -3054,3 +3054,48 @@ check or order send occurred.
 - Migrations: fresh 1->32 quick_check ok / 0 FK violations; online-backup copy of production (read-only source)
   31->32: only schema_migrations changed across 42 non-sealed tables, shadow schema identical to fresh; copy deleted.
 - ASN-032 design note: docs/design/ASN-032_SHADOW_PROCESS_ISOLATION.md (not implemented).
+
+## 2026-10-06..08 -- risk and blackout tightening (branch `hardening/risk-and-blackout-tightening`, no deployment)
+
+- Operator request. The branch had been created on the main checkout at `d9c1bd1` (v0.2.7, the deployed code);
+  it carried no commits, so it was moved to `a073ec1` (`hardening/flat-shadow-release`) and checked out in
+  `.worktrees/risk-tightening`; the main checkout went back to detached `d9c1bd1` (same commit, no file change).
+  Deployed runtime, production DB (schema 31), release branches and REAL untouched.
+- Scope: tighten-only safety changes. No strategy, selector, entry, exit, sizing or edge-gate change; V1 freeze
+  test unchanged and passing.
+- News: `config/default.toml [news] pre_high_impact_minutes` 15 -> 30 (window now [-30, +30) minutes). The code
+  default stays 15 (directive section 41 "Default"); the shipped config widens it, which only blocks more.
+  Tests: `tests/test_news_blocking.py` (shipped window, both boundaries, both symbols; widened window is a
+  superset of the default).
+- Daily loss counts floating loss: `risk.governor.effective_daily_loss_pct` =
+  -100 * (realized + min(0, floating)) / min(day-start equity, current equity), floored at 0, percent units
+  (2.00 == 2 %); non-finite or non-positive denominator -> +inf (treated as breached). `min(...)` keeps it never
+  more lenient than the old realized / current-equity figure. `RiskGateInput` gained `daily_floating_pnl` (0.0)
+  and `day_start_equity` (None = old behaviour; the backtest still passes neither). DEMO: floating =
+  account equity - balance (all positions, swap included), day-start equity = balance - today's realized P&L,
+  used by `global_entry_block` and the final-permission risk gate.
+- Daily loss circuit breaker (`DemoRuntime._daily_loss_circuit_breaker`, every position cycle after
+  reconciliation): on breach it engages the kill switch (actor `risk_governor:daily_loss_circuit_breaker`, only
+  once; only the operator clears it), journals DAILY_LOSS_CIRCUIT_BREAKER, closes every locally tracked open
+  position via `close_position_safely` (durable close request, fresh-truth resolution; positions with an
+  unresolved close are skipped), and skips normal exit reviews that cycle. DEMO sends only market DEALs, so
+  there are no resting entry orders to cancel; any working order with the runtime's magic is journaled as
+  DAILY_LOSS_WORKING_ORDERS for the operator (the runtime has no cancel path). A close whose broker truth cannot
+  be read raises Mt5QueryError (cycle degraded, entries blocked). Tests: `tests/test_daily_loss_circuit_breaker.py`,
+  `tests/test_risk_governor.py`.
+- Hard spread cap: `costs.<SYMBOL>.max_spread_price` (XAUUSD 0.20, BTCUSD 15.0; DEMO quote evidence n=212 / 294:
+  XAUUSD median 0.08 / p99 0.12 / max 0.40, BTCUSD median 5.0 / p90 6.0 / p99 40.65). Enforced in
+  `execution.service._verify_critical_broker_state` on the fresh tick at BOTH pre-send rounds
+  (`BLOCKED_BROKER_STATE`, reason prefix `BLOCK_SPREAD`); `submit_new_entry` requires `max_spread_price` from
+  every caller and `None` blocks (fail closed: GBPJPY has no cap). Config rejects a non-positive / infinite cap.
+  `preflight`: new `spread_caps` check (missing cap = DEMO blocker) and `live_spread` (above cap = warning only;
+  the execution boundary blocks per entry). `order_check_probe` inspected: it never sends, so it has no cap.
+  Tests: `tests/test_spread_cap.py`, `tests/test_preflight.py`; test helpers pass explicit generous caps.
+- Doctor/preflight were run against an online-backup COPY of the production DB in the session scratchpad
+  (`doctor` migrates the DB it opens; this branch carries unreleased migration 0032). doctor: OK (schema 32 on the
+  copy, kill switch DISENGAGED, MT5 reachable, DEMO, server clock VERIFIED for all symbols). preflight on the copy:
+  READY_FOR_PAPER, `spread_caps` PASS, `live_spread` PASS; only DEMO blocker "no fresh CLEAN reconciliation
+  snapshot" (no runtime running). Production schema confirmed still 31.
+- Full suite (Windows, shared .venv, serial): 2055 passed / 9 skipped / 0 failed / 2 warnings (11 min 7 s); the two
+  preflight spread tests added afterwards plus `tests/test_v1_strategy_freeze.py`: 15 passed. Not done: commit
+  push/PR, release build, deployment, live-DEMO verification (operator).

@@ -23,7 +23,21 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-10-03, branch `hardening/flat-shadow-release`) — HARDENED RELEASE CANDIDATE, NOT DEPLOYED
+## Current phase (2026-10-08, branch `hardening/risk-and-blackout-tightening`) — TIGHTENING ON THE HARDENED CANDIDATE, NOT DEPLOYED
+
+**Strategy status unchanged: NO VALIDATED NET EDGE — FLAT.** Tighten-only safety changes on top of `a073ec1`
+(details: WORKLOG 2026-10-06..08):
+- news blackout `[news] pre_high_impact_minutes` 15 -> 30: window [-30, +30) minutes (code default stays the
+  directive's 15);
+- daily loss = realized + floating LOSS over min(day-start, current) equity (percent units); a breach blocks
+  entries and, in DEMO, trips a circuit breaker that engages the kill switch (operator clears) and closes tracked
+  open positions through the safe close service;
+- hard per-symbol live-spread cap `costs.<SYMBOL>.max_spread_price` (XAUUSD 0.20, BTCUSD 15.0) at both pre-send
+  rounds; no cap = no DEMO entry; preflight reports `spread_caps` / `live_spread`.
+Status: IMPLEMENTED, TESTED-FAKE, TESTED-WINDOWS (suite: 2055 passed / 9 skipped / 0 failed / 2 warnings serially in 11 min, plus the 2 later preflight tests, 15/15 with the V1 freeze test). Doctor OK against a production-DB
+COPY only. Not live-DEMO-verified. Deployed runtime 0.2.7, production DB (schema 31) and REAL untouched.
+
+## Previous phase (2026-10-03, branch `hardening/flat-shadow-release`) — HARDENED RELEASE CANDIDATE, NOT DEPLOYED
 
 **Strategy status: NO VALIDATED NET EDGE — FLAT.** Final FLAT/SHADOW release hardening on top of `bd4cfc7`
 (docs/audits/FINAL_FLAT_SHADOW_RELEASE_HARDENING.md):

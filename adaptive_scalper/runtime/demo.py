@@ -36,6 +36,8 @@ from typing import Callable
 
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.final_permission import FinalPermissionInput
+from adaptive_scalper.core.kill_switch import KillSwitchStatus
+from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.costs.model import (
     HORIZON_REMAINING_EXIT,
@@ -64,6 +66,7 @@ from adaptive_scalper.execution.reconciliation import (
     run_reconciliation,
     BrokerPositionSnapshot,
 )
+from adaptive_scalper.execution.close import close_position_safely
 from adaptive_scalper.execution.close_requests import has_unresolved_close, resolve_unresolved_closes
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions
 from adaptive_scalper.costs.observations import record_entry_observation
@@ -91,7 +94,12 @@ from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParam
 from adaptive_scalper.position_management.manager import PositionReviewInput, review_position_once
 from adaptive_scalper.position_management.re_entry import ReentryParams, evaluate_reentry
 from adaptive_scalper.regimes.classifier import RegimeClassification, RegimeTracker, classify_regime
-from adaptive_scalper.risk.governor import RiskGateInput, calculate_safe_volume, risk_limits_from_config
+from adaptive_scalper.risk.governor import (
+    RiskGateInput,
+    calculate_safe_volume,
+    effective_daily_loss_pct,
+    risk_limits_from_config,
+)
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
@@ -274,6 +282,70 @@ class DemoRuntime:
         deals = self.gateway.history_deals_get(day_start, now + 60)
         return sum(d.profit + d.commission + d.swap + d.fee for d in deals)
 
+    def _daily_loss(self, now: int, account) -> tuple[float, float, float, float]:
+        """(effective daily loss %, realized today, floating now, day-start
+        equity). Floating = broker equity - balance (every open position,
+        swap included); day-start equity = balance - today's realized P&L
+        (deposits/withdrawals today are not modelled; the denominator is
+        still capped at current equity, risk.governor.effective_daily_loss_pct)."""
+        realized = self._daily_realized_pnl(now)
+        floating = account.equity - account.balance
+        day_start = account.balance - realized
+        pct = effective_daily_loss_pct(realized_pnl=realized, floating_pnl=floating,
+                                       day_start_equity=day_start, equity=account.equity)
+        return pct, realized, floating, day_start
+
+    def _daily_loss_circuit_breaker(self, now: int, broker_positions: dict) -> bool:
+        """Hard daily circuit breaker. When realized + floating loss reaches
+        `max_daily_loss_pct`: engage the kill switch (new entries stay
+        blocked until the OPERATOR clears it -- this never clears it) and
+        close every locally tracked open position through the safe close
+        service (durable close request, fresh-truth resolution). DEMO only
+        sends market DEALs, so there are no resting entry orders to cancel;
+        any working order seen with this runtime's magic is surfaced as an
+        incident event. Returns True when the breaker is tripped (the cycle
+        then skips normal exit reviews)."""
+        account = self.gateway.account_info()
+        if account is None:
+            raise Mt5QueryError("account_info unavailable for the daily loss circuit breaker")
+        pct, realized, floating, day_start = self._daily_loss(now, account)
+        if pct < self.risk_limits.max_daily_loss_pct:
+            return False
+        reason = (f"daily loss circuit breaker: {pct:.2f}% >= max_daily_loss_pct "
+                  f"{self.risk_limits.max_daily_loss_pct}% (realized {realized:.2f}, floating {floating:.2f}, "
+                  f"day-start equity {day_start:.2f})")
+        kill = get_kill_switch_state(self.conn)
+        if kill.status != KillSwitchStatus.ENGAGED:
+            engage_kill_switch(self.conn, reason, actor="risk_governor:daily_loss_circuit_breaker")
+        record_event(self.conn, "BLOCKED", "risk", "DAILY_LOSS_CIRCUIT_BREAKER", reason,
+                     dedup_key=f"daily_loss_breaker:{now // 86400}", now_utc=now)
+        truth_error: str | None = None
+        for local in get_open_positions(self.conn):
+            live = broker_positions.get(local.broker_position_id)
+            if live is None or has_unresolved_close(self.conn, local.broker_position_id):
+                continue  # reconciliation / close resolution own these
+            outcome = close_position_safely(
+                self.gateway, broker_position_id=local.broker_position_id, expected_direction=local.direction,
+                expected_volume=live.volume, broker_symbol=live.symbol, magic=self.config.runtime.magic,
+                comment="ASN daily-loss flatten", clock=self.clock, conn=self.conn,
+                reconciliation_chain_key=f"daily-loss-breaker:{local.id}",
+            )
+            record_event(self.conn, "WARNING", "risk", "DAILY_LOSS_FLATTEN",
+                         f"position {local.broker_position_id}: {outcome.status}: {outcome.detail}",
+                         canonical_symbol=local.canonical_symbol,
+                         dedup_key=f"daily_loss_flatten:{local.broker_position_id}:{outcome.status}", now_utc=now)
+            if outcome.broker_truth_error is not None and truth_error is None:
+                truth_error = outcome.broker_truth_error
+        working = [o for o in self.gateway.orders_get() if o.magic == self.config.runtime.magic]
+        if working:
+            record_event(self.conn, "BLOCKED", "risk", "DAILY_LOSS_WORKING_ORDERS",
+                         f"{len(working)} working order(s) with this runtime's magic while the daily loss breaker "
+                         f"is tripped: {[o.broker_order_id for o in working]} -- the runtime has no cancel path; "
+                         f"operator action required", dedup_key=f"daily_loss_orders:{now // 86400}", now_utc=now)
+        if truth_error is not None:
+            raise Mt5QueryError(f"broker truth unavailable after a daily-loss flatten: {truth_error}")
+        return True
+
     def _peak_equity(self, equity: float, now: int) -> float:
         peak = max(float(get_state(self.conn, "peak_equity", equity)), equity)
         put_state(self.conn, "peak_equity", peak, now_utc=now)
@@ -345,9 +417,10 @@ class DemoRuntime:
             return news_block
         account = self.gateway.account_info()
         equity = account.equity
-        daily = self._daily_realized_pnl(now)
-        if daily < 0 and abs(daily) / equity * 100 >= self.risk_limits.max_daily_loss_pct:
-            return BLOCK_RISK, f"daily loss {abs(daily) / equity * 100:.2f}% reached the limit"
+        daily_pct, realized, floating, _ = self._daily_loss(now, account)
+        if daily_pct >= self.risk_limits.max_daily_loss_pct:
+            return BLOCK_RISK, (f"daily loss {daily_pct:.2f}% (realized {realized:.2f}, floating {floating:.2f}) "
+                                f"reached the limit")
         peak = self._peak_equity(equity, now)
         if peak > 0 and (peak - equity) / peak * 100 >= self.risk_limits.max_drawdown_pct:
             return BLOCK_RISK, f"drawdown {(peak - equity) / peak * 100:.2f}% reached the limit"
@@ -482,6 +555,8 @@ class DemoRuntime:
                              dedup_key=f"close_unresolved:{resolution.broker_position_id}", now_utc=now)
 
         broker_positions = {p.broker_position_id: p for p in self.gateway.positions_get()}
+        if self._daily_loss_circuit_breaker(now, broker_positions):
+            return  # flattening this cycle; normal exit reviews resume once nothing is left to close
         truth_failure: Exception | None = None
         for local in get_open_positions(self.conn):
             live = broker_positions.get(local.broker_position_id)
@@ -830,6 +905,7 @@ class DemoRuntime:
             stop_loss=round(price - sign * signal.stop_distance, spec.digits),
             take_profit=round(price + sign * signal.target_distance, spec.digits),
             fetch_fresh_evidence=lambda: self.fresh_evidence(canonical, signal, sizing.monetary_risk),
+            max_spread_price=self.config.cost_for(canonical).max_spread_price,
             magic=self.config.runtime.magic, comment="ASN", now_utc=now, clock=self.clock,
         )
         if not outcome.status.startswith("BLOCK"):
@@ -886,6 +962,7 @@ class DemoRuntime:
         pending_only = [o for o in get_active_orders(self.conn)
                         if o.state.value in _OPEN_EXPOSURE_ORDER_STATES and o.canonical_symbol not in open_symbols]
         reentry = self._reentry_check(canonical, signal, now)
+        realized_today = self._daily_realized_pnl(now)
         permission = FinalPermissionInput(
             mode=MODE, signal=signal, kill_switch_state=get_kill_switch_state(self.conn),
             demo_verification=verify_demo_before_order(self.gateway),
@@ -911,7 +988,9 @@ class DemoRuntime:
                 current_total_pending_risk=sum(p.monetary_risk for p in pending),
                 current_positions_count=len(open_positions) + len(pending_only),
                 current_positions_for_symbol=len(same_symbol),
-                daily_realized_pnl=self._daily_realized_pnl(now), peak_equity=self._peak_equity(account.equity, now),
+                daily_realized_pnl=realized_today, peak_equity=self._peak_equity(account.equity, now),
+                daily_floating_pnl=account.equity - account.balance,
+                day_start_equity=account.balance - realized_today,
             ),
             risk_limits=self.risk_limits, open_positions=open_positions, pending_positions=pending,
             portfolio_risk_limits=self.portfolio_limits, reentry_check=reentry,

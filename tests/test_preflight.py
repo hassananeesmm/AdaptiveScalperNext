@@ -57,3 +57,30 @@ def test_preflight_command_is_json_and_blocked_without_live_mt5(tmp_path, capsys
     assert code == 1
     assert body["result"] == "BLOCKED"
     assert body["checks"]
+
+
+def _no_mt5(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("MT5 not available in this test")
+    monkeypatch.setattr("adaptive_scalper.preflight.create_live_gateway", unavailable)
+
+
+def test_preflight_blocks_demo_when_a_symbol_has_no_spread_cap(tmp_path, monkeypatch):
+    _no_mt5(monkeypatch)
+    cfg, _ = _config(tmp_path)  # no [costs] section: no max_spread_price anywhere
+    report = run_preflight(cfg, dashboard_url="http://127.0.0.1:1", now_utc=1_800_000_000)
+    check = next(c for c in report["checks"] if c["name"] == "spread_caps")
+    assert check["status"] == "FAIL"
+    assert any("max_spread_price" in reason and "XAUUSD" in reason for reason in report["demo_blockers"])
+
+
+def test_preflight_passes_spread_caps_when_every_symbol_is_capped(tmp_path, monkeypatch):
+    _no_mt5(monkeypatch)
+    cfg, _ = _config(tmp_path)
+    with open(cfg, "a", encoding="utf-8") as f:
+        for symbol in ("XAUUSD", "GBPJPY", "BTCUSD"):
+            f.write(f"[costs.{symbol}]\nmax_spread_price = 1.0\n")
+    report = run_preflight(cfg, dashboard_url="http://127.0.0.1:1", now_utc=1_800_000_000)
+    check = next(c for c in report["checks"] if c["name"] == "spread_caps")
+    assert check["status"] == "PASS"
+    assert not any("max_spread_price" in reason for reason in report["demo_blockers"])

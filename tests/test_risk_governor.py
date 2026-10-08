@@ -6,6 +6,7 @@ construction) and the hard portfolio risk ceilings.
 from __future__ import annotations
 
 import inspect
+import math
 
 import pytest
 
@@ -17,6 +18,7 @@ from adaptive_scalper.risk.governor import (
     RiskGateInput,
     RiskLimits,
     calculate_safe_volume,
+    effective_daily_loss_pct,
     evaluate_risk_gate,
     risk_limits_from_config,
 )
@@ -379,3 +381,83 @@ def test_risk_limits_from_default_config_matches_directive_defaults():
     assert limits.max_drawdown_pct == 5.00
     assert limits.max_open_positions == 2
     assert limits.max_positions_per_symbol == 1
+
+
+# --------------------------------------------------------------------------
+# Daily loss = realized + floating LOSS (2026-10-06 tightening)
+# --------------------------------------------------------------------------
+
+def _daily_input(*, equity, realized, floating, day_start=None, peak=10000.0) -> RiskGateInput:
+    return RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=equity,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=realized, peak_equity=peak,
+        daily_floating_pnl=floating, day_start_equity=day_start,
+    )
+
+
+def test_effective_daily_loss_formula_is_percent_of_day_start_equity():
+    # -100 * (-100 + min(0, -100)) / 10000 = 2.00 (percent, the max_daily_loss_pct unit)
+    assert effective_daily_loss_pct(realized_pnl=-100.0, floating_pnl=-100.0,
+                                    day_start_equity=10000.0, equity=10000.0) == pytest.approx(2.0)
+
+
+def test_floating_gain_never_offsets_a_realized_loss():
+    assert effective_daily_loss_pct(realized_pnl=-150.0, floating_pnl=+500.0,
+                                    day_start_equity=10000.0, equity=10350.0) == pytest.approx(1.5)
+
+
+def test_daily_profit_is_zero_loss_not_negative():
+    assert effective_daily_loss_pct(realized_pnl=300.0, floating_pnl=0.0,
+                                    day_start_equity=10000.0, equity=10300.0) == 0.0
+
+
+def test_denominator_is_never_more_lenient_than_current_equity():
+    # day start 10000, equity 9800: the smaller (9800) is used -> 200/9800 = 2.04 %
+    pct = effective_daily_loss_pct(realized_pnl=-200.0, floating_pnl=0.0, day_start_equity=10000.0, equity=9800.0)
+    assert pct == pytest.approx(200.0 / 9800.0 * 100.0)
+
+
+@pytest.mark.parametrize("kwargs", [
+    dict(realized_pnl=math.nan, floating_pnl=0.0, day_start_equity=10000.0, equity=10000.0),
+    dict(realized_pnl=0.0, floating_pnl=math.inf, day_start_equity=10000.0, equity=10000.0),
+    dict(realized_pnl=0.0, floating_pnl=0.0, day_start_equity=-1.0, equity=10000.0),
+    dict(realized_pnl=0.0, floating_pnl=0.0, day_start_equity=math.nan, equity=10000.0),
+])
+def test_unknowable_daily_loss_is_treated_as_breached(kwargs):
+    assert effective_daily_loss_pct(**kwargs) == math.inf
+
+
+def test_risk_gate_blocks_on_floating_loss_alone():
+    # realized 0, open positions -200 floating on a 10000 day start: 2.0 % -> breach
+    decision, reason = evaluate_risk_gate(
+        _daily_input(equity=9800.0, realized=0.0, floating=-200.0, day_start=10000.0), _limits())
+    assert decision == BLOCK_RISK
+    assert "max_daily_loss_pct" in reason and "floating loss -200.00" in reason
+
+
+def test_risk_gate_blocks_on_realized_plus_floating_crossing_the_limit():
+    # neither alone breaches (1.2 % and 0.9 %), together 2.1 %
+    decision, reason = evaluate_risk_gate(
+        _daily_input(equity=9790.0, realized=-120.0, floating=-90.0, day_start=10000.0), _limits())
+    assert decision == BLOCK_RISK
+    assert "max_daily_loss_pct" in reason
+
+
+def test_risk_gate_allows_combined_loss_just_under_the_limit():
+    decision, _ = evaluate_risk_gate(
+        _daily_input(equity=9810.0, realized=-100.0, floating=-90.0, day_start=10000.0), _limits())
+    assert decision == ALLOW  # 190/9810 = 1.94 %
+
+
+def test_risk_gate_without_floating_fields_keeps_the_realized_only_behaviour():
+    # Callers that do not supply floating/day-start (the backtest) are unchanged.
+    inp = RiskGateInput(
+        proposed_symbol="XAUUSD", proposed_monetary_risk=10.0, equity=9800,
+        current_total_open_risk=0.0, current_total_pending_risk=0.0,
+        current_positions_count=0, current_positions_for_symbol=0,
+        daily_realized_pnl=-199.0, peak_equity=10000,
+    )
+    decision, _ = evaluate_risk_gate(inp, _limits())
+    assert decision == BLOCK_RISK  # 199/9800 = 2.03 %, exactly as before

@@ -14,6 +14,7 @@ always retire at least RETIRED_STRATEGY_KEYS. It can never widen either.
 
 from __future__ import annotations
 
+import math
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -191,12 +192,23 @@ class SymbolCostConfig(BaseModel):
     slippage_price: float | None = None
     swap_per_lot_per_day: float | None = None
     provenance: str = "UNVERIFIED_ASSUMPTION"
+    # Hard cap on the live quote's spread (ask - bid, price units), enforced
+    # by execution.service at both pre-send rounds. `None` = no cap known:
+    # DEMO refuses new entries for the symbol (fail closed).
+    max_spread_price: float | None = None
 
     @field_validator("commission_per_lot_round_trip", "slippage_price", "swap_per_lot_per_day")
     @classmethod
     def _non_negative(cls, value, info):
         if value is not None and value < 0:
             raise ValueError(f"{info.field_name} must be >= 0, got {value}")
+        return value
+
+    @field_validator("max_spread_price")
+    @classmethod
+    def _positive_finite_cap(cls, value):
+        if value is not None and not (math.isfinite(value) and value > 0):
+            raise ValueError(f"max_spread_price must be a positive finite number, got {value}")
         return value
 
     @field_validator("provenance")

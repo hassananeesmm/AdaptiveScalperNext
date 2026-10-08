@@ -74,6 +74,7 @@ supplies, exactly like every other gate in this codebase).
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -119,6 +120,7 @@ BLOCKED_MARGIN = "BLOCKED_MARGIN"
 # defeating the "refresh immediately before send" guarantee for exactly
 # the fields that matter most. This module refetches them itself.
 BLOCKED_BROKER_STATE = "BLOCKED_BROKER_STATE"
+BLOCK_SPREAD = "BLOCK_SPREAD"   # reason prefix inside a BLOCKED_BROKER_STATE outcome
 FILLED = "FILLED"
 PARTIAL = "PARTIAL"
 RESTING = "RESTING"
@@ -167,9 +169,23 @@ class _CriticalStateCheck:
     margin_free: float | None = None
 
 
+def spread_cap_violation(bid: float, ask: float, max_spread_price: float | None) -> str | None:
+    """The hard live-spread cap. Returns a block reason, or `None` when the
+    quote's spread (ask - bid) is within `max_spread_price`. Fail closed: no
+    configured cap, a non-finite quote or an inverted book all block."""
+    if max_spread_price is None:
+        return "no max_spread_price configured for this symbol -- new entries refused (fail closed)"
+    if not (math.isfinite(bid) and math.isfinite(ask)) or ask < bid:
+        return f"unusable quote for the spread cap: bid={bid!r} ask={ask!r}"
+    spread = ask - bid
+    if spread > max_spread_price:
+        return f"live spread {spread:.5f} exceeds max_spread_price {max_spread_price}"
+    return None
+
+
 def _verify_critical_broker_state(
     conn, gateway: Gateway, canonical_symbol: str, broker_symbol: str, direction: str, *,
-    max_quote_age_seconds: float, clock: Callable[[], float],
+    max_quote_age_seconds: float, clock: Callable[[], float], max_spread_price: float | None,
 ) -> _CriticalStateCheck:
     """Independently re-verifies DEMO/connection/trading-permission (via
     `verify_demo_before_order`, a fresh gateway call — never cached), the
@@ -230,6 +246,12 @@ def _verify_critical_broker_state(
     if not quote_check.valid:
         return _CriticalStateCheck(f"quote check failed for {broker_symbol!r}: {quote_check.reason} — {quote_check.detail}")
 
+    # The hard spread cap, on the SAME fresh tick (checked at both rounds,
+    # so a spread that widens between them still blocks the send).
+    spread_block = spread_cap_violation(tick.bid, tick.ask, max_spread_price)
+    if spread_block is not None:
+        return _CriticalStateCheck(f"{BLOCK_SPREAD}: {broker_symbol!r} {spread_block}")
+
     account = gateway.account_info()  # non-None: verify_demo_before_order() above already proved this
     return _CriticalStateCheck(None, symbol_spec=symbol_spec, margin_free=account.margin_free)
 
@@ -280,6 +302,7 @@ def submit_new_entry(
     stop_loss: float | None,
     take_profit: float | None,
     fetch_fresh_evidence: Callable[[], FreshEvidence],
+    max_spread_price: float | None,
     magic: int = 0,
     comment: str = "",
     deviation_points: int = 20,
@@ -294,7 +317,11 @@ def submit_new_entry(
     which legitimately stays fixed for every journal entry this one
     submission produces. A test proving real staleness detection passes
     a fake `clock` that advances between round 1 and round 2; production
-    callers should simply omit it (defaults to `time.time`)."""
+    callers should simply omit it (defaults to `time.time`).
+
+    `max_spread_price`: the symbol's hard live-spread cap (config
+    `costs.<SYMBOL>.max_spread_price`), required of every caller; `None`
+    blocks the entry (fail closed)."""
     now = now_utc if now_utc is not None else int(time.time())
 
     order = create_order(
@@ -314,6 +341,7 @@ def submit_new_entry(
     round1 = _verify_critical_broker_state(
         conn, gateway, canonical_symbol, broker_symbol, direction,
         max_quote_age_seconds=DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS, clock=clock,
+        max_spread_price=max_spread_price,
     )
     if round1.blocked_detail is not None:
         append_event(
@@ -393,6 +421,7 @@ def submit_new_entry(
     round2 = _verify_critical_broker_state(
         conn, gateway, canonical_symbol, broker_symbol, direction,
         max_quote_age_seconds=DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS, clock=clock,
+        max_spread_price=max_spread_price,
     )
     if round2.blocked_detail is not None:
         return SubmissionOutcome(BLOCKED_BROKER_STATE, order, round2.blocked_detail)

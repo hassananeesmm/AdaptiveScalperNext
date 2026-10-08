@@ -85,6 +85,7 @@ def _submit(db, gw, **overrides):
         broker_symbol=BROKER_SYMBOL, direction="BUY", volume=0.05, stop_loss=1990.0, take_profit=2020.0,
         fetch_fresh_evidence=lambda: _good_evidence(), now_utc=NOW, history_window_seconds=600,
         clock=lambda: float(NOW),
+        max_spread_price=5.0,  # fake quotes are 2.0 wide; the cap itself: tests/test_spread_cap.py
     )
     kwargs.update(overrides)
     return submit_new_entry(**kwargs)

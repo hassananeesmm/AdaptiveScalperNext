@@ -125,6 +125,34 @@ class RiskGateInput:
     current_positions_for_symbol: int
     daily_realized_pnl: float   # negative = net loss today
     peak_equity: float
+    # Floating P&L of open positions now (broker equity - balance). Only a
+    # floating LOSS counts toward the daily loss limit; a floating gain never
+    # offsets a realized loss. 0.0 = no open positions (the backtest marks
+    # its own open positions separately and leaves this at 0.0).
+    daily_floating_pnl: float = 0.0
+    # Account equity at the start of the UTC day; None = unknown, in which
+    # case current equity is the denominator (the pre-2026-10-06 behaviour).
+    day_start_equity: float | None = None
+
+
+def effective_daily_loss_pct(
+    *, realized_pnl: float, floating_pnl: float, day_start_equity: float | None, equity: float,
+) -> float:
+    """Today's loss in PERCENT (2.00 == 2 %, the `max_daily_loss_pct` unit):
+
+        -100 * (realized + min(0, floating)) / denominator, floored at 0
+
+    The denominator is the SMALLER of start-of-day equity and current equity,
+    so this is never more lenient than the realized-only, current-equity
+    figure it replaced. Anything non-finite or a non-positive denominator
+    returns +inf: an unknowable loss is treated as a breached limit."""
+    values = (realized_pnl, floating_pnl, equity) + (() if day_start_equity is None else (day_start_equity,))
+    if not all(math.isfinite(v) for v in values):
+        return math.inf
+    denominator = equity if day_start_equity is None else min(day_start_equity, equity)
+    if denominator <= 0:
+        return math.inf
+    return max(0.0, -100.0 * (realized_pnl + min(0.0, floating_pnl)) / denominator)
 
 
 def evaluate_risk_gate(inp: RiskGateInput, limits: RiskLimits) -> tuple[str, str]:
@@ -177,13 +205,16 @@ def evaluate_risk_gate(inp: RiskGateInput, limits: RiskLimits) -> tuple[str, str
             f"limit ({max_total_risk:.2f})"
         )
 
-    if inp.daily_realized_pnl < 0 and inp.equity > 0:
-        daily_loss_pct = abs(inp.daily_realized_pnl) / inp.equity * 100.0
-        if daily_loss_pct >= limits.max_daily_loss_pct:
-            return BLOCK_RISK, (
-                f"daily loss {daily_loss_pct:.2f}% has reached/exceeded "
-                f"max_daily_loss_pct {limits.max_daily_loss_pct}%"
-            )
+    daily_loss_pct = effective_daily_loss_pct(
+        realized_pnl=inp.daily_realized_pnl, floating_pnl=inp.daily_floating_pnl,
+        day_start_equity=inp.day_start_equity, equity=inp.equity,
+    )
+    if daily_loss_pct >= limits.max_daily_loss_pct:
+        return BLOCK_RISK, (
+            f"daily loss {daily_loss_pct:.2f}% (realized {inp.daily_realized_pnl:.2f} + floating loss "
+            f"{min(0.0, inp.daily_floating_pnl):.2f}) has reached/exceeded "
+            f"max_daily_loss_pct {limits.max_daily_loss_pct}%"
+        )
 
     if inp.peak_equity > 0:
         drawdown_pct = max(0.0, (inp.peak_equity - inp.equity) / inp.peak_equity * 100.0)
