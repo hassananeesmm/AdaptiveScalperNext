@@ -23,6 +23,12 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
+## Research branch `research/adx-pullback-hypothesis` (2026-10-08) — SPEC ONLY, NOT AUTHORIZED TO RUN
+
+Pre-registration DRAFT `adaptive_scalper/research/ADX_PULLBACK_PREREGISTRATION_DRAFT_2026-10-08.md` (ADX-PB). No
+code, no data access, no ledger row. Strategy research remains FROZEN (H9 REJECTED); running ADX-PB needs an
+explicit operator decision. No release code changed.
+
 ## Current phase (2026-10-03, branch `hardening/flat-shadow-release`) — HARDENED RELEASE CANDIDATE, NOT DEPLOYED
 
 **Strategy status: NO VALIDATED NET EDGE — FLAT.** Final FLAT/SHADOW release hardening on top of `bd4cfc7`

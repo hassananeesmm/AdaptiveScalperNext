@@ -3054,3 +3054,16 @@ check or order send occurred.
 - Migrations: fresh 1->32 quick_check ok / 0 FK violations; online-backup copy of production (read-only source)
   31->32: only schema_migrations changed across 42 non-sealed tables, shadow schema identical to fresh; copy deleted.
 - ASN-032 design note: docs/design/ASN-032_SHADOW_PROCESS_ISOLATION.md (not implemented).
+
+## 2026-10-08 -- ADX/ATR pullback hypothesis written as a pre-registration DRAFT (branch `research/adx-pullback-hypothesis`)
+
+- Operator request (2026-10-06): record the ADX/ATR pullback idea purely as a pre-registered research spec, with
+  no change to frozen V1 release code. Branch created from `hardening/flat-shadow-release` @ `a073ec1` in
+  `.worktrees/adx-research`.
+- Added `adaptive_scalper/research/ADX_PULLBACK_PREREGISTRATION_DRAFT_2026-10-08.md` ONLY: locked indicator
+  definitions (Wilder ATR14/ADX14, SMA50 of ATR, EMA20, UTC-session VWAP from M5 tick volume), regime gate
+  (ADX >= 22 and ATR >= its SMA50), entry, 1.5 / 2.25 ATR stop / target, trailing armed at +1.0 ATR, 4 h time stop,
+  costs and pass criteria. No code, no data read, no ledger row.
+- The spec states that strategy research is FROZEN since H9 was REJECTED (2026-10-02) and that running it needs
+  a separate, explicit operator decision lifting the freeze for this hypothesis alone. The requested BTCUSD
+  post-only limit entry is recorded as not modelled (no post-only on IC Markets MT5 CFDs; no queue evidence).
