@@ -181,3 +181,39 @@ def test_result_carries_a_specific_reason_not_a_generic_message():
 def test_rejects_unknown_canonical_symbol():
     with pytest.raises(ValueError):
         evaluate_news_block("EURUSD", BASE_TIME, [], ProviderHealth.HEALTHY)
+
+
+# --------------------------------------------------------------------------
+# Operator window (config/default.toml, 2026-10-06): [-30, +30) minutes
+# --------------------------------------------------------------------------
+
+def test_configured_thirty_minute_pre_and_post_window_blocks_across_the_whole_span():
+    from adaptive_scalper.config.loader import load_config
+    news = load_config("config/default.toml").news
+    assert (news.pre_high_impact_minutes, news.post_high_impact_minutes) == (30, 30)
+
+    event = _event(currency="USD", normalized_event_type=FOMC, scheduled_at_utc=BASE_TIME)
+    kwargs = dict(pre_high_impact_minutes=news.pre_high_impact_minutes,
+                  post_high_impact_minutes=news.post_high_impact_minutes)
+    for offset, expected in [
+        (-30 * 60 - 1, ALLOW),       # 30:01 before: clear
+        (-30 * 60, BLOCK_NEWS),      # 30:00 before: blocked (start inclusive)
+        (-20 * 60, BLOCK_NEWS),      # inside the widened part (the old 15-minute window allowed this)
+        (-15 * 60 - 1, BLOCK_NEWS),
+        (0, BLOCK_NEWS),
+        (30 * 60 - 1, BLOCK_NEWS),   # 29:59 after: blocked
+        (30 * 60, ALLOW),            # 30:00 after: clear (end exclusive)
+    ]:
+        for symbol in ("XAUUSD", "BTCUSD"):
+            result = evaluate_news_block(symbol, BASE_TIME + offset, [event], ProviderHealth.HEALTHY, **kwargs)
+            assert result.decision == expected, f"{symbol} at offset {offset}s: {result.decision}"
+
+
+def test_widened_window_only_ever_blocks_more_than_the_directive_default():
+    event = _event(currency="USD", normalized_event_type=FOMC, scheduled_at_utc=BASE_TIME)
+    for offset in range(-40 * 60, 40 * 60, 30):
+        default = evaluate_news_block("XAUUSD", BASE_TIME + offset, [event], ProviderHealth.HEALTHY)
+        widened = evaluate_news_block("XAUUSD", BASE_TIME + offset, [event], ProviderHealth.HEALTHY,
+                                      pre_high_impact_minutes=30, post_high_impact_minutes=30)
+        if default.decision == BLOCK_NEWS:
+            assert widened.decision == BLOCK_NEWS, offset

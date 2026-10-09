@@ -28,13 +28,17 @@ from typing import Callable
 from adaptive_scalper.backtest.types import BacktestConfig
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
+from adaptive_scalper.features.adx import wilder_adx
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.paper.engine import PaperSessionConfigMismatchError, run_paper_cycle
 from adaptive_scalper.paper.state import get_session
 from adaptive_scalper.portfolio.correlation import compute_correlation_matrix
 from adaptive_scalper.portfolio.exposure import PositionExposure
+from adaptive_scalper.risk.entry_regime import adx_entry_block
+from adaptive_scalper.risk.entry_window import entry_window_block
 from adaptive_scalper.risk.governor import risk_limits_from_config
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
+from adaptive_scalper.runtime.microstructure import publish_vwap_bands
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
 from adaptive_scalper.runtime.state import put_state, record_entry_decision, record_event
 from adaptive_scalper.costs.edge_evidence import (
@@ -97,7 +101,10 @@ class PaperRuntime:
         kill = get_kill_switch_state(self.conn)
         if kill.blocks_new_entries:
             return BLOCK_KILL_SWITCH, f"kill switch {kill.status.value}"
-        return self.news.global_block(now)
+        news_block = self.news.global_block(now)
+        if news_block is not None:
+            return news_block
+        return entry_window_block(now, self.config.entry_window.hours())
 
     def _external(self, canonical: str) -> tuple[PositionExposure, ...]:
         out = []
@@ -112,6 +119,10 @@ class PaperRuntime:
 
     def cycle(self) -> dict:
         now = int(self.clock())
+        try:  # observer only: never blocks or causes a trade
+            publish_vwap_bands(self.conn, self.gateway, self.config, self.symbols, now)
+        except Exception:
+            logger.exception("microstructure observer failed")
         block = self.global_entry_block(now)
         snapshot = {"at": now, "mode": MODE, "global_block": None, "symbols": {}}
         if block is not None:
@@ -168,11 +179,16 @@ class PaperRuntime:
         # entries block exactly as DEMO's do (BLOCK_COST); an already-open
         # simulated position is still managed to its exit.
         cost_block = None if self.config.cost_for(canonical).fully_known else BLOCK_COST
+        # [entry_regime]: ADX of the newest closed bars gates this cycle's new entries
+        # (one new bar per cycle in normal operation); open positions are still managed.
+        regime_block = adx_entry_block(wilder_adx(bars, self.config.entry_regime.adx_period),
+                                       self.config.entry_regime.min_adx)
         result = run_paper_cycle(
             self.conn, bars, canonical, self.config.runtime.entry_resolution, spec, config=config,
             session_key=session_key(self.config, canonical), now_utc=now,
             external_open_positions=self._external(canonical), correlation_matrix=correlation,
-            entry_block_reason=block[0] if block is not None else cost_block,
+            entry_block_reason=(block[0] if block is not None else cost_block
+                                or (regime_block[0] if regime_block is not None else None)),
         )
         if not result.ran:
             return {"decision": "WAITING_FOR_BAR_CLOSE", "reason": "no new closed bar"}

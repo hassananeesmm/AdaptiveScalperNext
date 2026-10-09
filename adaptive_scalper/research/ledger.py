@@ -9,12 +9,23 @@ the one being reported.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 import statistics
 import time
 from dataclasses import dataclass
 
 TRIAL_STATUSES = frozenset({"COMPLETED", "FAILED", "ABANDONED"})
+
+
+def new_trial_id(*parts: object, now_utc: int) -> str:
+    """A collision-free run/trial id: `part:part:...:<now_utc>:<8 hex>`.
+
+    The wall-clock second alone is not unique (ASN-033: two CLI runs of the
+    same kind finishing in one second collided on the UNIQUE `trial_id`).
+    The random suffix keeps ids readable and time-sortable by prefix while
+    making a collision practically impossible. Nothing parses these ids."""
+    return ":".join([*(str(p) for p in parts), str(int(now_utc)), secrets.token_hex(4)])
 
 
 @dataclass(frozen=True)

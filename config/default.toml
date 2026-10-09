@@ -35,9 +35,50 @@ max_positions_per_symbol = 1
 [news]
 primary_provider = "financecalendar"
 secondary_provider = "forexfactory"
-pre_high_impact_minutes = 15
+# Operator tightening (2026-10-06): the pre-event blackout is widened from the
+# directive's default 15 to 30 minutes, giving a symmetric [-30, +30) window.
+# Widen-only: a longer window blocks more entries, never fewer.
+pre_high_impact_minutes = 30
 post_high_impact_minutes = 30
 fail_closed = true
+
+[entry_window]
+# Operator policy (2026-10-09): NEW entries (PAPER and DEMO, every symbol) only
+# during the London/New York overlap, [12:00, 20:00) UTC; none in Asian hours.
+# An operator restriction, not a measured edge (directive section 73): session
+# behaviour keeps being measured (shadow candidates are still recorded outside
+# the window). Exits and position management run around the clock.
+enabled = true
+start_hour_utc = 12
+end_hour_utc = 20
+
+[entry_regime]
+# Operator policy (2026-10-09): NEW entries only when Wilder ADX(14) on the
+# entry-resolution closed bars is strictly above 20 (directional momentum).
+# Blocks only; not a validated edge filter. Exits are never restricted.
+min_adx = 20.0
+adx_period = 14
+
+[microstructure]
+# Observer only (2026-10-09, operator spec "Asset B: BTCUSD"): rolling 10-minute
+# VWAP with +/- 2.0 volume-weighted standard-deviation bands over closed M1 bars,
+# published each cycle to runtime_state key "microstructure". No trading authority.
+vwap_symbols = ["BTCUSD"]
+vwap_resolution = "M1"
+vwap_window_minutes = 10
+vwap_band_std = 2.0
+# Candle properties of each closed entry (M5) bar -- lower/upper wick ratio, body
+# ratio, close location -- plus EMA(20) and ADX(14) of the closes. Observation only.
+candle_symbols = ["XAUUSD", "BTCUSD"]
+candle_ema_period = 20
+
+[hard_stop]
+# Hard cut-loss backstop (2026-10-09, operator spec "Asset B: BTCUSD"): close a
+# BTCUSD position at market when price has moved MORE than 0.5 % against its
+# broker fill price (bid for a BUY, ask for a SELL), independent of its broker
+# SL. Tighten-only backstop: every DEMO BTCUSD stop so far was inside it
+# (n=294, max 0.414 %), so it binds only if the broker SL fails or a gap occurs.
+max_adverse_move_pct = { BTCUSD = 0.5 }
 
 [database]
 path = "data/adaptive_scalper.sqlite3"
@@ -92,6 +133,10 @@ log_dir = "logs"
 commission_per_lot_round_trip = 7.03
 slippage_price = 0.41
 provenance = "BROKER_DEMO_CONFIRMED"
+# Hard live-spread cap (ask - bid, price units), checked at both pre-send rounds
+# of execution.service. DEMO quote evidence 2026-09-11..10-02 (n=212): median
+# 0.08, p90 0.11, p99 0.12, max 0.40. Unset = no new DEMO entry for the symbol.
+max_spread_price = 0.20
 
 [costs.GBPJPY]
 # 7 round trips, 5.07 lots: 3.501 USD/lot/side. Slippage: only n=7 samples -- too
@@ -105,3 +150,6 @@ provenance = "UNVERIFIED_ASSUMPTION"
 commission_per_lot_round_trip = 0.0
 slippage_price = 11.97
 provenance = "BROKER_DEMO_CONFIRMED"
+# Hard live-spread cap (see XAUUSD). DEMO quote evidence (n=294): median 5.0,
+# p90 6.0, p99 40.65, max 53.38.
+max_spread_price = 15.0

@@ -23,7 +23,35 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-10-03, branch `hardening/flat-shadow-release`) — HARDENED RELEASE CANDIDATE, NOT DEPLOYED
+## Current phase (2026-10-08, branch `hardening/risk-and-blackout-tightening`) — TIGHTENING ON THE HARDENED CANDIDATE, NOT DEPLOYED
+
+**Strategy status unchanged: NO VALIDATED NET EDGE — FLAT.** Tighten-only safety changes on top of `a073ec1`
+(details: WORKLOG 2026-10-06..08):
+- news blackout `[news] pre_high_impact_minutes` 15 -> 30: window [-30, +30) minutes (code default stays the
+  directive's 15);
+- daily loss = realized + floating LOSS over min(day-start, current) equity (percent units); a breach blocks
+  entries and, in DEMO, trips a circuit breaker that engages the kill switch (operator clears) and closes tracked
+  open positions through the safe close service; new entries then stay locked for the rest of that UTC day even if
+  the operator clears the kill switch (2026-10-09);
+- hard per-symbol live-spread cap `costs.<SYMBOL>.max_spread_price` (XAUUSD 0.20, BTCUSD 15.0) at both pre-send
+  rounds; no cap = no DEMO entry; preflight reports `spread_caps` / `live_spread`.
+- operator entry-hours window `[entry_window]` (2026-10-09): NEW entries only in [12:00, 20:00) UTC (London/New York
+  overlap), every symbol, PAPER + DEMO, BLOCK_SESSION in the global entry block and the final permission gate; exits
+  and position management unrestricted; code default disabled (directive section 73: operator policy, not an edge).
+- operator directional-momentum gate `[entry_regime]` (2026-10-09): NEW entries only when Wilder ADX(14) of the entry
+  bars is strictly above 20 (BLOCK_REGIME, PAPER + DEMO + final permission); outside the frozen V1 code; code default
+  disabled; not a validated edge filter.
+- BTCUSD microstructure OBSERVER `[microstructure]` (2026-10-09): rolling 10-minute VWAP +/- 2.0 sigma bands over
+  closed M1 bars, published each cycle to runtime_state `microstructure`; no trading authority, failures never
+  interrupt a cycle.
+- BTCUSD hard cut-loss backstop `[hard_stop]` (2026-10-09): DEMO closes at market (safe close service) a position
+  more than 0.5 % against its fill on the close-side price, before the normal review; every measured DEMO stop was
+  already inside 0.5 %. Passive maker-rebate limit orders NOT implemented (no rebate exists on spread-priced
+  BTCUSD; no post-only; DEMO is market-only with no cancel path).
+Status: IMPLEMENTED, TESTED-FAKE, TESTED-WINDOWS (suite: 2055 passed / 9 skipped / 0 failed / 2 warnings serially in 11 min, plus the 2 later preflight tests, 15/15 with the V1 freeze test). Doctor OK against a production-DB
+COPY only. Not live-DEMO-verified. Deployed runtime 0.2.7, production DB (schema 31) and REAL untouched.
+
+## Previous phase (2026-10-03, branch `hardening/flat-shadow-release`) — HARDENED RELEASE CANDIDATE, NOT DEPLOYED
 
 **Strategy status: NO VALIDATED NET EDGE — FLAT.** Final FLAT/SHADOW release hardening on top of `bd4cfc7`
 (docs/audits/FINAL_FLAT_SHADOW_RELEASE_HARDENING.md):

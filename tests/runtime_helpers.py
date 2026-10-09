@@ -107,7 +107,10 @@ class StaticNewsProvider:
 
 def app_config(tmp_path, *, mode: str, costs: bool = True, **runtime) -> AppConfig:
     cost_section = {
-        s: {"commission_per_lot_round_trip": 0.0, "slippage_price": 0.0, "provenance": "BROKER_SPEC_ESTIMATE"}
+        # max_spread_price: generous, so pipeline tests are not spread-capped
+        # (the cap's own tests: tests/test_spread_cap.py).
+        s: {"commission_per_lot_round_trip": 0.0, "slippage_price": 0.0, "provenance": "BROKER_SPEC_ESTIMATE",
+            "max_spread_price": 1000.0}
         for s in ("XAUUSD", "GBPJPY", "BTCUSD")
     } if costs else {}
     runtime_section = {"position_cycle_seconds": 1.0, "entry_cycle_seconds": 4.0, "news_refresh_seconds": 1200,

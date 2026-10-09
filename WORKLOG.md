@@ -3054,3 +3054,184 @@ check or order send occurred.
 - Migrations: fresh 1->32 quick_check ok / 0 FK violations; online-backup copy of production (read-only source)
   31->32: only schema_migrations changed across 42 non-sealed tables, shadow schema identical to fresh; copy deleted.
 - ASN-032 design note: docs/design/ASN-032_SHADOW_PROCESS_ISOLATION.md (not implemented).
+
+## 2026-10-06..08 -- risk and blackout tightening (branch `hardening/risk-and-blackout-tightening`, no deployment)
+
+- Operator request. The branch had been created on the main checkout at `d9c1bd1` (v0.2.7, the deployed code);
+  it carried no commits, so it was moved to `a073ec1` (`hardening/flat-shadow-release`) and checked out in
+  `.worktrees/risk-tightening`; the main checkout went back to detached `d9c1bd1` (same commit, no file change).
+  Deployed runtime, production DB (schema 31), release branches and REAL untouched.
+- Scope: tighten-only safety changes. No strategy, selector, entry, exit, sizing or edge-gate change; V1 freeze
+  test unchanged and passing.
+- News: `config/default.toml [news] pre_high_impact_minutes` 15 -> 30 (window now [-30, +30) minutes). The code
+  default stays 15 (directive section 41 "Default"); the shipped config widens it, which only blocks more.
+  Tests: `tests/test_news_blocking.py` (shipped window, both boundaries, both symbols; widened window is a
+  superset of the default).
+- Daily loss counts floating loss: `risk.governor.effective_daily_loss_pct` =
+  -100 * (realized + min(0, floating)) / min(day-start equity, current equity), floored at 0, percent units
+  (2.00 == 2 %); non-finite or non-positive denominator -> +inf (treated as breached). `min(...)` keeps it never
+  more lenient than the old realized / current-equity figure. `RiskGateInput` gained `daily_floating_pnl` (0.0)
+  and `day_start_equity` (None = old behaviour; the backtest still passes neither). DEMO: floating =
+  account equity - balance (all positions, swap included), day-start equity = balance - today's realized P&L,
+  used by `global_entry_block` and the final-permission risk gate.
+- Daily loss circuit breaker (`DemoRuntime._daily_loss_circuit_breaker`, every position cycle after
+  reconciliation): on breach it engages the kill switch (actor `risk_governor:daily_loss_circuit_breaker`, only
+  once; only the operator clears it), journals DAILY_LOSS_CIRCUIT_BREAKER, closes every locally tracked open
+  position via `close_position_safely` (durable close request, fresh-truth resolution; positions with an
+  unresolved close are skipped), and skips normal exit reviews that cycle. DEMO sends only market DEALs, so
+  there are no resting entry orders to cancel; any working order with the runtime's magic is journaled as
+  DAILY_LOSS_WORKING_ORDERS for the operator (the runtime has no cancel path). A close whose broker truth cannot
+  be read raises Mt5QueryError (cycle degraded, entries blocked). Tests: `tests/test_daily_loss_circuit_breaker.py`,
+  `tests/test_risk_governor.py`.
+- Hard spread cap: `costs.<SYMBOL>.max_spread_price` (XAUUSD 0.20, BTCUSD 15.0; DEMO quote evidence n=212 / 294:
+  XAUUSD median 0.08 / p99 0.12 / max 0.40, BTCUSD median 5.0 / p90 6.0 / p99 40.65). Enforced in
+  `execution.service._verify_critical_broker_state` on the fresh tick at BOTH pre-send rounds
+  (`BLOCKED_BROKER_STATE`, reason prefix `BLOCK_SPREAD`); `submit_new_entry` requires `max_spread_price` from
+  every caller and `None` blocks (fail closed: GBPJPY has no cap). Config rejects a non-positive / infinite cap.
+  `preflight`: new `spread_caps` check (missing cap = DEMO blocker) and `live_spread` (above cap = warning only;
+  the execution boundary blocks per entry). `order_check_probe` inspected: it never sends, so it has no cap.
+  Tests: `tests/test_spread_cap.py`, `tests/test_preflight.py`; test helpers pass explicit generous caps.
+- Doctor/preflight were run against an online-backup COPY of the production DB in the session scratchpad
+  (`doctor` migrates the DB it opens; this branch carries unreleased migration 0032). doctor: OK (schema 32 on the
+  copy, kill switch DISENGAGED, MT5 reachable, DEMO, server clock VERIFIED for all symbols). preflight on the copy:
+  READY_FOR_PAPER, `spread_caps` PASS, `live_spread` PASS; only DEMO blocker "no fresh CLEAN reconciliation
+  snapshot" (no runtime running). Production schema confirmed still 31.
+- Full suite (Windows, shared .venv, serial): 2055 passed / 9 skipped / 0 failed / 2 warnings (11 min 7 s); the two
+  preflight spread tests added afterwards plus `tests/test_v1_strategy_freeze.py`: 15 passed. Not done: commit
+  push/PR, release build, deployment, live-DEMO verification (operator).
+
+## 2026-10-09 -- operator entry-hours window (same branch, no deployment)
+
+- Operator instruction: "Restrict execution to London & New York session overlap (12:00 - 20:00 UTC). Suppress all
+  signals during Asian low-liquidity hours."
+- New config `[entry_window]` (`EntryWindowConfig`: `enabled`, `start_hour_utc`, `end_hour_utc`, validated
+  `0 <= start < end <= 24`). Code default DISABLED; shipped `config/default.toml` enables [12:00, 20:00) UTC for
+  every symbol in PAPER and DEMO. Directive section 73 forbids hard-coding "London is better" claims: this is
+  recorded as an operator restriction, not a measured edge, and it can only block entries.
+- Pure rule `risk/entry_window.entry_window_block(now_utc, hours)` -> `BLOCK_SESSION` outside the half-open
+  window; a configured window with an unknown time blocks. Wired into `DemoRuntime.global_entry_block` and
+  `PaperRuntime.global_entry_block` (after news, so strategies are not evaluated outside the window) and into
+  `core.final_permission` (`FinalPermissionInput.entry_window_hours`, checked against `now_utc` right after news),
+  so the fresh pre-send re-check also enforces it if a cycle straddles 20:00.
+- Not restricted: position cycle, exit reviews, protective/daily-loss closes, reconciliation. Shadow candidates are
+  still recorded outside the window (selector disposition NOT_EVALUATED with BLOCK_SESSION), so session behaviour
+  keeps being measured. The research backtest engine does not apply the window.
+- Practical effect today: none on order flow -- no certified edge evidence exists, so every proposal is already
+  BLOCK_EDGE_UNVALIDATED (FLAT). The window becomes binding only if a validated edge is ever certified.
+- Tests: `tests/test_entry_window.py` (pure rule incl. Asian hours and both edges, config validation, shipped
+  config, final permission, DEMO cycle records GLOBAL BLOCK_SESSION with 0 order_send, PAPER global block).
+
+## 2026-10-09 -- operator ADX(14) > 20 entry gate (same branch, no deployment)
+
+- Operator instruction: "Regime Check: ADX(14) must be > 20 to confirm directional momentum."
+- `features/adx.wilder_adx(bars, period)`: Wilder ADX over closed bars (sum-seeded Wilder smoothing of TR/+DM/-DM,
+  DX, ADX seeded with the mean of the first p DX); < 2p+1 bars -> None. Checked against an independent mean-seeded
+  RMA formulation on a random walk (rel 1e-9), a perfect trend (100), alternating chop (< 20), a flat market (0).
+- New config `[entry_regime]` (`min_adx`, `adx_period`; validated). Code default `min_adx = None` (disabled);
+  shipped `min_adx = 20.0`, `adx_period = 14`. Pure gate `risk/entry_regime.adx_entry_block` -> `BLOCK_REGIME`
+  unless ADX is STRICTLY above the threshold; a configured threshold with unknown/non-finite ADX blocks.
+- Implemented as an operator entry gate OUTSIDE the frozen V1 strategy/selector/classifier code
+  (`tests/test_v1_strategy_freeze.py` digests unchanged): the regime classifier is untouched; this is an extra
+  block, not a new regime definition. DEMO: `SymbolAnalysis.adx` from the same closed bars; `_decide` records stage
+  REGIME / BLOCK_REGIME before strategies are evaluated; `FinalPermissionInput.entry_adx` / `min_entry_adx` checked
+  right after the session window at both pre-send rounds. PAPER: the cycle's new-entry block (`entry_block_reason`)
+  is BLOCK_REGIME when the newest closed bars' ADX fails. Exits and position management are not gated. The research
+  backtest does not apply it. Shadow candidates are still recorded (evidence keeps accruing).
+- Not a validated edge filter: same FLAT caveat as the entry window -- no certified edge evidence exists, so order
+  flow is unchanged today.
+- Tests: `tests/test_entry_regime.py` (28).
+
+## 2026-10-09 -- BTCUSD microstructure observer: rolling 10-minute VWAP +/- 2.0 sigma (same branch, no deployment)
+
+- Operator spec: "Asset B: BTCUSD (1-Minute / 5-Minute Timeframe)" / "Microstructure: Track rolling 10-minute VWAP
+  and 2.0 Standard Deviation bands."
+- OBSERVER ONLY -- no strategy, selector, gate or sizing reads it. `features/vwap.rolling_vwap_bands`: over closed
+  bars with open time in [end - window, end), typical price (h+l+c)/3 weighted by tick volume; sigma is the
+  volume-weighted standard deviation of typical price; bands = VWAP +/- k sigma; no traded bar -> None.
+  A 10-minute window on the M5 entry bars is two bars (no meaningful sigma), so it is computed from closed M1 bars
+  (10 per window). The entry timeframe stays M5 for every symbol (one `runtime.entry_resolution`).
+- Config `[microstructure]` (`vwap_symbols`, `vwap_resolution`, `vwap_window_minutes`, `vwap_band_std`; validated:
+  allow-listed symbols, supported resolution, window >= one bar, positive finite k). Code default tracks nothing;
+  shipped: BTCUSD, M1, 10, 2.0.
+- `runtime/microstructure.publish_vwap_bands` runs at the start of every DEMO entry cycle and PAPER cycle (also while
+  entries are globally blocked) and writes `runtime_state["microstructure"]` =
+  {at, symbols: {BTCUSD: {vwap, sigma, upper, lower, band_std, bar_count, total_volume, window_start_utc,
+  window_end_utc, resolution, last_close, position}}}, `position` in ABOVE_UPPER / ABOVE_VWAP / BELOW_VWAP /
+  BELOW_LOWER. Any failure -> {status: UNAVAILABLE, reason}, a MICROSTRUCTURE_OBSERVER_FAILED warning event, and
+  the cycle continues (call wrapped in try/except in both runtimes). Latest value only (no history table, no
+  migration); no dashboard panel yet.
+- Tests: `tests/test_microstructure_vwap.py` (21).
+
+## 2026-10-09 -- BTCUSD hard cut-loss backstop; passive maker-rebate limits NOT implemented (same branch)
+
+- Operator spec: "Use passive limit order queue placement to capture maker rebates where possible, with a hard
+  cut-loss liquidation trigger if market price moves > 0.5% against the entry."
+- Passive limit queue / maker rebates: NOT implemented. IC Markets MT5 BTCUSD is spread-priced with commission 0
+  (`[costs.BTCUSD]`, 294 measured round trips): there is no maker/taker fee schedule, so no rebate exists to
+  capture; MT5 CFDs offer no post-only flag; DEMO sends only market DEALs by design and the runtime has no cancel
+  path, so a resting order would be unmanaged pending exposure (directive safety model). Unchanged.
+- Hard cut-loss: config `[hard_stop] max_adverse_move_pct` (per symbol; allow-listed, (0, 100)); code default empty;
+  shipped `{ BTCUSD = 0.5 }`. Pure `risk/hard_stop.adverse_move_pct` (BUY on the bid, SELL on the ask, vs the
+  broker fill `price_open`) and `breaches_hard_stop` (STRICTLY beyond). `DemoRuntime._hard_cut_loss` runs per open
+  position in the position cycle, after reconciliation and the daily-loss breaker and BEFORE the normal exit review:
+  on a breach it journals HARD_CUT_LOSS_TRIGGERED, closes at market via `close_position_safely` (comment
+  "ASN hard cut-loss", chain `hard-cut-loss:<id>`), journals HARD_CUT_LOSS_CLOSE and skips the review that cycle;
+  unreadable broker truth after the close raises Mt5QueryError (cycle degraded, entries blocked). A missing/stale
+  quote is journaled HARD_CUT_LOSS_UNEVALUATED and never read as "no loss"; the review and the broker SL still run.
+  The kill switch is not engaged (a per-position backstop, not a circuit breaker).
+- Evidence (production DB, read-only): every DEMO stop was already inside 0.5 % of entry -- BTCUSD n=294 median
+  0.129 %, p90 0.238 %, max 0.414 %; XAUUSD n=212 max 0.283 %. So the backstop binds only if a broker SL fails, is
+  missing, or the market gaps through it. PAPER simulated positions are not covered (the simulation engine's exits
+  are unchanged; all simulated stops are inside 0.5 % for the same reason).
+- Tests: `tests/test_hard_cut_loss.py` (20).
+
+## 2026-10-09 -- daily loss breaker: same-UTC-day entry lock (same branch)
+
+- Operator spec: "Max Daily Drawdown Circuit Breaker: If cumulative closed + open daily losses exceed 2.0% of
+  starting daily equity, automatically close all positions, cancel all open limit orders, and lock trading until the
+  next UTC day." Already implemented 2026-10-06 (same formula, trips at >= 2.0 % over min(day-start, current)
+  equity; kill switch + safe-close flatten). Gap closed: after a trip, `runtime_state["daily_loss_lock"]` records the
+  UTC day and `DemoRuntime.global_entry_block` returns BLOCK_RISK "locked until 00:00 UTC" for the rest of that day,
+  even if the operator clears the kill switch and the post-flatten loss is back under the limit. The kill switch
+  still needs the operator to clear it (no automatic re-arm at midnight).
+- "Cancel all open limit orders": DEMO sends only market DEALs, so it never has resting orders; any working order
+  with the runtime's magic is journaled DAILY_LOSS_WORKING_ORDERS for the operator. No broker cancel path added.
+- Test: `tests/test_daily_loss_circuit_breaker.py::test_trip_locks_new_entries_until_the_next_utc_day_even_if_the_operator_clears`.
+
+## 2026-10-09 -- candle properties / EMA observation (same branch)
+
+- Operator spec: "Do not use naive candlestick pattern matching ... Lower Wick Ratio = (min(Open, Close) - Low) /
+  (High - Low); Upper Wick Ratio = (High - max(Open, Close)) / (High - Low)."
+- `features/candle.candle_properties(bar)`: lower/upper wick ratio, body ratio (sum to 1), close location,
+  direction; no range, inconsistent or non-finite bar -> None (never 0.0). `features/ema.ema_last(values, period)`:
+  SMA-seeded EMA, alpha 2/(p+1).
+- Observation only: `[microstructure] candle_symbols` (code default empty; shipped XAUUSD, BTCUSD) and
+  `candle_ema_period` (20). Each DEMO/PAPER cycle adds `runtime_state["microstructure"]["candles"][SYM]` = newest
+  closed entry (M5) bar's candle properties, EMA20, close vs EMA, ADX14. No strategy reads it.
+- The strategy built from these (long/short setup, 1.0/1.8 ATR, break-even) is a pre-registration DRAFT on
+  `research/adx-pullback-hypothesis` (WICK-ABS), not live code: V1 freeze + research freeze.
+- Tests: `tests/test_candle_properties.py` (14).
+- Full suite after every 2026-10-09 change (Windows, shared .venv, serial, 9 min 50 s): 2166 passed / 9 skipped /
+  1 failed / 2 warnings. The failure is pre-existing and unrelated (ASN-033: research trial ids are per wall-clock
+  second; two CLI backtests in the same second collide on the UNIQUE trial_id); it passes when re-run alone.
+  `tests/test_v1_strategy_freeze.py` passed (V1 digests unchanged). No deployment; production DB untouched.
+
+## 2026-10-09 -- repository audit ("audit full repo and complete everything")
+
+- Scans: no TODO/FIXME/NotImplementedError in `adaptive_scalper/` or `tests/`; no duplicate (shadowed) function or
+  class definitions (AST walk); ruff 0.16.10 (scratchpad install, not in the repo venv) F,E9: 6 x F811 in
+  `tests/test_paper_pending_entry_hardening.py`, all the pytest pattern of importing fixtures (`db`, `script`) and
+  using them as parameters -- false positives, left as is. Skips: 8 live-MT5 tests (opt-in) + 1 symlink test (this
+  Windows user cannot create symlinks).
+- Live MT5 read-only tests (`ASN_LIVE_MT5=1`, no order call in the file): 8 passed against the DEMO terminal.
+- ASN-033 FIXED: `research.ledger.new_trial_id` (random 8-hex suffix) at every per-second run/trial id site
+  (cli/research.py backtest, oos, purged-cv; cli/learning.py; learning/jobs.py); regression test added.
+- ASN-029 deliberately left open (no honest cross time without tick-level detection; see BUG_BACKLOG).
+- Dashboard: new read-only `microstructure` panel (Markets + All panels) showing the observer snapshot and its age,
+  labelled "authority: NONE (observation only)"; test added.
+- Open by design / operator decisions (not "completable" in code): ASN-031 certificate pipeline + key provisioning,
+  ASN-028 executable exit change (needs forward evidence), ASN-030 cost model v2 (needs sample size), ASN-019/020
+  research findings, ASN-032 shadow process isolation (proposal); strategy research FROZEN (ADX-PB, WICK-ABS drafts
+  not authorized); merges of PR #10 then #9, release build, deployment with migration 0032, PR #7 superseded by #10,
+  PR #5 (0.2.6, already deployed) stale.
+- Full suite after the audit changes (Windows, serial, 9 min 17 s): **2169 passed / 9 skipped / 0 failed / 2 warnings**.

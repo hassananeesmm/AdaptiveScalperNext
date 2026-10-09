@@ -185,6 +185,7 @@ def _submit(db, gw, fetch_fresh_evidence, **overrides):
         broker_symbol="XAUUSDm", direction="BUY", volume=0.05, stop_loss=1990.0, take_profit=2020.0,
         fetch_fresh_evidence=fetch_fresh_evidence, now_utc=5000, history_window_seconds=10000,
         clock=lambda: 5000.0,  # matches _demo_gateway()'s default tick time=5000 -> always fresh unless overridden
+        max_spread_price=5.0,  # fake quotes are 2.0 wide; the cap itself: tests/test_spread_cap.py
     )
     defaults.update(overrides)
     return submit_new_entry(**defaults)

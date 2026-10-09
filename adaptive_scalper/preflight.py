@@ -156,6 +156,14 @@ def run_preflight(
     else:
         _check(checks, "execution_costs", "PASS", "all configured symbols have commission and slippage evidence")
 
+    uncapped = sorted(symbol for symbol in cfg.market.symbols if cfg.cost_for(symbol).max_spread_price is None)
+    if uncapped:
+        demo_blockers.append(f"no max_spread_price (hard spread cap) configured for: {', '.join(uncapped)}")
+        _check(checks, "spread_caps", "FAIL", demo_blockers[-1])
+    else:
+        _check(checks, "spread_caps", "PASS", "; ".join(
+            f"{symbol}<={cfg.cost_for(symbol).max_spread_price}" for symbol in cfg.market.symbols))
+
     gateway = None
     try:
         gateway = create_live_gateway(cfg.mt5.server_time_rule, cfg.mt5.terminal_path)
@@ -186,6 +194,7 @@ def run_preflight(
         unresolved = sorted(symbol for symbol in cfg.market.symbols if not resolutions[symbol].resolved)
         stale: list[str] = []
         bad_clock: list[str] = []
+        wide_spread: list[str] = []
         for symbol in cfg.market.symbols:
             resolved = resolutions[symbol]
             if not resolved.resolved:
@@ -197,6 +206,9 @@ def run_preflight(
             verdict, _ = classify_quote_clock(tick.time, now)
             if verdict != VERIFIED:
                 bad_clock.append(f"{symbol}:{verdict}")
+            cap = cfg.cost_for(symbol).max_spread_price
+            if cap is not None and tick.ask - tick.bid > cap:
+                wide_spread.append(f"{symbol}:{tick.ask - tick.bid:.5f}>{cap}")
         if unresolved:
             paper_blockers.append(f"unresolved configured symbols: {', '.join(unresolved)}")
         if bad_clock:
@@ -205,6 +217,12 @@ def run_preflight(
             demo_blockers.append(f"no fresh quote for: {', '.join(stale)}")
         _check(checks, "symbols_and_quotes", "PASS" if not unresolved and not bad_clock and not stale else "FAIL",
                f"unresolved={unresolved}; stale={stale}; clock_failures={bad_clock}")
+        if wide_spread:
+            # A momentary wide spread is not a readiness failure: the execution
+            # boundary blocks each entry on its own fresh quote. Reported only.
+            warnings.append(f"live spread currently above the hard cap: {', '.join(wide_spread)}")
+        _check(checks, "live_spread", "WARN" if wide_spread else "PASS",
+               f"above_cap={wide_spread}" if wide_spread else "every fresh quote is within its spread cap")
     except Exception as exc:
         paper_blockers.append(f"MT5 probe failed: {type(exc).__name__}: {exc}")
         _check(checks, "mt5_account", "FAIL", paper_blockers[-1])

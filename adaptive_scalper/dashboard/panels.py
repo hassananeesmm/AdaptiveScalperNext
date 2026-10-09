@@ -425,6 +425,18 @@ def news(conn: sqlite3.Connection, now: int) -> dict:
     return {"runtime_snapshot": snapshot, "snapshot_age_seconds": age, "cached_upcoming_high_impact": upcoming}
 
 
+def microstructure(conn: sqlite3.Connection, now: int) -> dict:
+    """Latest observer-only microstructure snapshot (runtime/microstructure.py):
+    rolling VWAP +/- k sigma and the newest closed entry bar's candle ratios,
+    EMA and ADX. Read from runtime_state only; no strategy or gate uses it."""
+    snapshot, age = _state(conn, "microstructure", now)
+    if snapshot is None:
+        return {"status": "NO_DATA", "detail": "No microstructure snapshot yet (runtime not running, or "
+                                               "[microstructure] tracks no symbol)"}
+    return {"authority": "NONE (observation only)", "snapshot_age_seconds": age,
+            "vwap_bands": snapshot.get("symbols", {}), "candles": snapshot.get("candles", {})}
+
+
 def events(conn: sqlite3.Connection, now: int) -> dict:
     incidents = _rows(conn, "SELECT id, order_id, incident_type, detail, first_seen_at_utc, last_seen_at_utc, "
                             "occurrence_count FROM execution_incidents WHERE resolved_at_utc IS NULL "
@@ -809,7 +821,7 @@ PANELS: dict[str, Callable[[sqlite3.Connection, int], dict]] = {
     "market": market, "performance": performance,
     "strategy_registry": strategy_registry, "strategy_activity": strategy_activity,
     "strategy_attribution": strategy_attribution, "strategy_performance": strategy_performance,
-    "multi_position": multi_position,
+    "multi_position": multi_position, "microstructure": microstructure,
 }
 
 

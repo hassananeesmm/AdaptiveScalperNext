@@ -27,6 +27,9 @@ tests/test_strategy_lifecycle.py::test_characterization_v1_executable_review_sti
 
 ASN-029 [LOW, observability — 2026-10-03] `position_management_state.threshold_cross_at_utc` is never written, so
 threshold→decision latency cannot be measured. Measured decision→fill R loss is ≈ 0 (BTC −0.006 R, XAU +0.003 R).
+2026-10-09 audit: deliberately left open. The exit decision is taken at the first review that observes the
+condition, so the true cross time (between reviews) is unknown; writing the review time would record a fake 0 s
+latency. A real fix needs tick-level cross detection in the executable exit path.
 
 ASN-030 [INFO, costs — 2026-10-03] Per-kind exit-cost tails are not yet estimable (FINAL exit observations: BTC
 stop-loss n=68, XAU stop-loss n=38, agent closes 13/15, take-profit 1). The configured BTC per-fill 11.97 stays as
@@ -280,6 +283,14 @@ how often two positions can coexist around US releases.
    the running mode's key.
 
 ## Fixed
+
+~~ASN-033 [LOW, research CLI -- 2026-10-09, pre-existing]~~ FIXED 2026-10-09 on
+`hardening/risk-and-blackout-tightening`: `research.ledger.new_trial_id(*parts, now_utc)` appends an 8-hex random
+suffix; used by every former per-second id (`backtest:`, `oos:`, `purged-cv:`, `model-wf:`, `model-wf-eval:`).
+Nothing parses these ids. Regression test: tests/test_research_validation.py::
+test_new_trial_id_is_unique_within_one_second_asn033. Original: run/trial ids were built from the wall-clock
+second and `research_trials.trial_id` is UNIQUE, so two CLI backtests in one second raised IntegrityError (seen as
+a timing flake of test_backtest_walk_forward_path_stress_and_purged_validation).
 
 ASN-023 [HIGH, runtime/reconciliation] FIXED 2026-09-28 on `fix/integrated-demo-safety-20260928` (`2f4c860`,
 tests/test_runtime_reconciliation_freshness.py). `DemoRuntime.position_cycle` let a `run_reconciliation` exception

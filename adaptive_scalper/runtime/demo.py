@@ -36,6 +36,8 @@ from typing import Callable
 
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.final_permission import FinalPermissionInput
+from adaptive_scalper.core.kill_switch import KillSwitchStatus
+from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.costs.model import (
     HORIZON_REMAINING_EXIT,
@@ -64,11 +66,13 @@ from adaptive_scalper.execution.reconciliation import (
     run_reconciliation,
     BrokerPositionSnapshot,
 )
+from adaptive_scalper.execution.close import close_position_safely
 from adaptive_scalper.execution.close_requests import has_unresolved_close, resolve_unresolved_closes
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions
 from adaptive_scalper.costs.observations import record_entry_observation
 from adaptive_scalper.execution.service import FILLED, PARTIAL, FreshEvidence, submit_new_entry
 from adaptive_scalper.execution.store import get_active_orders
+from adaptive_scalper.features.adx import wilder_adx
 from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
@@ -91,9 +95,18 @@ from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParam
 from adaptive_scalper.position_management.manager import PositionReviewInput, review_position_once
 from adaptive_scalper.position_management.re_entry import ReentryParams, evaluate_reentry
 from adaptive_scalper.regimes.classifier import RegimeClassification, RegimeTracker, classify_regime
-from adaptive_scalper.risk.governor import RiskGateInput, calculate_safe_volume, risk_limits_from_config
+from adaptive_scalper.risk.entry_regime import adx_entry_block
+from adaptive_scalper.risk.entry_window import entry_window_block
+from adaptive_scalper.risk.governor import (
+    RiskGateInput,
+    calculate_safe_volume,
+    effective_daily_loss_pct,
+    risk_limits_from_config,
+)
+from adaptive_scalper.risk.hard_stop import adverse_move_pct, breaches_hard_stop
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
+from adaptive_scalper.runtime.microstructure import publish_vwap_bands
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
 from adaptive_scalper.runtime.state import (
     get_position_entry_context,
@@ -124,6 +137,7 @@ BLOCK_UNKNOWN_ORDER = "BLOCK_UNKNOWN_ORDER"
 BLOCK_RECONCILIATION = "BLOCK_RECONCILIATION"
 BLOCK_RISK = "BLOCK_RISK"
 BLOCK_COST = "BLOCK_COST"
+DAILY_LOSS_LOCK_STATE_KEY = "daily_loss_lock"
 # Persisted when run_reconciliation itself fails for a reason other than
 # unreadable broker truth.
 RECONCILIATION_ERROR = "ERROR"
@@ -149,6 +163,7 @@ class SymbolAnalysis:
     raw_regime: RegimeClassification
     confirmed_regime: str
     feature_vector: dict
+    adx: float | None = None  # Wilder ADX of the same closed bars ([entry_regime] gate)
 
 
 # Allowance between "max hold reached" and the closing fill: one position
@@ -274,6 +289,115 @@ class DemoRuntime:
         deals = self.gateway.history_deals_get(day_start, now + 60)
         return sum(d.profit + d.commission + d.swap + d.fee for d in deals)
 
+    def _daily_loss(self, now: int, account) -> tuple[float, float, float, float]:
+        """(effective daily loss %, realized today, floating now, day-start
+        equity). Floating = broker equity - balance (every open position,
+        swap included); day-start equity = balance - today's realized P&L
+        (deposits/withdrawals today are not modelled; the denominator is
+        still capped at current equity, risk.governor.effective_daily_loss_pct)."""
+        realized = self._daily_realized_pnl(now)
+        floating = account.equity - account.balance
+        day_start = account.balance - realized
+        pct = effective_daily_loss_pct(realized_pnl=realized, floating_pnl=floating,
+                                       day_start_equity=day_start, equity=account.equity)
+        return pct, realized, floating, day_start
+
+    def _daily_loss_circuit_breaker(self, now: int, broker_positions: dict) -> bool:
+        """Hard daily circuit breaker. When realized + floating loss reaches
+        `max_daily_loss_pct`: engage the kill switch (new entries stay
+        blocked until the OPERATOR clears it -- this never clears it) and
+        close every locally tracked open position through the safe close
+        service (durable close request, fresh-truth resolution). DEMO only
+        sends market DEALs, so there are no resting entry orders to cancel;
+        any working order seen with this runtime's magic is surfaced as an
+        incident event. Returns True when the breaker is tripped (the cycle
+        then skips normal exit reviews)."""
+        account = self.gateway.account_info()
+        if account is None:
+            raise Mt5QueryError("account_info unavailable for the daily loss circuit breaker")
+        pct, realized, floating, day_start = self._daily_loss(now, account)
+        if pct < self.risk_limits.max_daily_loss_pct:
+            return False
+        reason = (f"daily loss circuit breaker: {pct:.2f}% >= max_daily_loss_pct "
+                  f"{self.risk_limits.max_daily_loss_pct}% (realized {realized:.2f}, floating {floating:.2f}, "
+                  f"day-start equity {day_start:.2f})")
+        kill = get_kill_switch_state(self.conn)
+        if kill.status != KillSwitchStatus.ENGAGED:
+            engage_kill_switch(self.conn, reason, actor="risk_governor:daily_loss_circuit_breaker")
+        record_event(self.conn, "BLOCKED", "risk", "DAILY_LOSS_CIRCUIT_BREAKER", reason,
+                     dedup_key=f"daily_loss_breaker:{now // 86400}", now_utc=now)
+        # Same-UTC-day lock: new entries stay blocked until the next UTC day even if the
+        # operator clears the kill switch earlier (global_entry_block).
+        put_state(self.conn, DAILY_LOSS_LOCK_STATE_KEY, {"utc_day": now // 86400, "reason": reason}, now_utc=now)
+        truth_error: str | None = None
+        for local in get_open_positions(self.conn):
+            live = broker_positions.get(local.broker_position_id)
+            if live is None or has_unresolved_close(self.conn, local.broker_position_id):
+                continue  # reconciliation / close resolution own these
+            outcome = close_position_safely(
+                self.gateway, broker_position_id=local.broker_position_id, expected_direction=local.direction,
+                expected_volume=live.volume, broker_symbol=live.symbol, magic=self.config.runtime.magic,
+                comment="ASN daily-loss flatten", clock=self.clock, conn=self.conn,
+                reconciliation_chain_key=f"daily-loss-breaker:{local.id}",
+            )
+            record_event(self.conn, "WARNING", "risk", "DAILY_LOSS_FLATTEN",
+                         f"position {local.broker_position_id}: {outcome.status}: {outcome.detail}",
+                         canonical_symbol=local.canonical_symbol,
+                         dedup_key=f"daily_loss_flatten:{local.broker_position_id}:{outcome.status}", now_utc=now)
+            if outcome.broker_truth_error is not None and truth_error is None:
+                truth_error = outcome.broker_truth_error
+        working = [o for o in self.gateway.orders_get() if o.magic == self.config.runtime.magic]
+        if working:
+            record_event(self.conn, "BLOCKED", "risk", "DAILY_LOSS_WORKING_ORDERS",
+                         f"{len(working)} working order(s) with this runtime's magic while the daily loss breaker "
+                         f"is tripped: {[o.broker_order_id for o in working]} -- the runtime has no cancel path; "
+                         f"operator action required", dedup_key=f"daily_loss_orders:{now // 86400}", now_utc=now)
+        if truth_error is not None:
+            raise Mt5QueryError(f"broker truth unavailable after a daily-loss flatten: {truth_error}")
+        return True
+
+    def _hard_cut_loss(self, local, live, now: int) -> bool:
+        """Hard cut-loss backstop (config `[hard_stop]`): close at market,
+        through the safe close service, a position whose close-side price has
+        moved STRICTLY more than `max_adverse_move_pct` against its broker
+        fill price -- independent of the broker SL. Returns True when a close
+        was attempted (the normal review is then skipped this cycle). A quote
+        that is missing/stale/invalid is journaled and never treated as 'no
+        loss'; the normal review (and the broker SL) still run."""
+        max_pct = self.config.hard_stop.max_adverse_move_pct.get(local.canonical_symbol)
+        if max_pct is None:
+            return False
+        tick = self.gateway.symbol_info_tick(live.symbol)
+        quote = validate_execution_quote(tick, max_quote_age_seconds=DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS,
+                                         now=self.clock())
+        adverse = adverse_move_pct(live.direction, live.price_open, tick.bid, tick.ask) if quote.valid else None
+        if adverse is None:
+            record_event(self.conn, "WARNING", "risk", "HARD_CUT_LOSS_UNEVALUATED",
+                         f"position {local.broker_position_id}: no usable quote/price to evaluate the "
+                         f"{max_pct}% hard cut-loss ({quote.detail})", canonical_symbol=local.canonical_symbol,
+                         dedup_key=f"hard_cut_loss_unevaluated:{local.broker_position_id}", now_utc=now)
+            return False
+        if not breaches_hard_stop(adverse, max_pct):
+            return False
+        reason = (f"hard cut-loss: {live.direction} {local.broker_position_id} moved {adverse:.3f}% against fill "
+                  f"{live.price_open} (bid {tick.bid}, ask {tick.ask}) > {max_pct}%")
+        record_event(self.conn, "BLOCKED", "risk", "HARD_CUT_LOSS_TRIGGERED", reason,
+                     canonical_symbol=local.canonical_symbol,
+                     dedup_key=f"hard_cut_loss:{local.broker_position_id}", now_utc=now)
+        outcome = close_position_safely(
+            self.gateway, broker_position_id=local.broker_position_id, expected_direction=local.direction,
+            expected_volume=live.volume, broker_symbol=live.symbol, magic=self.config.runtime.magic,
+            comment="ASN hard cut-loss", clock=self.clock, conn=self.conn,
+            reconciliation_chain_key=f"hard-cut-loss:{local.id}",
+        )
+        record_event(self.conn, "WARNING", "risk", "HARD_CUT_LOSS_CLOSE",
+                     f"position {local.broker_position_id}: {outcome.status}: {outcome.detail}",
+                     canonical_symbol=local.canonical_symbol,
+                     dedup_key=f"hard_cut_loss_close:{local.broker_position_id}:{outcome.status}", now_utc=now)
+        if outcome.broker_truth_error is not None:
+            raise Mt5QueryError(f"broker truth unavailable after a hard cut-loss close: {outcome.broker_truth_error}")
+        return True
+
     def _peak_equity(self, equity: float, now: int) -> float:
         peak = max(float(get_state(self.conn, "peak_equity", equity)), equity)
         put_state(self.conn, "peak_equity", peak, now_utc=now)
@@ -340,14 +464,22 @@ class DemoRuntime:
         truth_age = now - int(truth.get("at") or 0)
         if truth_age > self._reconciliation_max_age_seconds():
             return BLOCK_RECONCILIATION, f"last complete position cycle is {truth_age}s old (stale)"
+        lock = get_state(self.conn, DAILY_LOSS_LOCK_STATE_KEY) or {}
+        if lock.get("utc_day") == now // 86400:
+            return BLOCK_RISK, ("daily loss circuit breaker tripped today -- new entries locked until "
+                                "00:00 UTC (" + str(lock.get("reason")) + ")")
         news_block = self.news.global_block(now)
         if news_block is not None:
             return news_block
+        session_block = entry_window_block(now, self.config.entry_window.hours())
+        if session_block is not None:
+            return session_block
         account = self.gateway.account_info()
         equity = account.equity
-        daily = self._daily_realized_pnl(now)
-        if daily < 0 and abs(daily) / equity * 100 >= self.risk_limits.max_daily_loss_pct:
-            return BLOCK_RISK, f"daily loss {abs(daily) / equity * 100:.2f}% reached the limit"
+        daily_pct, realized, floating, _ = self._daily_loss(now, account)
+        if daily_pct >= self.risk_limits.max_daily_loss_pct:
+            return BLOCK_RISK, (f"daily loss {daily_pct:.2f}% (realized {realized:.2f}, floating {floating:.2f}) "
+                                f"reached the limit")
         peak = self._peak_equity(equity, now)
         if peak > 0 and (peak - equity) / peak * 100 >= self.risk_limits.max_drawdown_pct:
             return BLOCK_RISK, f"drawdown {(peak - equity) / peak * 100:.2f}% reached the limit"
@@ -383,7 +515,8 @@ class DemoRuntime:
             c, cand, count = tracker.state
             put_state(self.conn, key, {"confirmed": c, "candidate": cand, "candidate_count": count,
                                        "bar_time": bars[-1].time}, now_utc=now)
-        analysis = SymbolAnalysis(bars[-1].time, features, raw, confirmed, numeric_feature_vector(features))
+        analysis = SymbolAnalysis(bars[-1].time, features, raw, confirmed, numeric_feature_vector(features),
+                                  adx=wilder_adx(bars, self.config.entry_regime.adx_period))
         self.latest[canonical] = analysis
         self.returns[canonical] = log_returns(bars)
         self.shadow_bars[canonical] = bars
@@ -482,6 +615,8 @@ class DemoRuntime:
                              dedup_key=f"close_unresolved:{resolution.broker_position_id}", now_utc=now)
 
         broker_positions = {p.broker_position_id: p for p in self.gateway.positions_get()}
+        if self._daily_loss_circuit_breaker(now, broker_positions):
+            return  # flattening this cycle; normal exit reviews resume once nothing is left to close
         truth_failure: Exception | None = None
         for local in get_open_positions(self.conn):
             live = broker_positions.get(local.broker_position_id)
@@ -490,6 +625,8 @@ class DemoRuntime:
             if has_unresolved_close(self.conn, local.broker_position_id):
                 continue  # an unproven close is never followed by another decision on this position
             try:
+                if self._hard_cut_loss(local, live, now):
+                    continue  # closed (or a close attempted) by the hard cut-loss backstop this cycle
                 self._review(local, live, now)
             except Exception as exc:  # one position's failure must not stop the others
                 logger.exception("position review failed for %s", local.broker_position_id)
@@ -673,6 +810,10 @@ class DemoRuntime:
 
     def entry_cycle(self) -> dict:
         now = self.now()
+        try:  # observer only: never blocks or causes a trade
+            publish_vwap_bands(self.conn, self.gateway, self.config, self.symbols, now)
+        except Exception:
+            logger.exception("microstructure observer failed")
         snapshot = {"at": now, "mode": MODE, "global_block": None, "symbols": {}}
         block = self.global_entry_block(now)
         if block is not None:
@@ -761,6 +902,10 @@ class DemoRuntime:
         if canonical in open_symbols:
             return self._record(canonical, analysis.bar_time, "SIGNAL", "FLAT", "position or order already open on this symbol")
 
+        regime_block = adx_entry_block(analysis.adx, self.config.entry_regime.min_adx)
+        if regime_block is not None:
+            return self._record(canonical, analysis.bar_time, "REGIME", *regime_block)
+
         regime = RegimeClassification(analysis.confirmed_regime, analysis.raw_regime.confidence,
                                       analysis.raw_regime.version, analysis.raw_regime.reason)
         signals = [s for s in (st.evaluate(analysis.features, regime) for st in self.registry.all_active()) if s is not None]
@@ -830,6 +975,7 @@ class DemoRuntime:
             stop_loss=round(price - sign * signal.stop_distance, spec.digits),
             take_profit=round(price + sign * signal.target_distance, spec.digits),
             fetch_fresh_evidence=lambda: self.fresh_evidence(canonical, signal, sizing.monetary_risk),
+            max_spread_price=self.config.cost_for(canonical).max_spread_price,
             magic=self.config.runtime.magic, comment="ASN", now_utc=now, clock=self.clock,
         )
         if not outcome.status.startswith("BLOCK"):
@@ -886,6 +1032,7 @@ class DemoRuntime:
         pending_only = [o for o in get_active_orders(self.conn)
                         if o.state.value in _OPEN_EXPOSURE_ORDER_STATES and o.canonical_symbol not in open_symbols]
         reentry = self._reentry_check(canonical, signal, now)
+        realized_today = self._daily_realized_pnl(now)
         permission = FinalPermissionInput(
             mode=MODE, signal=signal, kill_switch_state=get_kill_switch_state(self.conn),
             demo_verification=verify_demo_before_order(self.gateway),
@@ -911,10 +1058,15 @@ class DemoRuntime:
                 current_total_pending_risk=sum(p.monetary_risk for p in pending),
                 current_positions_count=len(open_positions) + len(pending_only),
                 current_positions_for_symbol=len(same_symbol),
-                daily_realized_pnl=self._daily_realized_pnl(now), peak_equity=self._peak_equity(account.equity, now),
+                daily_realized_pnl=realized_today, peak_equity=self._peak_equity(account.equity, now),
+                daily_floating_pnl=account.equity - account.balance,
+                day_start_equity=account.balance - realized_today,
             ),
             risk_limits=self.risk_limits, open_positions=open_positions, pending_positions=pending,
             portfolio_risk_limits=self.portfolio_limits, reentry_check=reentry,
+            entry_window_hours=self.config.entry_window.hours(),
+            entry_adx=self.latest[canonical].adx if canonical in self.latest else None,
+            min_entry_adx=self.config.entry_regime.min_adx,
         )
         return FreshEvidence(permission_input=permission, symbol_spec=spec, available_margin_free=account.margin_free)
 
