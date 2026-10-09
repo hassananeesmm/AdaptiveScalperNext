@@ -3235,3 +3235,29 @@ check or order send occurred.
   not authorized); merges of PR #10 then #9, release build, deployment with migration 0032, PR #7 superseded by #10,
   PR #5 (0.2.6, already deployed) stale.
 - Full suite after the audit changes (Windows, serial, 9 min 17 s): **2169 passed / 9 skipped / 0 failed / 2 warnings**.
+
+## 2026-10-09 -- release 0.2.9 MERGED and DEPLOYED to the IC Markets DEMO runtime (operator-approved)
+
+- Operator instruction: "merge all nd deploy". PR #10 (`hardening/flat-shadow-release` -> main) merged as `3d90c60`;
+  PR #9 retargeted to main and merged as `2dfb171` (merge commits, SHAs preserved). `main` tree == `a4636bf`
+  (full suite 2169 passed / 9 skipped / 0 failed). Tag `v0.2.9` (annotated) on `2dfb171`, pushed. PR #7 (superseded by
+  #10) and PR #5 (0.2.6, already deployed) left open for the operator to close.
+- Pre-deployment (read-only): broker ICMarketsSC-Demo (trade_mode DEMO) 0 positions / 0 orders, equity 9,252.63;
+  local 0 open positions, 0 unresolved close_requests, 0 unresolved execution incidents; kill switch DISENGAGED
+  (untouched); schema 31; requirements unchanged since v0.2.7. Entries were already blocked by BLOCK_RISK drawdown
+  5.19 % >= 5 % (since ~2 h before). The operator first restarted the old v0.2.7 checkout (no change), then stopped
+  the runtime and dashboard with Ctrl+C; both processes confirmed exited; broker re-confirmed flat.
+- Backup: `data/backups/pre_0_2_9_deploy_20261009T060023Z.sqlite3` (online backup from a read-only source
+  connection, WAL included): integrity_check ok, schema 31, 0 open positions, 275,210,240 bytes, sha256
+  8bf4fab36577dafb24f44feccb4cdcd3ab3bdae375865fc9e6294ea7f0507b99.
+- Deployment: root checkout `git checkout --detach v0.2.9` (clean, v0.2.7 `d9c1bd1` -> `2dfb171`); `START DEMO +
+  DASHBOARD.bat` launched 10:01 local / 06:01 UTC; doctor passed and applied migration 0032. The dashboard launched
+  alongside exited at start (most likely racing the 0032 migration); a foreground run was clean, and a relaunch of
+  `START DASHBOARD.bat` served HTTP 200 with all 23 panels OK (incl. `microstructure`).
+- Post-start gate (read-only): schema 32, quick_check ok; engine RUNNING (DEMO), no degraded components; reconciliation
+  CLEAN; broker_truth AVAILABLE; server clock VERIFIED (BTCUSD -1.4 s, XAUUSD -0.4 s); kill switch DISENGAGED; 0 open
+  positions; no new ERROR/CRITICAL events. Global block at 06:02 UTC: BLOCK_SESSION (outside [12:00, 20:00) UTC).
+  Loaded config: entry window (12, 20), min_adx 20.0, hard_stop {BTCUSD: 0.5}, news 30/30, spread caps XAUUSD 0.20 /
+  BTCUSD 15.0, risk 0.25 / 2.0 / 5.0 %. Microstructure live: BTCUSD VWAP 82,293.04 sigma 20.77 (10 M1 bars);
+  candles BTCUSD ADX14 29.6 / XAUUSD ADX14 53.4.
+- Rollback (not needed): stop the runtime, `git checkout --detach d9c1bd1`, restore the backup above (schema 31).
