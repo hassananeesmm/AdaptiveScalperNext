@@ -66,6 +66,7 @@ EXPECTED = {
     "history", "broker-history", "paper", "demo", "scan", "analyse", "reconcile", "news", "backtest",
     "walk-forward", "oos", "path-stress", "purged-validation", "models", "learning", "model-walk-forward", "rag",
     "okf", "dashboard", "order-check-probe", "preflight", "research-snapshot", "independent-research",
+    "peak-equity", "forward-evidence",   # 2026-10-09: ASN-034 audited baseline, ASN-031 read-only evaluator
 }
 
 

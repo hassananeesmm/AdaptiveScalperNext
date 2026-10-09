@@ -34,8 +34,13 @@ for reference is fine; no writes, ever.
 system is implemented end to end (PAPER + DEMO runtime, CLI, responsive
 dashboard, research, learning observer, RAG + OKF knowledge) and verified on
 the Windows laptop against the real IC Markets DEMO terminal (see
-`docs/QA_REPORT.md`, Windows section). Pending: the operator's kill-switch
-bootstrap, then DEMO execution (`LOCAL_MT5_HANDOFF.md` steps U-X). Broker
+`docs/QA_REPORT.md`, Windows section). The DEMO runtime runs on the laptop
+(release tags `v0.2.x`; the deployed version and its blockers are in
+`PROJECT_STATUS.md`). New entries are FLAT by construction until a strategy
+passes the preregistered forward-evidence protocol and carries a signed
+certificate (ASN-031); never work around that, the drawdown baseline
+(`peak-equity reset` is for documented accounting events only) or any other
+gate to make the bot trade. Broker
 times are server clock converted to UTC in `Mt5Gateway` (`[mt5]
 server_time_rule`). Architecture: `docs/ARCHITECTURE.md`; safety guarantees:
 `docs/SAFETY.md`; dashboard: `docs/DASHBOARD.md`.

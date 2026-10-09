@@ -634,7 +634,12 @@ class DemoRuntime:
         account = self.gateway.account_info()
         if account is None:
             raise Mt5QueryError("account_info unavailable for the drawdown baseline")
-        self._observe_peak(account, now)
+        try:
+            self._observe_peak(account, now)
+        except Exception as exc:  # bookkeeping must never stop exit management; entries re-observe and fail closed
+            logger.exception("drawdown baseline observation failed")
+            record_event(self.conn, "ERROR", "risk", "PEAK_EQUITY_OBSERVATION_FAILED", f"{type(exc).__name__}: {exc}",
+                         dedup_key="peak_equity_observation_failed", now_utc=now)
         if self._daily_loss_circuit_breaker(now, broker_positions):
             return  # flattening this cycle; normal exit reviews resume once nothing is left to close
         truth_failure: Exception | None = None

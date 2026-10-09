@@ -5,6 +5,13 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
+ASN-036 [MEDIUM, validation — 2026-10-09] The forward-evidence protocol's cost stress (criterion 5: net R > 0 with
+all slippage x1.5 and spread at its p75) cannot be measured: `shadow_lifecycle_outcomes` records only the total
+`cost_r`, not its spread and slippage components. `validation/forward_evidence.py` therefore reports criterion 5 as
+NOT_EVALUATED, so no group can reach the eligible label until the observer records the components (a new
+observer/evaluator version; existing rows stay as they are). Pinned by
+tests/test_forward_evidence.py::test_a_strong_synthetic_series_still_cannot_be_eligible_without_cost_components.
+
 ASN-031 [P1, validation — 2026-10-03, by design] No certificate-issuing validation pipeline exists, so no evidence can
 ever verify and the system is FLAT by construction. Building it (forward-only data, preregistered protocol,
 time-ordered purged calibration, key provisioned outside Git) is a separate, human-reviewed task.
@@ -12,6 +19,15 @@ time-ordered purged calibration, key provisioned outside Git) is a separate, hum
 offline, the runtime only the public key (`ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE`); the certificate binds the model
 and calibrator artifact SHA-256 and the gate recomputes P(win) from those artifacts. No artifact, key or
 certificate has been created — still FLAT by construction.
+2026-10-09 (branch `hardening/peak-equity-and-readiness`, not deployed): step 1 only — a READ-ONLY evaluator of the
+preregistered protocol over the DEMO shadow lifecycle outcomes (`validation/forward_evidence.py`, CLI
+`forward-evidence`). It never issues, signs or stores anything. First run on the production database (read-only,
+2026-10-09 ~10:45 UTC): every group FORWARD EVIDENCE INSUFFICIENT -- independent observations of the required 300:
+microstructure_acceleration BTCUSD 23 / XAUUSD 19, statistical_reversion BTCUSD 4 / XAUUSD 8 (all V1 strategies,
+about 4.5 h of shadow data since the 0.2.9 deployment; WICK-ABS and ADX-PB have no code and no data). Still missing: the evidence
+itself, the cost components (ASN-036), a calibrated model + calibrator, the offline issuer, the key pair (public key
+only on the runtime) and a human review. No issuer was built: with no group near the sample size it would only add
+attack surface.
 
 ASN-032 [LOW, architecture — 2026-10-03] The shadow observer and lifecycle evaluator are proven unable to reach a
 broker mutation at MODULE level (transitive import walk), but run inside the DEMO runtime process. A separate
@@ -283,6 +299,27 @@ how often two positions can coexist around US releases.
    the running mode's key.
 
 ## Fixed
+
+~~ASN-034 [HIGH, risk — found 2026-10-09 audit]~~ FIXED 2026-10-09 on `hardening/peak-equity-and-readiness` (NOT
+deployed; migration 0033). The DEMO drawdown baseline was one upserted `runtime_state["peak_equity"]` value: (a) it was
+written only when `global_entry_block` reached the drawdown step, never while the session window (16 h/day), news,
+the kill switch, reconciliation or the daily-loss lock blocked first, so equity highs made then were lost and the
+drawdown was understated; (b) it was not bound to any broker account (an account change kept the old value);
+(c) it kept no history; (d) there was no sanctioned reset, only a raw SQL edit; (e) `evaluate_risk_gate` skipped the
+drawdown check when `peak_equity <= 0`. Now: append-only `peak_equity_history` per (login, server) with
+no-UPDATE/no-DELETE triggers (`risk/peak_equity.py`); the peak is observed on EVERY completed position cycle and at
+both permission rounds; the pre-0033 value is adopted once (LEGACY_ADOPTED, never below equity) for the first account
+seen; an account change BLOCKS entries until an operator records a baseline; `peak-equity reset`
+(`core/peak_equity_reset.py`, OperatorAuthority, kill switch ENGAGED, flat book, reason, evidence SHA-256, explicit
+acknowledgement to lower) is the only reset path; an unknown/invalid peak is BLOCK_RISK. Tests:
+tests/test_peak_equity.py (44), negative-controlled (removing the per-cycle observation fails the session test).
+
+~~ASN-035 [LOW, execution hygiene — 2026-10-09 audit]~~ CLOSED, not a defect. The 612 PROPOSED production orders
+(BTCUSD 320, XAUUSD 292; 2026-09-25..10-06) are submissions a gate blocked BEFORE order_send: blocked orders stay
+PROPOSED by design (pinned by tests/test_execution_service.py and tests/test_broker_chaos.py), every DEMO bar is
+decided once (`last_decided_bar`), none has a broker id, and PROPOSED is neither an active order
+(`execution/store.get_active_orders` requires a broker id) nor an exposure state. Kept as audit records (no data
+change); inertness pinned by tests/test_blocked_proposals_are_inert.py.
 
 ~~ASN-033 [LOW, research CLI -- 2026-10-09, pre-existing]~~ FIXED 2026-10-09 on
 `hardening/risk-and-blackout-tightening`: `research.ledger.new_trial_id(*parts, now_utc)` appends an 8-hex random

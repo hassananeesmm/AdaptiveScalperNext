@@ -339,3 +339,19 @@ def test_demo_blocks_entries_after_an_account_change(tmp_path):
     assert decision == BLOCK_RISK and "drawdown baseline unavailable" in reason
     assert math.isnan(engine.demo._risk_gate_peak(gateway.account_info(), int(clock.now)))
     assert gateway.calls["order_send"] == 0
+
+
+def test_a_failed_baseline_write_never_stops_exit_management_and_entries_fail_closed(tmp_path, monkeypatch):
+    clock, engine, conn, gateway = _started(tmp_path)
+
+    def broken(account, now):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(engine.demo, "_observe_peak", broken)
+    step(engine, clock, seconds=3)
+    assert get_state(conn, "broker_truth")["status"] == "AVAILABLE"          # the protective cycle completed
+    assert conn.execute("SELECT COUNT(*) FROM runtime_events WHERE event = 'PEAK_EQUITY_OBSERVATION_FAILED'") \
+        .fetchone()[0] == 1
+    with pytest.raises(sqlite3.OperationalError):
+        engine.demo.global_entry_block(int(clock.now))                      # no entry can pass
+    assert gateway.calls["order_send"] == 0

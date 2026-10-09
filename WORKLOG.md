@@ -3261,3 +3261,42 @@ check or order send occurred.
   BTCUSD 15.0, risk 0.25 / 2.0 / 5.0 %. Microstructure live: BTCUSD VWAP 82,293.04 sigma 20.77 (10 M1 bars);
   candles BTCUSD ADX14 29.6 / XAUUSD ADX14 53.4.
 - Rollback (not needed): stop the runtime, `git checkout --detach d9c1bd1`, restore the backup above (schema 31).
+
+## 2026-10-09 -- read-only runtime/risk audit, then DEMO readiness work (branch `hardening/peak-equity-and-readiness`)
+
+Audit (read-only; production DB opened with `mode=ro` only, no MT5 connection, no order):
+- Broker is IC Markets (`ICMarketsSC-Demo`, "Raw Trading Ltd"), DEMO; not Exness. Engine RUNNING (0.2.9), kill switch
+  DISENGAGED, reconciliation CLEAN, 0 positions, equity = balance = 9,252.63.
+- Drawdown 5.19 % = (9,759.63 - 9,252.63) / 9,759.63 against the unbound `runtime_state.peak_equity`. The "-7.5 % vs
+  10,000" figure uses a different baseline: the account received four deposits (200.00 on 09-09; 732.60, 84.08 and
+  10,000.00 on 09-16; total 11,016.68) and was traded by another expert (magic 770115, 2,197 deals, -4,731.72) and
+  manually (magic 0, 22 deals, +3,422.50) before this runtime existed (DB created 09-19, first runtime event 09-25).
+  Cash check: imported closed balance 9,707.46 (09-25 18:15Z) + runtime deals since (-455.22) = 9,252.24 vs broker
+  9,252.63 (residual 0.39, unexplained until the operator exports the broker history).
+- The drawdown block began 2026-10-06 05:25Z (5.01 %), 5.19 % since 10-06 10:09Z (the 0.2.9 deploy note "since ~2 h
+  before" understated it). The binding blocker is BLOCK_EDGE_UNVALIDATED (ASN-031); the drawdown is secondary.
+- Peak tracking defects found and fixed below (ASN-034); 612 PROPOSED orders investigated (ASN-035, by design).
+- The DEMO account login appears in public Git history (7a2d840, 4f7c762; redacted at HEAD since 5f59280/3a8df17).
+  No password, key or token anywhere in history. History not rewritten (operator decision).
+
+DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted):
+- ASN-034: migration 0033 `peak_equity_history` (append-only, per login + server), `risk/peak_equity.py`,
+  `core/peak_equity_reset.py` + CLI `peak-equity status|history|reset` (OperatorAuthority, kill switch ENGAGED, flat
+  book, reason >= 20 chars, evidence file SHA-256, `--acknowledge-lower`), DEMO position cycle observes the peak every
+  cycle, account change -> BLOCK_RISK until an operator records a baseline, `evaluate_risk_gate` blocks an
+  unknown/invalid peak (was: skipped the check when <= 0). Tests: tests/test_peak_equity.py; the session regression
+  test was negative-controlled (fails with the per-cycle observation removed).
+- Migration 0033 rehearsed on an online-backup COPY of the production DB (read-only source): schema 32 -> 33,
+  integrity ok, row counts unchanged; first observation = LEGACY_ADOPTED 9,759.63 for the running account, drawdown
+  still 5.19 % (block persists by design); second observation appends nothing. Copy deleted.
+- ASN-031 step 1: `validation/forward_evidence.py` + CLI `forward-evidence` (read-only, preregistered protocol only,
+  no interim performance disclosure, no issuance). Production result ~10:45 UTC: every group FORWARD EVIDENCE
+  INSUFFICIENT (independent observations of 300: microstructure_acceleration BTCUSD 23 / XAUUSD 19,
+  statistical_reversion BTCUSD 4 / XAUUSD 8). ASN-036 opened (cost-stress components not recorded).
+- ASN-035 closed as not-a-defect with tests/test_blocked_proposals_are_inert.py; production rows untouched.
+- CI: `.github/workflows/ci.yml` (push to main, every pull request, manual) -- full Windows Python 3.13 suite.
+- Docs: PROJECT_STATUS (this branch), BUG_BACKLOG (ASN-031 progress, ASN-034/035/036), docs/SAFETY.md row 5,
+  CLAUDE.md "Current state" (was stale: "pending kill-switch bootstrap").
+- DEMO activation: NOT activated. Criterion 5 fails (no strategy with genuine forward evidence, no certificate
+  pipeline); criterion 3 fails (drawdown 5.19 % >= 5 % without any baseline reset); criterion 1 open (broker
+  cash-history export). Entries stay blocked; the runtime keeps collecting shadow evidence.
