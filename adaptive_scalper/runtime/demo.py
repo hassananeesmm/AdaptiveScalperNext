@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import time
 import dataclasses
@@ -104,6 +105,7 @@ from adaptive_scalper.risk.governor import (
     risk_limits_from_config,
 )
 from adaptive_scalper.risk.hard_stop import adverse_move_pct, breaches_hard_stop
+from adaptive_scalper.risk.peak_equity import PeakEquityStatus, drawdown_pct, observe_equity
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.microstructure import publish_vwap_bands
@@ -398,10 +400,19 @@ class DemoRuntime:
             raise Mt5QueryError(f"broker truth unavailable after a hard cut-loss close: {outcome.broker_truth_error}")
         return True
 
-    def _peak_equity(self, equity: float, now: int) -> float:
-        peak = max(float(get_state(self.conn, "peak_equity", equity)), equity)
-        put_state(self.conn, "peak_equity", peak, now_utc=now)
-        return peak
+    def _observe_peak(self, account, now: int) -> PeakEquityStatus:
+        """The drawdown baseline of THIS broker account (ASN-034,
+        risk/peak_equity.py): append-only, bound to login + server, raised
+        on every new equity high. Blocked (never invented) for an account
+        with no baseline while another account has one."""
+        return observe_equity(self.conn, login=account.login, server=account.server, equity=account.equity,
+                              now_utc=now)
+
+    def _risk_gate_peak(self, account, now: int) -> float:
+        """Peak for the final-permission risk gate: NaN when the baseline is
+        unavailable, which `evaluate_risk_gate` blocks (fail closed)."""
+        peak = self._observe_peak(account, now)
+        return math.nan if peak.blocked else peak.peak_equity
 
     def _exposures(self) -> tuple[list[PositionExposure], list[PositionExposure]]:
         open_positions = [
@@ -480,9 +491,12 @@ class DemoRuntime:
         if daily_pct >= self.risk_limits.max_daily_loss_pct:
             return BLOCK_RISK, (f"daily loss {daily_pct:.2f}% (realized {realized:.2f}, floating {floating:.2f}) "
                                 f"reached the limit")
-        peak = self._peak_equity(equity, now)
-        if peak > 0 and (peak - equity) / peak * 100 >= self.risk_limits.max_drawdown_pct:
-            return BLOCK_RISK, f"drawdown {(peak - equity) / peak * 100:.2f}% reached the limit"
+        peak = self._observe_peak(account, now)
+        if peak.blocked:
+            return BLOCK_RISK, f"drawdown baseline unavailable: {peak.blocked_reason}"
+        drawdown = drawdown_pct(peak.peak_equity, equity)
+        if drawdown >= self.risk_limits.max_drawdown_pct:
+            return BLOCK_RISK, f"drawdown {drawdown:.2f}% reached the limit"
         return None
 
     # ------------------------------------------------------------------
@@ -615,6 +629,12 @@ class DemoRuntime:
                              dedup_key=f"close_unresolved:{resolution.broker_position_id}", now_utc=now)
 
         broker_positions = {p.broker_position_id: p for p in self.gateway.positions_get()}
+        # ASN-034: the drawdown baseline follows EVERY completed broker-truth
+        # cycle, whatever blocks entries (session, news, kill switch, locks).
+        account = self.gateway.account_info()
+        if account is None:
+            raise Mt5QueryError("account_info unavailable for the drawdown baseline")
+        self._observe_peak(account, now)
         if self._daily_loss_circuit_breaker(now, broker_positions):
             return  # flattening this cycle; normal exit reviews resume once nothing is left to close
         truth_failure: Exception | None = None
@@ -1058,7 +1078,7 @@ class DemoRuntime:
                 current_total_pending_risk=sum(p.monetary_risk for p in pending),
                 current_positions_count=len(open_positions) + len(pending_only),
                 current_positions_for_symbol=len(same_symbol),
-                daily_realized_pnl=realized_today, peak_equity=self._peak_equity(account.equity, now),
+                daily_realized_pnl=realized_today, peak_equity=self._risk_gate_peak(account, now),
                 daily_floating_pnl=account.equity - account.balance,
                 day_start_equity=account.balance - realized_today,
             ),

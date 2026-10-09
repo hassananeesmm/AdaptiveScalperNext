@@ -216,11 +216,17 @@ def evaluate_risk_gate(inp: RiskGateInput, limits: RiskLimits) -> tuple[str, str
             f"max_daily_loss_pct {limits.max_daily_loss_pct}%"
         )
 
-    if inp.peak_equity > 0:
-        drawdown_pct = max(0.0, (inp.peak_equity - inp.equity) / inp.peak_equity * 100.0)
-        if drawdown_pct >= limits.max_drawdown_pct:
-            return BLOCK_RISK, (
-                f"drawdown {drawdown_pct:.2f}% has reached/exceeded max_drawdown_pct {limits.max_drawdown_pct}%"
-            )
+    # ASN-034: an unknown baseline (NaN, inf, zero, negative) used to skip the
+    # drawdown check entirely; it now blocks like an unknown daily loss does.
+    if not math.isfinite(inp.peak_equity) or inp.peak_equity <= 0:
+        return BLOCK_RISK, (
+            f"peak equity (drawdown baseline) is unknown or invalid ({inp.peak_equity!r}) -- the drawdown limit "
+            f"cannot be evaluated"
+        )
+    drawdown_pct = max(0.0, (inp.peak_equity - inp.equity) / inp.peak_equity * 100.0)
+    if drawdown_pct >= limits.max_drawdown_pct:
+        return BLOCK_RISK, (
+            f"drawdown {drawdown_pct:.2f}% has reached/exceeded max_drawdown_pct {limits.max_drawdown_pct}%"
+        )
 
     return ALLOW, "within all risk limits"
