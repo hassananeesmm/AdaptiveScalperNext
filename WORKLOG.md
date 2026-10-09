@@ -3067,3 +3067,10 @@ check or order send occurred.
 - The spec states that strategy research is FROZEN since H9 was REJECTED (2026-10-02) and that running it needs
   a separate, explicit operator decision lifting the freeze for this hypothesis alone. The requested BTCUSD
   post-only limit entry is recorded as not modelled (no post-only on IC Markets MT5 CFDs; no queue evidence).
+
+## 2026-10-09 -- WICK-ABS pre-registration DRAFT (spec only, research freeze stands)
+
+- Operator 2026-10-09 spec (candle absorption + EMA20/ADX14 confluence, SL 1.0 ATR, TP 1.8 ATR, break-even after 50 %
+  of TP + 2 pips) recorded as `adaptive_scalper/research/WICK_ABSORPTION_PREREGISTRATION_DRAFT_2026-10-09.md`.
+  NOT AUTHORIZED TO RUN; no code, no data read. Unstated values fixed as declared defaults (M5, wick >= 0.50, spread
+  <= cap, break-even 0.20 / 2.0, 2 h time stop). The operator's 1 % risk per trade is refused (hard ceiling 0.25 %).
