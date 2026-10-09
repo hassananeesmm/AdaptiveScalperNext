@@ -218,7 +218,7 @@ const GROUPS = [
   {id:"overview", label:"Overview", desc:"Account, exposure, active orders and market health.",
    panels:["market","positions","orders","performance","decisions","overview"]},
   {id:"markets",label:"Markets",desc:"Broker quotes, symbol resolution and decision context.",
-   panels:["market","symbols","news","history"]},
+   panels:["market","symbols","microstructure","news","history"]},
   {id:"trading",label:"Trading",desc:"Positions, broker orders, simulated results and decision journal.",
    panels:["positions","orders","decisions","performance","costs"]},
   {id:"safety",label:"Safety & risk",desc:"Kill switch, active incidents, risk exposure and news health.",
@@ -234,7 +234,8 @@ const GROUPS = [
   {id:"all",label:"All panels",desc:"Every implemented dashboard panel.",
    panels:["overview","market","performance","components","symbols","positions","orders","decisions",
            "risk","news","events","costs","research","learning","memory","knowledge","history",
-           "strategy_registry","strategy_activity","strategy_performance","strategy_attribution","multi_position"]}
+           "strategy_registry","strategy_activity","strategy_performance","strategy_attribution","multi_position",
+           "microstructure"]}
 ];
 const WIDE = new Set(["market","positions","orders","performance","decisions","events","history",
   "strategy_registry","strategy_activity","strategy_performance","strategy_attribution","multi_position"]);
@@ -246,7 +247,7 @@ const FRIENDLY = {
   memory:"RAG memory",knowledge:"Knowledge bundle",history:"Historical coverage",
   strategy_registry:"Strategy overview",strategy_activity:"Live strategy activity",
   strategy_performance:"Performance comparison",strategy_attribution:"Broker-verified attribution",
-  multi_position:"MULTI-POSITION READINESS"
+  multi_position:"MULTI-POSITION READINESS",microstructure:"Microstructure (observation only)"
 };
 const el = (tag, text, cls) => {
   const n=document.createElement(tag);

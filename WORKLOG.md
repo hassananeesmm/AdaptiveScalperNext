@@ -3215,3 +3215,23 @@ check or order send occurred.
   1 failed / 2 warnings. The failure is pre-existing and unrelated (ASN-033: research trial ids are per wall-clock
   second; two CLI backtests in the same second collide on the UNIQUE trial_id); it passes when re-run alone.
   `tests/test_v1_strategy_freeze.py` passed (V1 digests unchanged). No deployment; production DB untouched.
+
+## 2026-10-09 -- repository audit ("audit full repo and complete everything")
+
+- Scans: no TODO/FIXME/NotImplementedError in `adaptive_scalper/` or `tests/`; no duplicate (shadowed) function or
+  class definitions (AST walk); ruff 0.16.10 (scratchpad install, not in the repo venv) F,E9: 6 x F811 in
+  `tests/test_paper_pending_entry_hardening.py`, all the pytest pattern of importing fixtures (`db`, `script`) and
+  using them as parameters -- false positives, left as is. Skips: 8 live-MT5 tests (opt-in) + 1 symlink test (this
+  Windows user cannot create symlinks).
+- Live MT5 read-only tests (`ASN_LIVE_MT5=1`, no order call in the file): 8 passed against the DEMO terminal.
+- ASN-033 FIXED: `research.ledger.new_trial_id` (random 8-hex suffix) at every per-second run/trial id site
+  (cli/research.py backtest, oos, purged-cv; cli/learning.py; learning/jobs.py); regression test added.
+- ASN-029 deliberately left open (no honest cross time without tick-level detection; see BUG_BACKLOG).
+- Dashboard: new read-only `microstructure` panel (Markets + All panels) showing the observer snapshot and its age,
+  labelled "authority: NONE (observation only)"; test added.
+- Open by design / operator decisions (not "completable" in code): ASN-031 certificate pipeline + key provisioning,
+  ASN-028 executable exit change (needs forward evidence), ASN-030 cost model v2 (needs sample size), ASN-019/020
+  research findings, ASN-032 shadow process isolation (proposal); strategy research FROZEN (ADX-PB, WICK-ABS drafts
+  not authorized); merges of PR #10 then #9, release build, deployment with migration 0032, PR #7 superseded by #10,
+  PR #5 (0.2.6, already deployed) stale.
+- Full suite after the audit changes (Windows, serial, 9 min 17 s): **2169 passed / 9 skipped / 0 failed / 2 warnings**.

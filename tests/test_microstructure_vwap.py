@@ -161,3 +161,20 @@ def test_untracked_by_default(tmp_path):
     engine.startup()
     step(engine, clock, seconds=STEP, tick=4)
     assert get_state(conn, micro.STATE_KEY) is None
+
+
+def test_dashboard_panel_shows_the_snapshot_read_only(tmp_path):
+    from adaptive_scalper.dashboard.panels import compute_panel
+    from adaptive_scalper.persistence import connect, migrate
+    from adaptive_scalper.runtime.state import put_state
+
+    conn = connect(str(tmp_path / "dash.sqlite3"))
+    migrate(conn)
+    assert compute_panel(conn, "microstructure", now=1000)["status"] == "NO_DATA"
+
+    put_state(conn, micro.STATE_KEY, {"at": 990, "symbols": {"BTCUSD": {"vwap": 60000.0}},
+                                      "candles": {"XAUUSD": {"ema20": 2000.0}}}, now_utc=990)
+    panel = compute_panel(conn, "microstructure", now=1000)
+    assert panel["status"] == "OK" and panel["authority"].startswith("NONE")
+    assert panel["snapshot_age_seconds"] == 10
+    assert panel["vwap_bands"]["BTCUSD"]["vwap"] == 60000.0 and panel["candles"]["XAUUSD"]["ema20"] == 2000.0

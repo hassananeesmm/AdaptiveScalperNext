@@ -12,7 +12,7 @@ from pathlib import Path
 from adaptive_scalper.cli.common import add_symbol_arg, open_db, print_json
 from adaptive_scalper.learning.jobs import SOURCE_BACKTEST, SOURCE_PAPER, load_training_rows, run_training_job
 from adaptive_scalper.learning.model_walk_forward import result_to_dict, run_model_walk_forward
-from adaptive_scalper.research.ledger import record_trial
+from adaptive_scalper.research.ledger import new_trial_id, record_trial
 
 
 def cmd_models(args: argparse.Namespace) -> int:
@@ -70,7 +70,7 @@ def cmd_model_walk_forward(args: argparse.Namespace) -> int:
     result = run_model_walk_forward(loaded.rows, n_folds=args.folds, gap_seconds=args.gap_seconds,
                                     min_train_rows=args.min_train_rows, seed=args.seed)
     now = int(time.time())
-    trial_id = f"model-wf-eval:entry_model:{args.symbol}:{now}"
+    trial_id = new_trial_id("model-wf-eval", "entry_model", args.symbol, now_utc=now)
     record_trial(conn, trial_id=trial_id, family=f"entry_model:{args.symbol}", kind="MODEL_WALK_FORWARD",
                  strategy_versions={}, params={"source": args.source, "folds": args.folds,
                                                "gap_seconds": args.gap_seconds, "evaluation_only": True},

@@ -248,3 +248,22 @@ def test_execution_critical_code_does_not_depend_on_research():
     for package in critical:
         for path in (PACKAGE / package).rglob("*.py"):
             assert not [m for m in _imports(path) if m.startswith("adaptive_scalper.research")], path
+
+
+def test_new_trial_id_is_unique_within_one_second_asn033(tmp_path):
+    """ASN-033: two runs of the same kind in one wall-clock second used to share
+    `kind:symbol:resolution:<second>` and collide on the UNIQUE trial_id."""
+    from adaptive_scalper.research.ledger import new_trial_id
+
+    ids = {new_trial_id("backtest", "XAUUSD", "M5", now_utc=1_700_000_000) for _ in range(1000)}
+    assert len(ids) == 1000
+    one = next(iter(ids))
+    assert one.startswith("backtest:XAUUSD:M5:1700000000:") and len(one.rsplit(":", 1)[1]) == 8
+
+    conn = connect(str(tmp_path / "ledger.sqlite3"))
+    migrate(conn)
+    for _ in range(2):  # same kind, same second: both are recorded
+        record_trial(conn, trial_id=new_trial_id("backtest", "XAUUSD", "M5", now_utc=1_700_000_000),
+                     family="strategy_set:XAUUSD", kind="BACKTEST", strategy_versions={}, params={},
+                     status="COMPLETED", now_utc=1_700_000_000)
+    assert conn.execute("SELECT COUNT(*) FROM research_trials").fetchone()[0] == 2

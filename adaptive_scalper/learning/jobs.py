@@ -41,7 +41,7 @@ from adaptive_scalper.learning.training import (
     register_entry_model,
     train_entry_outcome_model,
 )
-from adaptive_scalper.research.ledger import record_trial
+from adaptive_scalper.research.ledger import new_trial_id, record_trial
 from adaptive_scalper.simulation.fill_model import COST_BROKER_DEMO_CONFIRMED
 
 SOURCE_BACKTEST = "BACKTEST"
@@ -179,7 +179,7 @@ def run_training_job(
     for rec in records:
         if rec["strategy_version"] is not None and rec["strategy_key"] not in RETIRED_STRATEGY_KEYS:
             versions[rec["strategy_key"]] = max(versions.get(rec["strategy_key"], 0), rec["strategy_version"])
-    trial_id = f"model-wf:{model_key}:v{record.version}:{now}"
+    trial_id = new_trial_id("model-wf", model_key, f"v{record.version}", now_utc=now)
     record_trial(
         conn, trial_id=trial_id, family=model_key, kind="MODEL_WALK_FORWARD", strategy_versions=versions,
         params={"source": source, "n_folds": n_folds, "gap_seconds": gap_seconds, "min_samples": min_samples,

@@ -19,7 +19,7 @@ from adaptive_scalper.backtest.types import BacktestResult
 from adaptive_scalper.cli.common import CliError, add_symbol_arg, open_db, parse_utc, print_json
 from adaptive_scalper.gateway.spec_store import load_symbol_spec
 from adaptive_scalper.history.store import get_bars
-from adaptive_scalper.research.ledger import family_sharpe_variance, family_trial_count, record_trial
+from adaptive_scalper.research.ledger import family_sharpe_variance, family_trial_count, new_trial_id, record_trial
 from adaptive_scalper.strategies import build_active_registry
 
 
@@ -69,7 +69,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     bars, spec, config, news = _inputs(args, conn, cfg)
     now = int(time.time())
     result = run_backtest(bars, args.symbol, args.resolution, spec, config=config, now_utc=now)
-    run_id = f"backtest:{args.symbol}:{args.resolution}:{now}"
+    run_id = new_trial_id("backtest", args.symbol, args.resolution, now_utc=now)
     record_backtest_run(conn, result, bars, run_id=run_id, run_type="BACKTEST", used_for="VALIDATION",
                         strategies=tuple(_versions()), feature_schema_version=1, now_utc=now)
     record_trial(conn, trial_id=run_id, family=f"strategy_set:{args.symbol}", kind="BACKTEST",
@@ -113,7 +113,7 @@ def cmd_oos(args: argparse.Namespace) -> int:
     cfg, conn = open_db(args.config, require_utc_history=True)
     bars, spec, config, news = _inputs(args, conn, cfg)
     now = int(time.time())
-    run_id = f"oos:{args.symbol}:{args.resolution}:{now}"
+    run_id = new_trial_id("oos", args.symbol, args.resolution, now_utc=now)
     try:
         result = run_untouched_oos(bars, args.symbol, args.resolution, spec, conn=conn, run_id=run_id,
                                    config=config, allow_oos_reuse=args.analysis_reuse, now_utc=now)
@@ -184,7 +184,7 @@ def cmd_purged_validation(args: argparse.Namespace) -> int:
     dsr = (deflated_sharpe_ratio(moments.sharpe, moments.n, n_trials=n_trials, trial_sharpe_variance=variance,
                                  skew=moments.skew, kurtosis=moments.kurtosis) if variance is not None else None)
     now = int(time.time())
-    record_trial(conn, trial_id=f"purged-cv:{run_id}:{now}", family=family, kind="PURGED_CV",
+    record_trial(conn, trial_id=new_trial_id("purged-cv", run_id, now_utc=now), family=family, kind="PURGED_CV",
                  strategy_versions=_versions(), params={"run_id": run_id, "folds": args.folds,
                                                         "embargo_seconds": args.embargo_seconds},
                  status="COMPLETED", sharpe=moments.sharpe, n_observations=moments.n,
