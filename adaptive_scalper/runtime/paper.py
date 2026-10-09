@@ -37,15 +37,24 @@ from adaptive_scalper.risk.governor import risk_limits_from_config
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
 from adaptive_scalper.runtime.state import put_state, record_entry_decision, record_event
+from adaptive_scalper.costs.edge_evidence import (
+    NO_VALIDATED_EDGE_EVIDENCE,
+    EdgeEvidenceProvider,
+    require_executable_provider,
+)
 from adaptive_scalper.simulation.fill_model import COST_UNVERIFIED_ASSUMPTION, FillAssumptions
 
 logger = logging.getLogger(__name__)
 
 MODE = "PAPER"
 BLOCK_KILL_SWITCH = "BLOCK_KILL_SWITCH"
+BLOCK_COST = "BLOCK_COST"
 
 
-def paper_config(config: AppConfig, canonical_symbol: str, news_windows: tuple[tuple[int, int], ...]) -> BacktestConfig:
+def paper_config(
+    config: AppConfig, canonical_symbol: str, news_windows: tuple[tuple[int, int], ...], *,
+    edge_provider: EdgeEvidenceProvider | None = None,
+) -> BacktestConfig:
     costs = config.cost_for(canonical_symbol)
     provenance = costs.provenance if costs.fully_known else COST_UNVERIFIED_ASSUMPTION
     return BacktestConfig(
@@ -58,6 +67,9 @@ def paper_config(config: AppConfig, canonical_symbol: str, news_windows: tuple[t
             swap_monetary_per_lot_per_day=costs.swap_per_lot_per_day, provenance=provenance,
         ),
         news_windows=news_windows,
+        server_time_rule=config.mt5.server_time_rule,
+        edge_provider=edge_provider,
+        suspended_strategy_keys=tuple(sorted(config.strategies.entry_suspended)),
     )
 
 
@@ -74,6 +86,12 @@ class PaperRuntime:
     news: NewsMonitor
     clock: Callable[[], float] = time.time
     halted_symbols: set[str] = field(default_factory=set)
+    # Expected-edge evidence (issue #6): the default has none, so PAPER
+    # proposes nothing (FLAT); the legacy V1 replay provider is refused.
+    edge_evidence: EdgeEvidenceProvider = NO_VALIDATED_EDGE_EVIDENCE
+
+    def __post_init__(self) -> None:
+        require_executable_provider(self.edge_evidence, "PAPER runtime")
 
     def global_entry_block(self, now: int) -> tuple[str, str] | None:
         kill = get_kill_switch_state(self.conn)
@@ -142,14 +160,19 @@ class PaperRuntime:
         return snapshot
 
     def _symbol_cycle(self, canonical, bars, spec, correlation, block, now) -> dict:
-        config = paper_config(self.config, canonical, self.news.windows_for(canonical))
+        config = paper_config(self.config, canonical, self.news.windows_for(canonical),
+                              edge_provider=self.edge_evidence)
         if len(bars) < config.feature_lookback + 2:
             return {"decision": "BLOCK_DATA_QUALITY", "reason": f"only {len(bars)} closed bars"}
+        # Unknown commission/slippage never becomes a free fill: new PAPER
+        # entries block exactly as DEMO's do (BLOCK_COST); an already-open
+        # simulated position is still managed to its exit.
+        cost_block = None if self.config.cost_for(canonical).fully_known else BLOCK_COST
         result = run_paper_cycle(
             self.conn, bars, canonical, self.config.runtime.entry_resolution, spec, config=config,
             session_key=session_key(self.config, canonical), now_utc=now,
             external_open_positions=self._external(canonical), correlation_matrix=correlation,
-            entry_block_reason=block[0] if block is not None else None,
+            entry_block_reason=block[0] if block is not None else cost_block,
         )
         if not result.ran:
             return {"decision": "WAITING_FOR_BAR_CLOSE", "reason": "no new closed bar"}

@@ -10,6 +10,7 @@ from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.kill_switch import get_state as kill_switch_state
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.paper.state import list_sessions
+from edge_fixtures import FixtureValidatedProvider
 from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, build_engine, default_market, step
 
 START_AT = T0 + 60 * STEP + 10
@@ -22,7 +23,7 @@ def _count(conn, sql: str) -> int:
 def test_a_restarted_demo_engine_keeps_managing_the_open_position_without_duplicates(tmp_path):
     clock = FakeClock(START_AT)
     gateway = LiveMarketGateway(clock, default_market())
-    engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway)
+    engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     step(engine, clock, seconds=STEP * 4, tick=4)
@@ -33,7 +34,7 @@ def test_a_restarted_demo_engine_keeps_managing_the_open_position_without_duplic
     engine.stop()
 
     # the process "dies" and a new one starts over the same DB and broker
-    restarted, conn2, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway)
+    restarted, conn2, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway, edge_evidence=FixtureValidatedProvider())
     summary = restarted.startup()
     assert summary["recovery"]["reconciliation"] == "CLEAN"
     assert summary["recovery"]["quarantined_orders"] == []
@@ -49,7 +50,7 @@ def test_a_restarted_demo_engine_keeps_managing_the_open_position_without_duplic
 def test_a_crash_mid_submission_is_quarantined_before_anything_else_runs(tmp_path):
     clock = FakeClock(START_AT)
     gateway = LiveMarketGateway(clock, default_market())
-    engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway)
+    engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     conn.execute(
@@ -61,7 +62,7 @@ def test_a_crash_mid_submission_is_quarantined_before_anything_else_runs(tmp_pat
     conn.commit()
     engine.stop()
 
-    restarted, conn2, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway)
+    restarted, conn2, _ = build_engine(tmp_path, mode="DEMO", clock=clock, gateway=gateway, edge_evidence=FixtureValidatedProvider())
     summary = restarted.startup()
     assert len(summary["recovery"]["quarantined_orders"]) == 1
     state = conn2.execute("SELECT state FROM orders WHERE client_request_id = 'crash:1'").fetchone()[0]

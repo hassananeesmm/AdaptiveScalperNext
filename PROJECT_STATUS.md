@@ -23,7 +23,62 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO)
+## Current phase (2026-10-03, branch `hardening/flat-shadow-release`) — HARDENED RELEASE CANDIDATE, NOT DEPLOYED
+
+**Strategy status: NO VALIDATED NET EDGE — FLAT.** Final FLAT/SHADOW release hardening on top of `bd4cfc7`
+(docs/audits/FINAL_FLAT_SHADOW_RELEASE_HARDENING.md):
+- edge certificates are Ed25519 (`edge_certificate/v2`): offline issuer holds the private seed, the runtime only the
+  PUBLIC key (`ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE`); no key → FLAT; HMAC removed, no fallback;
+- the certificate binds the exact model/calibrator artifacts (SHA-256) and feature schema/transform; the gate
+  recomputes P(win) from them — a valid certificate with an invented probability is BLOCK_EDGE_UNVALIDATED;
+- the executable path has no protocol parameter (always `CURRENT_PROTOCOL`);
+- shadow candidate identity includes mode, strategy version, observer and lifecycle version (migration 0032,
+  unreleased, edited in place; rehearsed fresh and 31→32 on a production copy).
+No model artifact, key or certificate exists, so nothing can verify: FLAT by construction (ASN-031). Deployed runtime
+0.2.7, production DB and REAL untouched.
+
+## Previous phase (2026-10-03, branch `fix/integrated-forward-edge-shadow`) — RELEASE CANDIDATE, NOT DEPLOYED
+
+**Strategy status: NO VALIDATED NET EDGE — FLAT.** Integrated FLAT/SHADOW release candidate for human review
+(docs/audits/INTEGRATED_FORWARD_EDGE_RELEASE_AUDIT.md). PR #7 (`55f6d53`) + release 0.2.8 (`ed15d76`) merged
+deliberately (`3c0dc53`, all conflicts kept both sides), then `0cbc31b`:
+- sealed edge-validation certificates (HMAC key outside Git — superseded by Ed25519 above; no key or any failed check → FLAT; status string alone
+  authorizes nothing; re-verified at use against the current protocol);
+- microstructure_acceleration suspended before the selector (0.2.8) **and** blocked in final permission
+  (BLOCK_STRATEGY_SUSPENDED), even with verified evidence; still observed in shadow;
+- counterfactual lifecycle evaluator reusing the backtest/PAPER exit functions (equivalence-tested), table
+  `shadow_lifecycle_outcomes` in migration 0032 (schema 32).
+Full suite on `0cbc31b`: **1936 passed, 0 failed, 9 skipped, 2 warnings** (TESTED-FAKE, TESTED-WINDOWS). Migration
+31→32 rehearsed on an online-backup copy of the production DB (integrity ok, no row changes; copy deleted).
+Deployed runtime 0.2.7 untouched (not running since 2026-10-02 17:25 UTC, flat). REAL disabled.
+
+## Previous phase (2026-10-03, branch `fix/v1-loss-root-cause-correctness`, draft PR #7) — superseded by the integrated candidate above
+
+**Deployed runtime: 0.2.7 (`d9c1bd1`, schema 31), unchanged by this work.** Its process was found not running at
+the start of this audit (last heartbeat 2026-10-02 17:25:35 UTC, no ENGINE_STOPPED; consistent with a machine
+restart), leaving the account flat: 0 positions, 0 working orders, 0 unresolved incidents, reconciliation CLEAN,
+kill switch DISENGAGED. Restarting it is an operator decision.
+
+Profitability-recovery audit (docs/audits/PROFITABILITY_RECOVERY_FINAL_REPORT.md,
+docs/audits/PROFITABILITY_ROOT_CAUSE_FINAL.md). Terminal state **B: CORRECTNESS VERIFIED — NO VALIDATED EDGE —
+SHADOW COLLECTION READY**. The evidence supports **NO VALIDATED POSITIVE NET EDGE**.
+
+- `7ba9dce` (TESTED-FAKE, TESTED-WINDOWS): typed cost horizons in DEMO **and** backtest/PAPER (the simulator still
+  charged per-fill slippage once and re-charged sunk costs in reviews); horizon-aware swap at broker server midnight
+  (unknown + can cross → BLOCK_COST; issue #8); PAPER BLOCK_COST on unknown cost; `fill_model/v3`; raw score is no
+  longer read as P(win) — executable EV needs VALIDATED `EdgeEvidence`, default **FLAT** (`BLOCK_EDGE_UNVALIDATED`,
+  issue #6); V1 kept only as the labelled `LEGACY_V1_RAW_SCORE` research replay (selector freeze pin updated with an
+  equivalence test).
+- `1ee1f65` (TESTED-FAKE, TESTED-WINDOWS): shadow observer (migration **0032**, append-only candidate + outcome
+  evidence, no order path) and the strategy lifecycle contract (V1 recorded as thesis = entry trigger; executable
+  exits unchanged).
+- Full suite on `1ee1f65`: **1858 passed, 0 failed, 9 skipped** (local Windows, canonical venv).
+- Not included: release 0.2.8's microstructure entry suspension (`ed15d76`, a sibling of this branch).
+- Deploying this branch makes DEMO FLAT by design while the shadow observer collects forward evidence. It needs:
+  PR review, integration with 0.2.8, a release build, a verified backup, migration 0032 rehearsal, and a flat,
+  operator-started restart.
+
+## Previous phase (2026-09-29, release 0.2.6 DEPLOYED on DEMO; superseded by 0.2.7 on 2026-10-02)
 
 **Running: 0.2.6 (`e3b1250`)**, DEMO runtime + dashboard started by the operator's launcher 10:30:13 UTC after a
 verified online backup (`data/backups/pre_0_2_6_deploy_20260929T102622Z.sqlite3`, integrity ok) and a successful
@@ -31,6 +86,35 @@ migration rehearsal; production schema **30**. Post-start: engine RUNNING, broke
 CLEAN, account DEMO (ICMarketsSC-Demo, pinned IC Markets terminal), symbols BTCUSD + XAUUSD, kill switch DISENGAGED
 (untouched), 0 positions / orders / UNKNOWN / unresolved incidents / close_requests. Live read-only MT5 tests 8/8.
 ASN-026/027 failure paths: TESTED-FAKE; TESTED-LIVE-DEMO evidence pending natural operation (see WORKLOG).
+
+## Release candidate 0.2.8 (2026-10-02, branch `release/0.2.8`, NOT deployed)
+
+Operator-requested entry suspension of `microstructure_acceleration` (`[strategies] entry_suspended` in
+`config/default.toml`): still active and journaled, never opens a position (DEMO, PAPER, backtest). V1 selector and
+strategies byte-identical; no schema change. Full suite 1812/9/0. Deploy only with explicit operator approval at a
+flat broker. Not a validated edge: it removes the main live loss source (377 of 391 DEMO trades, -277.58 USD).
+
+## Current phase (2026-10-02, release 0.2.7 DEPLOYED on DEMO)
+
+**Running: 0.2.7 (`d9c1bd1`, tag v0.2.7)** -- observability only (economic exit events, migration 0031); DEMO
+runtime + dashboard started by the operator 04:11:35 UTC after a verified backup
+(`data/backups/pre_0_2_7_deploy_20261002T041020Z.sqlite3`); production schema **31**. Post-start: RUNNING, broker
+truth AVAILABLE, reconciliation CLEAN, kill switch DISENGAGED (untouched), 0 incidents. Research: H1-H8 NO
+VALIDATED EDGE YET (H8 REJECTED, research branch).
+
+## Release candidate 0.2.7 (2026-09-30, branch `release/0.2.7`, OBSERVABILITY ONLY, NOT deployed)
+
+Exit-side execution cost observability, re-designed around ECONOMIC EXIT EVENTS (one event = one broker order that
+closed part of a position; fills of one order are volume-weighted, separate orders on one position stay separate).
+Migration **0031** (never applied to production; rewritten from the unmerged `feature/exit-cost-observability`
+design, which pooled every closing deal of a position into one row). No strategy, selector, entry threshold, exit,
+risk, symbol or cost-assumption change. Evidence only: nothing writes configuration. Deployment needs explicit
+operator approval at a flat broker with clean broker truth, clean reconciliation and zero unresolved incidents.
+Details and counts: WORKLOG 2026-09-30.
+
+**0.2.7 verification 2026-10-02:** package `AdaptiveScalperNext-0.2.7.zip` (d9c1bd1, sha256 de28c47c...813f),
+build gate 1799/9/0, smoke PASSED, live read-only MT5 8/8, rehearsal 30 -> 31 ok. READY FOR OPERATOR REVIEW; NOT
+DEPLOYED.
 
 ## Release record (2026-09-29, release 0.2.6 built and smoke-tested)
 

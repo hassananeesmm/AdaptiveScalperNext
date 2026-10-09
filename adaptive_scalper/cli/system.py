@@ -12,7 +12,7 @@ from adaptive_scalper.cli.common import CliError, add_symbol_arg, open_db, open_
 from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, ALLOWED_MODES, RETIRED_STRATEGY_KEYS
 from adaptive_scalper.config.loader import ConfigError
 from adaptive_scalper.core import kill_switch
-from adaptive_scalper.costs.observations import summarize_observations
+from adaptive_scalper.costs.observations import summarize_exit_observations, summarize_observations
 from adaptive_scalper.dashboard.health import compute_health
 from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
@@ -200,7 +200,8 @@ def cmd_costs_observed(args: argparse.Namespace) -> int:
     for symbol in symbols:
         summary = summarize_observations(conn, symbol)
         configured = cfg.cost_for(symbol)
-        out[symbol] = {**summary.__dict__, "configured": configured.model_dump()}
+        out[symbol] = {**summary.__dict__, "configured": configured.model_dump(),
+                       "exit_side": summarize_exit_observations(conn, symbol)}
     conn.close()
     print_json({"observations": out, "note": "evidence only: review and edit [costs.SYMBOL] yourself; "
                                              "nothing is changed automatically"})

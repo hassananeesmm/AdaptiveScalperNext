@@ -618,8 +618,8 @@ def _recover_missing_local_position(
                 """
                 INSERT OR IGNORE INTO deals
                     (order_id, broker_deal_id, broker_position_id, price, volume, commission, swap, profit, fee,
-                     entry_type, deal_type, broker_order_ticket, magic, comment, occurred_at_utc)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     entry_type, deal_type, broker_order_ticket, magic, comment, occurred_at_utc, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     order_id, str(deal.ticket), local.broker_position_id, deal.price,
@@ -627,6 +627,7 @@ def _recover_missing_local_position(
                     _DEAL_ENTRY_NAMES.get(deal.entry, str(deal.entry)),
                     _DEAL_TYPE_NAMES.get(deal.type, str(deal.type)),
                     str(deal.order) if deal.order else None, deal.magic, deal.comment, deal.time,
+                    getattr(deal, "reason", None),
                 ),
             )
 

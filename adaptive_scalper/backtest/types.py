@@ -61,8 +61,32 @@ class BacktestConfig:
     # session break, data gap), the pending entry is dropped as stale.
     # None = two bars of the run's resolution.
     max_entry_fill_delay_seconds: int | None = None
+    # Broker server-clock rule whose midnight is the swap rollover
+    # (gateway/server_time.py). "UTC" keeps research runs on UTC days; PAPER
+    # passes the configured `[mt5] server_time_rule`.
+    server_time_rule: str = "UTC"
+    # Where expected edge comes from (costs/edge_evidence.py, issue #6).
+    # "NONE" = no validated evidence: the selector and the fill-bar
+    # revalidation reject every candidate, so the run is FLAT.
+    # "LEGACY_V1_RAW_SCORE" reproduces the frozen V1 formula
+    # (raw_confidence read as p, configured target/stop as payoff) for
+    # research replay only; it is never executable.
+    edge_model: str = "NONE"
+    # Optional provider object overriding `edge_model` (a calibrated model, or
+    # a test fixture); its `model_id` enters the config fingerprint. PAPER
+    # passes the runtime's vetted provider here.
+    edge_provider: object | None = None
+    # Config `strategies.entry_suspended`: active strategies whose signals are
+    # evaluated but never selected for an entry (the same rule DEMO applies).
+    suspended_strategy_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        from adaptive_scalper.costs.edge_evidence import EDGE_MODELS
+        from adaptive_scalper.gateway.server_time import validate_rule
+
+        validate_rule(self.server_time_rule)
+        if self.edge_model not in EDGE_MODELS:
+            raise ValueError(f"edge_model must be one of {EDGE_MODELS}, got {self.edge_model!r}")
         if self.initial_equity <= 0:
             raise ValueError(f"initial_equity must be positive, got {self.initial_equity!r}")
         if self.risk_per_trade_pct <= 0:
@@ -249,6 +273,7 @@ REJECT_STALE_SIGNAL = "STALE_SIGNAL"
 REJECT_NEWS = "BLOCK_NEWS"
 REJECT_COST = "BLOCK_COST"
 REJECT_EXPECTED_EDGE = "BLOCK_EXPECTED_EDGE"
+REJECT_EDGE_UNVALIDATED = "BLOCK_EDGE_UNVALIDATED"
 REJECT_SIZING = "BLOCK_RISK_SIZING"
 REJECT_RISK = "BLOCK_RISK"
 REJECT_PORTFOLIO_RISK = "BLOCK_PORTFOLIO_RISK"

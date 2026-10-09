@@ -153,6 +153,7 @@ class _RoundResult:
     blocked: CloseOutcome | None
     live: object | None = None
     filling_type: str | None = None
+    tick: object | None = None   # the validated round quote, kept only as exit-cost evidence
 
 
 def _resolve_round(
@@ -211,7 +212,7 @@ def _resolve_round(
             NO_QUOTE, f"quote check failed for {broker_symbol!r}: {quote_check.reason} — {quote_check.detail}",
         ))
 
-    return _RoundResult(None, live=live, filling_type=filling_type)
+    return _RoundResult(None, live=live, filling_type=filling_type, tick=tick)
 
 
 def _classify_close_result(interpretation, result: OrderSendResult, requested_volume: float) -> CloseOutcome:
@@ -348,6 +349,9 @@ def close_position_safely(
                 conn, broker_position_id=str(broker_position_id), broker_symbol=final_request.symbol,
                 position_direction=round2.live.direction, requested_volume=final_request.volume,
                 magic=magic, comment=comment, now_utc=int(clock()),
+                # exit-cost evidence only: the SAME round-2 quote validated above
+                quote_bid=getattr(round2.tick, "bid", None), quote_ask=getattr(round2.tick, "ask", None),
+                quote_time_msc=getattr(round2.tick, "time_msc", None),
             )
         except CloseRequestConflict as exc:
             return CloseOutcome(CLOSE_UNRESOLVED, f"{exc} -- nothing was sent")
@@ -404,4 +408,6 @@ def _settle(conn: sqlite3.Connection, close_request_id: int, broker_position_id:
         detail += f" -- broker truth unavailable after the send: {outcome.broker_truth_error}"
     settle_close_request(conn, close_request_id, send_outcome=outcome.status, send_detail=detail,
                          retcode=outcome.result.retcode if outcome.result is not None else None,
-                         status=status, now_utc=now)
+                         status=status, now_utc=now,
+                         # exit-cost evidence only: the ticket the send itself returned
+                         broker_order_ticket=outcome.result.broker_order_id if outcome.result is not None else None)

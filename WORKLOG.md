@@ -2871,3 +2871,186 @@ check or order send occurred.
   `test_v1_strategy_freeze.py` + `test_config.py` 42 passed at `e3b1250`.
 - Evidence classes: ASN-026/027 remain TESTED-FAKE for their failure paths; no natural DEMO trade, close, broker-truth
   outage or UNKNOWN has occurred yet under 0.2.6 (TESTED-LIVE-DEMO evidence pending natural operation).
+
+## 2026-09-29 (evening) -- exit-side execution cost observability (branch `feature/exit-cost-observability`, NOT deployed)
+
+- Repository housekeeping (operator-directed): `main` fast-forwarded 8e67f77 -> c730e96 (local + origin, no force);
+  `v0.2.6` still = e3b1250; PRs #2, #3, #4 closed as superseded with explanations (branches kept); PR #5 open.
+- Why: research showed the per-fill slippage ASSUMPTION dominates modelled cost and only ENTRY slippage was ever
+  observed in DEMO.
+- Change (additive, migration **0031**): `close_requests.quote_bid/quote_ask/quote_time_msc` stored in the write-ahead
+  row from the SAME validated round-2 tick (no extra broker call; send/settle logic unchanged -- a test pins exactly two
+  `symbol_info_tick` calls per close); `deals.reason` (MT5 ENUM_DEAL_REASON) persisted by reconciliation for closing
+  deals; new `exit_cost_observations` filled by the existing off-hot-path cost sweep (ADVISORY component): exit kind
+  (AGENT_CLOSE / STOP_LOSS / TAKE_PROFIT / MANUAL / STOP_OUT / OTHER / UNKNOWN), reference price only from evidence
+  (close quote, the broker's own "[sl X]"/"[tp X]" trigger comment, or the never-moved entry TP; never the entry SL,
+  which breakeven moves), VWAP exit fill, adverse exit slippage, else NULL. `system cost-evidence` CLI output gains
+  `exit_side` (p50/p75/p90/p95 per kind). Evidence only: nothing changes configuration.
+- Tests: `tests/test_exit_cost_observations.py` 15 (fail on the old code by construction); full suite at this branch
+  **1782 passed / 9 skipped / 0 failed**; compileall OK.
+- Rehearsal on an online-backup COPY of the production DB (source opened `mode=ro`; production never written):
+  migration 0031 applied, integrity ok; the sweep produced real stop-exit evidence from historical broker comments --
+  XAUUSD STOP_LOSS n 15: p50 0.18 / p75 0.54 / p90 0.72 (assumed 0.41 per fill); BTCUSD n 36: p50 0.94 / p90 5.70 /
+  p95 6.56 (assumed 11.97). 21 pre-change agent closes correctly stay NULL (no recorded quote); 150 older closes are
+  UNKNOWN (no reason, no evidence) and are not guessed.
+- Deployment: only through the normal release procedure at an operator-approved flat (backup, rehearsal, build, smoke,
+  live read-only checks). The running 0.2.6 process was not touched.
+
+## 2026-09-30 -- release candidate 0.2.7: exit-cost observability per ECONOMIC EXIT EVENT (branch `release/0.2.7`, NOT deployed)
+
+- Baseline verified before editing: v0.2.6 = e3b1250 (deployed, running from the main checkout, untouched); main =
+  c730e96; `feature/exit-cost-observability` = 75f6e34 (one commit on main, never merged); PR #5 open.
+- Defect found in the 75f6e34 design (not deployed): `exit_cost_observations` was UNIQUE per broker position and
+  volume-weighted EVERY closing deal into one row with one kind, so a partial agent close followed by a stop loss
+  became one VWAP "STOP_LOSS" (or UNKNOWN) row; INOUT counted as a normal close; rows were frozen on first sight
+  (INSERT OR IGNORE) before late deals settled; the agent close was linked to the LATEST close request; the TP
+  reference fell back to the entry order's TP; one pooled `sufficient` flag across SL/TP/agent closes.
+- Corrected model (migration 0031 rewritten; additive only): one row per economic exit event, key
+  `<position>:ORDER:<order ticket>` (else `<position>:DEAL:<deal ticket>`). Evidence = local `deals` + imported
+  `broker_account_deals` (identity-checked by the position's own opening deal), de-duplicated by deal ticket; no extra
+  broker call. `close_requests.broker_order_ticket` is stored from the ticket the send ALREADY returned; an agent close
+  is linked to its request only by that ticket and uses the recorded round-2 quote. SL/TP reference only from the
+  broker's own "[sl X]"/"[tp X]" deal comment (stops move: no order-level fallback). Kinds AGENT_CLOSE / STOP_LOSS /
+  TAKE_PROFIT / MANUAL / STOP_OUT / OTHER / UNKNOWN from the MT5 deal reason; EXPERT without our magic = OTHER.
+  Lifecycle: PROVISIONAL (recomputed deterministically, version bumps only on change) until the position is CLOSED and
+  closing volume = entry volume -> FINAL; unprovable after 7 days -> FINAL + UNSETTLED_VOLUME (never counted). FINAL
+  rows immutable/undeletable (triggers). INOUT, OUT_BY and reason conflicts are recorded and excluded. Summary is per
+  exit kind only (`meets_min_samples` per kind, explicitly "never a recalibration trigger"); no pooled flag.
+- Tests: `tests/test_exit_cost_observations.py` 31 (negative controls: partial agent close then SL, partial close
+  then TP, multi-fill one order, mixed reasons, delayed second deal, restart before finalization, idempotency, FINAL
+  immutability, INOUT, OUT_BY, missing references, foreign magic, account-history identity, history None vs empty,
+  per-kind sufficiency, no extra tick call). Mutation check: pooling per position, freezing on first sight, INOUT as a
+  normal close, latest-request linking and pooled sufficiency each make the suite fail.
+- Rehearsal on an online-backup COPY (production opened `mode=ro` as backup source only; its size/mtime unchanged):
+  schema 30 -> 31 (applied [31] only), integrity_check ok before / after / after the sweep, 0 FK violations; all 45
+  pre-existing tables identical (row fingerprints; market-data tables compared by schema only, their rows never read);
+  new columns all NULL (nothing back-filled); sweep 281 events, all FINAL, 0.08 s; second sweep 0 changes. Evidence:
+  XAUUSD STOP_LOSS 22 measured (p50 0.09 / p90 0.63 / p95 0.72; assumption 0.41 per fill), BTCUSD STOP_LOSS 51
+  (p50 0.33 / p90 5.64 / p95 7.73; assumption 11.97); 208 older exits UNKNOWN (no deal reason recorded, no ticket
+  link) and not guessed; no multi-event position yet. **No cost assumption changed** (small, single-kind samples;
+  entry side and agent closes unmeasured).
+- Deployment: NOT deployed. Requires explicit operator approval, a flat broker, clean broker truth, clean
+  reconciliation and zero unresolved incidents; the running 0.2.6 process and production DB were not touched.
+
+## 2026-10-02 -- release candidate 0.2.7: final independent verification (NOT deployed)
+
+- Refs verified: root checkout e3b1250 (= v0.2.6, clean, deployed runtime untouched), main c730e96, release/0.2.7
+  d9c1bd1 at build time. Added test: two agent-close instructions on one position = two events with their OWN
+  quotes; OUT_BY never counted as SL/TP/agent close. Exit-event tests: 32 (all 20 operator-required behaviours).
+- Migration rehearsal on a FRESH online-backup copy (production opened `mode=ro` as backup source only; size
+  275,210,240 and mtime unchanged after; main-file sha256 b4a8a512...fd72 (WAL pages excluded from that hash)): copy
+  sha256 6f990b94...90e5 before, 5156a28a...5e98 after; schema 30 -> 31 (applied [31]); integrity_check ok before /
+  after / after the sweep; FK violations 0; 45 pre-existing tables identical (market-data tables by schema only);
+  new columns all NULL; sweep 353 events (XAUUSD STOP_LOSS 30 measured, p50 0.14 / p90 0.63, assumption 0.41 per
+  fill; BTCUSD STOP_LOSS 59, p50 0.41 / p90 7.35, assumption 11.97; 264 older exits UNKNOWN, not guessed); second
+  sweep 0 changes. No cost assumption changed.
+- Build: `dist/AdaptiveScalperNext-0.2.7.zip` from d9c1bd1, 430 entries, sha256
+  de28c47cf7e05440a344951540afc4eeb8dcefb6f793bacd0fb86460a1df813f; build gate 1799 passed / 9 skipped / 0 failed
+  (2 deprecation warnings). Content audit: no DB/env/key/data/dist/venv/pyc entries; secret-like strings only in
+  tests/test_guardrails.py fixtures and synthetic logins in two tests, all byte-identical to v0.2.6.
+- Fresh-environment smoke (new venv, pinned requirements, temp DB, MT5 disabled): PASSED, 1799 passed / 9 skipped.
+- Live MT5 READ-ONLY tests (`ASN_LIVE_MT5=1`, no order call): 8 passed.
+- Status: READY FOR OPERATOR REVIEW. NOT deployed; the running 0.2.6 process and production DB were not touched.
+
+## 2026-10-02 -- release 0.2.7 DEPLOYED to the IC Markets DEMO runtime (operator-approved)
+
+- Pre-deployment: operator approval in session; broker DEMO (ICMarketsSC-Demo) had 1 open position at the first check
+  (opened by the running 0.2.6); deployment waited, read-only, until it closed (04:08:15 UTC). Then: broker 0
+  positions / 0 orders, balance = equity 9,422.97; local 0 open positions, 0 sent-unfinished orders, 0 unresolved
+  incidents, 0 unresolved close_requests; kill switch DISENGAGED (untouched). Operator stopped the runtime with
+  Ctrl+C (WAL empty afterwards). Requirements/config unchanged between e3b1250 and d9c1bd1.
+- Backup: `data/backups/pre_0_2_7_deploy_20261002T041020Z.sqlite3` (online backup from a read-only source
+  connection): integrity_check ok, schema 30, 275,210,240 bytes, sha256
+  541fb9abac7996f35e7c8fbebc2726c5da5bcc4e388ce0cf9e1af92b7bdeda22.
+- Deployment: tag `v0.2.7` = d9c1bd1 (the built/smoked package commit); root checkout `git checkout --detach v0.2.7`
+  (clean, e3b1250 -> d9c1bd1); the operator started `START DEMO + DASHBOARD.bat` (08:11:35 local, 04:11:35 UTC);
+  migration 0031 applied by the normal machinery.
+- Post-start gate (read-only): schema 31, quick_check ok; engine RUNNING (DEMO, broker_truth AVAILABLE, no degraded
+  components); server clock VERIFIED; reconciliation CLEAN; account DEMO ICMarketsSC-Demo; kill switch DISENGAGED;
+  risk limits 0.25 / 0.75 / 2.0 / 5.0 %, 2 positions, 1 per symbol; 0 open positions / incidents / unresolved
+  closes; exit-cost sweep OK (369 economic exit events recorded, cost_evidence component OK); dashboard HTTP 200.
+- Rollback (not needed): checkout e3b1250 and restore the backup above.
+
+## 2026-10-03 -- profitability-recovery audit on PR #7 (no deployment, no runtime change)
+
+- Start state (read-only): root checkout `d9c1bd1` (v0.2.7); PR #7 head `3834d93` on `release/0.2.7`; `release/0.2.8`
+  (`ed15d76`) exists as a sibling. No runtime, dashboard or MT5 process running (0.2.7 last heartbeat 2026-10-02
+  17:25:35 UTC, no ENGINE_STOPPED); DB flat (0 positions, 0 working orders, 0 incidents, reconciliation CLEAN,
+  kill switch DISENGAGED, schema 31). Worktree `.worktrees/profit-recovery`.
+- Baseline at `3834d93`: 1801 passed / 1 failed / 9 skipped. The failure was the V1 freeze digest of `selector.py`,
+  changed by this session's edit while the 25-minute run was in flight. The committed digest matches the pin, so
+  the effective baseline is 1802 / 0 / 9. Lesson logged as task-observer 0014: freeze the tree during long runs.
+- Recomputed every research claim from `data/research/independent_*_r1.json` (scripts/audit/research_recompute.py)
+  and the DEMO exit economics from broker deals, read-only (scripts/audit/demo_exit_economics.py): 408 positions,
+  −234.00 USD; 161 closed one bar after entry because the entry trigger stopped firing (−759.89 USD); broker TP hit once.
+- `7ba9dce`: cost horizons in DEMO + backtest/PAPER, horizon-aware swap, PAPER BLOCK_COST, fill_model/v3,
+  evidence-only EV (default FLAT), V1 legacy replay, selector freeze re-pin with an equivalence test; 3 mutation
+  checks killed. Full suite 1841 / 0 / 9.
+- `1ee1f65`: shadow observer + migration 0032, lifecycle contract. Full suite 1858 / 0 / 9.
+- Scheduler lag: not a demonstrated P/L cause (R lost decision→fill ≈ 0; max lag 2.4 s).
+  `threshold_cross_at_utc` is never written (observability gap).
+- Sealed BTC OOS not accessed. One exploratory query that would have aggregated MIN/MAX(time) over the whole bars
+  table errored on a column name before returning anything and was removed. Ledger read, not written (262 trials).
+- Correctness replay preregistered (docs/audits/CORRECTNESS_REPLAY_PREREGISTRATION.md), NOT run (it consumes trial
+  budget and cannot change the terminal state); awaiting a human decision.
+- Not done (needs the operator): merge, 0.2.8 integration, release, restart, kill-switch actions. REAL untouched.
+## 2026-10-02 (evening) -- Release candidate 0.2.8: entry suspension of microstructure_acceleration (NOT deployed)
+
+- Operator decision (2026-10-02): turn off `microstructure_acceleration`. Evidence: DEMO 2026-09-25..10-02, 391 closed
+  trades, -273.97 USD total; this strategy placed 377 of them (-277.58 USD; BTCUSD -265.80, XAUUSD -11.78); backtests
+  show no gross edge for it and the highest cost per trade (0.20-0.24 R).
+- Design: new config `[strategies] entry_suspended` (validated: distinct ACTIVE keys only, narrow-only). The strategy
+  stays registered and evaluated (directive section 9: six active families); its signals are journaled
+  (`SIGNAL_CREATED`, then `SIGNAL_REJECTED` reason `strategy_entry_suspended`) and removed BEFORE the selector, in
+  the DEMO runtime and in `run_backtest` (hence PAPER). The frozen V1 selector and strategies are byte-identical
+  (`test_v1_strategy_freeze.py` passes). PAPER/backtest config fingerprint gains `suspended_strategy_keys` only when
+  non-empty, so existing fingerprints are unchanged; a PAPER session started under 0.2.7 halts on the changed
+  fingerprint (designed behaviour) and needs a new session tag.
+- An earlier draft edited `selector.py`; the V1 freeze test caught it and the selector was restored from HEAD.
+- Verification: 15 new tests (`tests/test_entry_suspension.py`), call-site mutants caught; full suite 1812 passed /
+  9 skipped / 0 failed; compileall OK. No schema change. Not deployed: deployment needs explicit operator approval
+  at a flat broker (backup, stop runtime, checkout, restart via the launcher, post-start gate).
+- This reduces trading activity and the main live loss source; it does NOT create a validated edge (H1-H9 found
+  none). The remaining strategies are also unvalidated.
+
+## 2026-10-03 -- integrated FLAT/SHADOW release candidate (no deployment, no runtime change)
+
+- Branch `fix/integrated-forward-edge-shadow` (worktree `.worktrees/integrated-fes`) from PR #7 head `55f6d53`;
+  `release/0.2.8` merged with `--no-ff` as `3c0dc53` (4 "both sides added" conflicts, both kept). 0.2.8's suspension
+  test controls now opt in explicitly (V1 replay / verified fixture evidence).
+- `0cbc31b`: validation certificate (validation/certificate.py), EdgeEvidence hardened (LifecyclePayoff removed), final
+  permission verifies certificates + blocks suspended strategies, shadow mirrors the suspension and records
+  final_permission_result/chain_key, counterfactual lifecycle (shadow/lifecycle_counterfactual.py) on extracted shared
+  exit functions (`fill_pending_exit`, `manage_open_trade`, `open_simulated_trade`; backtest numbers unchanged: 204
+  backtest/PAPER/research tests identical), migration 0032 extended in place (never released).
+- Tests: +47 certificate, +10 lifecycle (equivalence with run_backtest, transitive import walk), +8 release controls.
+  Full suite 1936 passed / 9 skipped / 0 failed / 2 warnings (26 min). ruff F,E9 clean.
+- Migration 31 -> 32 rehearsed on an online backup of the production DB in %TEMP% (read-only source): quick_check ok,
+  0 FK violations, 40 non-sealed tables unchanged except schema_migrations; bars/ticks (sealed OOS) not queried; copy
+  deleted afterwards.
+- Raw-score audit: no executable EV path reads raw_confidence; min_raw_confidence (selector) and re-entry thresholds
+  only narrow; everything else is journaling/persistence/research/display.
+- Not done (operator): PR/merge, release build, restart, kill switch, certificate pipeline/key. REAL untouched.
+
+## 2026-10-03 -- final FLAT/SHADOW release hardening (branch `hardening/flat-shadow-release`, no deployment)
+
+- Base `bd4cfc7` (integrated release candidate). Worktree `.worktrees/hardening`; deployed runtime, production DB,
+  release/0.2.7, tags, H1-H9 evidence, research ledger and OOS history untouched. REAL untouched.
+- `59efcd4` Ed25519 primitive (RFC 8032 section 6 reference code, pure Python because the shared .venv has no
+  crypto package; RFC 8032 section 7.1 vectors 1-3 pass; s < L enforced; verify never raises).
+- `b73c0a6` certificates `edge_certificate/v2`: Ed25519 signature over sorted NaN-free canonical JSON of all 49
+  fields; runtime holds only the PUBLIC key (`ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE`, `ed25519-public:<hex>`; a
+  private-key file is refused); HMAC removed, no fallback. Certificate binds model + calibrator artifact SHA-256,
+  calibration method, feature schema/transform version, lifecycle id/version, horizon, cost model, protocol version.
+  The executable gate recomputes P(win) from the certified artifacts and the proposal's feature vector; any other
+  probability is PROBABILITY_NOT_FROM_CERTIFIED_MODEL. `validation_protocol`/`protocol` removed from
+  FinalPermissionInput, DemoRuntime, RuntimeComponents, verify_certificate, executable_edge_check,
+  evaluate_cost_gate; tests relax only the freeze date (conftest), a clean-interpreter test pins production.
+  No model artifact, key or certificate created: production FLAT.
+- `e09ea00` shadow identity: composite UNIQUE (mode, symbol, resolution, decision bar, strategy key + version,
+  direction, observer version, lifecycle version); outcome observer/lifecycle version bound to the candidate by
+  triggers; lifecycle outcomes unique per (candidate, lifecycle version, evaluator version). Migration 0032 edited
+  in place (never deployed).
+- Migrations: fresh 1->32 quick_check ok / 0 FK violations; online-backup copy of production (read-only source)
+  31->32: only schema_migrations changed across 42 non-sealed tables, shadow schema identical to fresh; copy deleted.
+- ASN-032 design note: docs/design/ASN-032_SHADOW_PROCESS_ISOLATION.md (not implemented).

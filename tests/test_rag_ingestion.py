@@ -26,6 +26,7 @@ from adaptive_scalper.rag.store import store_memory
 from adaptive_scalper.research.ledger import record_trial
 from adaptive_scalper.runtime.state import record_event, record_position_entry_context
 from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+from edge_fixtures import FixtureValidatedProvider
 
 NOW = 1_800_000_000
 
@@ -193,7 +194,7 @@ START_AT = T0 + 60 * STEP + 10
 
 def test_paper_runtime_trades_reach_rag_through_the_ingestion_task_only(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock)
+    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     step(engine, clock, seconds=STEP * 25, tick=4)
@@ -208,7 +209,7 @@ def test_paper_runtime_trades_reach_rag_through_the_ingestion_task_only(tmp_path
 
 def test_demo_runtime_positions_become_setup_memories(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock)
+    engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     step(engine, clock, seconds=STEP * 4, tick=4)
@@ -222,7 +223,7 @@ def test_an_ingestion_failure_degrades_advisory_health_only(tmp_path, monkeypatc
     import adaptive_scalper.runtime.engine as engine_module
 
     clock = FakeClock(START_AT)
-    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock)
+    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock, edge_evidence=FixtureValidatedProvider())
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
 
     def broken(*_a, **_k):

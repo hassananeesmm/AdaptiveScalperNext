@@ -30,13 +30,30 @@ import json
 import logging
 import sqlite3
 import time
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Callable
 
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.final_permission import FinalPermissionInput
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
-from adaptive_scalper.costs.model import CostEstimate, estimate_cost_from_evidence, price_equivalent_of_monetary_cost
+from adaptive_scalper.costs.model import (
+    HORIZON_REMAINING_EXIT,
+    CostEstimate,
+    price_equivalent_of_monetary_cost,
+    remaining_exit_cost_from_evidence,
+    require_horizon,
+    round_trip_cost_from_evidence,
+)
+from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED
+from adaptive_scalper.costs.edge_evidence import (
+    NO_VALIDATED_EDGE_EVIDENCE,
+    EdgeEvidenceProvider,
+    executable_evidence,
+    require_executable_provider,
+)
+from adaptive_scalper.costs.swap_horizon import swap_price_for_horizon
+from adaptive_scalper.validation.certificate import load_certificate_public_key
 from adaptive_scalper.execution.reconciliation import (
     CLEAN,
     get_open_positions,
@@ -86,7 +103,16 @@ from adaptive_scalper.runtime.state import (
     record_event,
     record_position_entry_context,
 )
-from adaptive_scalper.selector.selector import select_and_journal_proposal
+from adaptive_scalper.history.resolutions import resolution_seconds
+from adaptive_scalper.selector.selector import REJECTED_EDGE_UNVALIDATED, select_and_journal_proposal, select_proposal
+from adaptive_scalper.shadow.observer import LOST_TO_HIGHER_EDGE as SHADOW_LOST
+from adaptive_scalper.shadow.observer import NOT_EVALUATED as SHADOW_NOT_EVALUATED
+from adaptive_scalper.shadow.observer import REJECTED as SHADOW_REJECTED
+from adaptive_scalper.shadow.observer import SELECTED as SHADOW_SELECTED
+from adaptive_scalper.runtime.paper import paper_config
+from adaptive_scalper.shadow.lifecycle_counterfactual import resolve_lifecycles
+from adaptive_scalper.shadow.observer import ShadowCandidate, record_candidates, resolve_due
+from adaptive_scalper.selector.suspension import REJECTED_ENTRY_SUSPENDED, partition_suspended
 from adaptive_scalper.strategies.base import StrategySignal
 
 logger = logging.getLogger(__name__)
@@ -125,21 +151,77 @@ class SymbolAnalysis:
     feature_vector: dict
 
 
-def live_cost_estimate(config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None) -> CostEstimate | None:
-    """Spread from the live quote; commission/slippage/swap from the
-    configured per-symbol evidence. Any unknown component -> None ->
-    BLOCK_COST (never a silent zero)."""
+# Allowance between "max hold reached" and the closing fill: one position
+# cycle plus broker round trip, generously rounded up.
+CLOSE_LATENCY_ALLOWANCE_SECONDS = 60
+
+
+def max_hold_horizon_seconds(params: AdaptiveExitParams) -> int | None:
+    """The longest a newly opened position can be held by design, or None
+    when no maximum is enforced (then every swap question is "can cross")."""
+    if not params.max_holding_enabled:
+        return None
+    return params.max_holding_seconds + CLOSE_LATENCY_ALLOWANCE_SECONDS
+
+
+def _commission_price(costs, spec: SymbolSpec) -> float | None:
+    if costs.commission_per_lot_round_trip is None:
+        return None
+    return price_equivalent_of_monetary_cost(costs.commission_per_lot_round_trip, spec.trade_tick_size,
+                                             spec.trade_tick_value)
+
+
+def live_cost_estimate(
+    config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None, *,
+    now_utc: int, max_hold_seconds: int | None,
+) -> CostEstimate | None:
+    """Conservative PRE-ENTRY cost of the whole trade (HORIZON_FULL_ROUND_TRIP).
+
+    `slippage_price` is per fill, so a market entry plus a market/stop exit
+    pays it twice (costs/model.py FILLS_PER_ROUND_TRIP); the full bid/ask
+    spread is paid once across the two fills; commission is the configured
+    round trip; swap is charged only if `now_utc + max_hold_seconds` can
+    cross the broker's server-midnight rollover, and an unknown swap on such
+    a horizon -- like any other unknown component -- returns None (BLOCK_COST).
+    """
     if spec is None or tick is None or tick.ask <= 0 or tick.bid <= 0:
         return None
     costs = config.cost_for(canonical_symbol)
-    commission = (
-        price_equivalent_of_monetary_cost(costs.commission_per_lot_round_trip, spec.trade_tick_size, spec.trade_tick_value)
-        if costs.commission_per_lot_round_trip is not None else None
+    swap = swap_price_for_horizon(
+        server_time_rule=config.mt5.server_time_rule, start_utc=now_utc, max_hold_seconds=max_hold_seconds,
+        swap_per_lot_per_day=costs.swap_per_lot_per_day, tick_size=spec.trade_tick_size,
+        tick_value=spec.trade_tick_value,
     )
-    swap = price_equivalent_of_monetary_cost(costs.swap_per_lot_per_day, spec.trade_tick_size, spec.trade_tick_value)
-    return estimate_cost_from_evidence(
-        spread_price=tick.ask - tick.bid, commission_price_equivalent=commission,
-        expected_slippage_price=costs.slippage_price, swap_price_equivalent=swap,
+    return round_trip_cost_from_evidence(
+        spread_price=tick.ask - tick.bid, per_fill_slippage_price=costs.slippage_price,
+        round_trip_commission_price=_commission_price(costs, spec), swap_price_equivalent=swap,
+    )
+
+
+def live_remaining_exit_cost_estimate(
+    config: AppConfig, canonical_symbol: str, spec: SymbolSpec | None, tick: Tick | None, *,
+    now_utc: int, remaining_hold_seconds: int | None,
+) -> CostEstimate | None:
+    """Friction still payable on an ALREADY OPEN position (HORIZON_REMAINING_EXIT).
+
+    Entry spread, entry slippage and the entry half of the commission are
+    sunk and never charged again. _review marks a long at bid and a short
+    at ask -- the executable closing side -- so the exit spread is already in
+    the mark (exit_spread_price=0.0). Remaining: one exit slippage, the exit
+    half of the commission, and swap only if the remaining hold can cross
+    a rollover.
+    """
+    if spec is None or tick is None or tick.ask <= 0 or tick.bid <= 0:
+        return None
+    costs = config.cost_for(canonical_symbol)
+    swap = swap_price_for_horizon(
+        server_time_rule=config.mt5.server_time_rule, start_utc=now_utc, max_hold_seconds=remaining_hold_seconds,
+        swap_per_lot_per_day=costs.swap_per_lot_per_day, tick_size=spec.trade_tick_size,
+        tick_value=spec.trade_tick_value,
+    )
+    return remaining_exit_cost_from_evidence(
+        exit_spread_price=0.0, per_fill_slippage_price=costs.slippage_price,
+        round_trip_commission_price=_commission_price(costs, spec), swap_price_equivalent=swap,
     )
 
 
@@ -158,8 +240,24 @@ class DemoRuntime:
     latest: dict[str, SymbolAnalysis] = field(default_factory=dict)
     correlation: dict[tuple[str, str], CorrelationResult] = field(default_factory=dict)
     returns: dict[str, dict[int, float]] = field(default_factory=dict)
+    # Expected-edge evidence (issue #6). The default has none, so every
+    # proposal is FLAT (BLOCK_EDGE_UNVALIDATED); the legacy V1 raw-score
+    # replay provider is refused at construction.
+    edge_evidence: EdgeEvidenceProvider = NO_VALIDATED_EDGE_EVIDENCE
+    # Closed bars from the latest analysis, reused by the shadow observer so
+    # it needs no extra broker read.
+    shadow_bars: dict[str, list] = field(default_factory=dict)
+    # Edge-certificate verification (validation/certificate.py): the Ed25519
+    # PUBLIC key only. None -> read the file named by
+    # ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE; still none -> no certificate
+    # verifies -> every proposal stays FLAT. The runtime never holds the
+    # private signing seed and has no way to choose the validation protocol.
+    public_key: bytes | None = None
 
     def __post_init__(self) -> None:
+        require_executable_provider(self.edge_evidence, "DEMO runtime")
+        if self.public_key is None:
+            self.public_key = load_certificate_public_key()
         self.risk_limits = risk_limits_from_config(self.config.risk)
         self.portfolio_limits = portfolio_risk_limits_from_risk_limits(self.risk_limits.max_total_open_risk_pct)
         self.resolution = self.config.runtime.entry_resolution
@@ -288,6 +386,7 @@ class DemoRuntime:
         analysis = SymbolAnalysis(bars[-1].time, features, raw, confirmed, numeric_feature_vector(features))
         self.latest[canonical] = analysis
         self.returns[canonical] = log_returns(bars)
+        self.shadow_bars[canonical] = bars
         return analysis
 
     # ------------------------------------------------------------------
@@ -449,7 +548,12 @@ class DemoRuntime:
         if strategy is not None:
             fresh = strategy.evaluate(analysis.features, RegimeClassification(analysis.confirmed_regime, 1.0, 1, "re-evaluation"))
             setup_valid = fresh is not None and fresh.direction == local.direction
-        cost = live_cost_estimate(self.config, canonical, spec, tick)
+        horizon = max_hold_horizon_seconds(self.exit_params)
+        cost = live_remaining_exit_cost_estimate(
+            self.config, canonical, spec, tick, now_utc=now,
+            remaining_hold_seconds=None if horizon is None else max(0, horizon - (now - local.opened_at_utc)),
+        )
+        require_horizon(cost, HORIZON_REMAINING_EXIT, "DEMO position review")
         target = live.take_profit or (
             local.entry_price + context["target_distance_price"] if local.direction == "BUY"
             else local.entry_price - context["target_distance_price"]
@@ -481,6 +585,92 @@ class DemoRuntime:
     # entry cycle
     # ------------------------------------------------------------------
 
+    def _shadow_observe(self, canonical: str, analysis: SymbolAnalysis | None, now: int, *,
+                        global_block: str | None) -> None:
+        """Forward-only evidence (adaptive_scalper/shadow/observer.py): record
+        every active strategy's candidate for each NEW closed bar -- including
+        rejected and globally blocked ones -- and resolve outcomes whose
+        horizon has elapsed. Pure observation: no order path, no journal
+        decision, no state any gate reads. A failure here is journaled and
+        swallowed; it can never change a trading decision."""
+        try:
+            resolve_due(self.conn, canonical, self.shadow_bars.get(canonical, []), now_utc=now)
+            spec_now = self.gateway.symbol_info(self.symbols[canonical])
+            if spec_now is not None:
+                costs = self.config.cost_for(canonical)
+                resolve_lifecycles(
+                    self.conn, canonical, self.shadow_bars.get(canonical, []), now_utc=now, symbol_spec=spec_now,
+                    config=dataclasses.replace(paper_config(self.config, canonical, ()),
+                                               adaptive_exit_params=self.exit_params),
+                    costs_known=costs.fully_known, cost_provenance=costs.provenance,
+                    strategies={s.key: s for s in self.registry.all_active()},
+                )
+            if analysis is None:
+                return
+            cursor = f"shadow_last_bar:{canonical}"
+            if analysis.bar_time <= get_state(self.conn, cursor, 0):
+                return
+            regime = RegimeClassification(analysis.confirmed_regime, analysis.raw_regime.confidence,
+                                          analysis.raw_regime.version, analysis.raw_regime.reason)
+            signals = [s for s in (st.evaluate(analysis.features, regime) for st in self.registry.all_active())
+                       if s is not None]
+            if signals:
+                broker = self.symbols[canonical]
+                tick = self.gateway.symbol_info_tick(broker)
+                spec = self.gateway.symbol_info(broker)
+                cost = live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
+                                          max_hold_seconds=max_hold_horizon_seconds(self.exit_params))
+                dispositions: dict[int, tuple[str, str | None]] = {}
+                if global_block is not None:
+                    dispositions = {id(s): (SHADOW_NOT_EVALUATED, global_block) for s in signals}
+                else:
+                    # Same order as _decide: entry-suspended strategies are removed before the selector
+                    # (still observed here, recorded as REJECTED strategy_entry_suspended).
+                    kept, dropped = partition_suspended(signals, self.config.strategies.entry_suspended)
+                    for i in dropped:
+                        dispositions[id(signals[i])] = (SHADOW_REJECTED, REJECTED_ENTRY_SUSPENDED)
+                    selection = select_proposal([signals[i] for i in kept], {canonical: cost},
+                                                edge_evidence=self.edge_evidence)
+                    for e in selection.candidates:
+                        if e.rejected:
+                            dispositions[id(e.signal)] = (SHADOW_REJECTED, e.rejection_reason)
+                        elif e.signal is selection.selected:
+                            dispositions[id(e.signal)] = (SHADOW_SELECTED, None)
+                        else:
+                            dispositions[id(e.signal)] = (SHADOW_LOST, "lost_to_higher_expected_net_edge")
+                news = self.news.block_for(canonical, now)
+                lag = ((get_state(self.conn, "engine", {}) or {}).get("tasks", {}).get("entry_cycle", {})
+                       .get("last_lag_seconds"))
+                f = analysis.features
+                costs = self.config.cost_for(canonical)
+                record_candidates(self.conn, [ShadowCandidate(
+                    canonical_symbol=canonical, resolution=self.resolution,
+                    bar_seconds=resolution_seconds(self.resolution), decision_bar_time_utc=analysis.bar_time,
+                    strategy_key=s.strategy_key, strategy_version=s.strategy_version, direction=s.direction,
+                    raw_score=s.raw_confidence, stop_distance=s.stop_distance, target_distance=s.target_distance,
+                    expected_duration_seconds=s.expected_duration_seconds,
+                    raw_regime=analysis.raw_regime.regime, confirmed_regime=analysis.confirmed_regime,
+                    regime_confidence=analysis.raw_regime.confidence, session=getattr(f, "session", None),
+                    news_status=news.decision, news_detail=news.reason,
+                    spread_points=getattr(f, "spread_current", None),
+                    spread_percentile=getattr(f, "spread_percentile", None), atr=getattr(f, "atr", None),
+                    realized_volatility=getattr(f, "realized_volatility", None),
+                    movement_to_cost=getattr(f, "movement_to_cost", None),
+                    estimated_round_trip_cost_price=cost.total_cost if cost is not None else None,
+                    cost_horizon=cost.horizon if cost is not None else None, cost_provenance=costs.provenance,
+                    edge_model=self.edge_evidence.model_id, scheduler_lag_seconds=lag,
+                    selector_disposition=dispositions[id(s)][0], rejection_reason=dispositions[id(s)][1],
+                    final_permission_result=("DECIDED_IN_ENTRY_DECISIONS" if dispositions[id(s)][0] == SHADOW_SELECTED
+                                             else "NOT_REACHED"),
+                    chain_key=f"entry:{canonical}:{analysis.bar_time}:{s.strategy_key}",
+                    model_observer_score=None, features=analysis.feature_vector,
+                ) for s in signals], mode=MODE, now_utc=now)
+            put_state(self.conn, cursor, analysis.bar_time, now_utc=now)
+        except Exception as exc:  # observation must never affect trading
+            logger.exception("shadow observer failed for %s", canonical)
+            record_event(self.conn, "WARNING", "shadow", "SHADOW_OBSERVER_FAILED", f"{type(exc).__name__}: {exc}",
+                         canonical_symbol=canonical, dedup_key=f"shadow_failed:{canonical}", now_utc=now)
+
     def entry_cycle(self) -> dict:
         now = self.now()
         snapshot = {"at": now, "mode": MODE, "global_block": None, "symbols": {}}
@@ -491,9 +681,10 @@ class DemoRuntime:
             record_event(self.conn, "BLOCKED", "entry", "NEW_ENTRIES_BLOCKED", f"{code}: {reason}",
                          dedup_key="entry:global_block", now_utc=now)
             record_entry_decision(self.conn, mode=MODE, stage="GLOBAL", decision=code, reason=reason, now_utc=now)
-            # Keep bar-close analysis fresh for position reviews anyway.
+            # Keep bar-close analysis fresh for position reviews anyway, and
+            # keep collecting shadow evidence (candidates NOT_EVALUATED).
             for canonical in self.symbols:
-                self.analyze(canonical, now)
+                self._shadow_observe(canonical, self.analyze(canonical, now), now, global_block=code)
             self._refresh_correlation()
             put_state(self.conn, "why_no_trade", snapshot, now_utc=now)
             self._publish_readiness(now)
@@ -502,6 +693,8 @@ class DemoRuntime:
         clear_event(self.conn, "entry:global_block", now_utc=now)
 
         analyses = {c: self.analyze(c, now) for c in self.symbols}
+        for canonical, analysis in analyses.items():
+            self._shadow_observe(canonical, analysis, now, global_block=None)
         self._refresh_correlation()
         for canonical, analysis in analyses.items():
             try:
@@ -590,13 +783,33 @@ class DemoRuntime:
                              {"source": evidence.source, "status": evidence.status, "evidence": evidence.summary,
                               "authority": "NONE (advisory evidence only)"}, strategy_key=signal.strategy_key)
 
+        # Entry-suspended strategies: journaled as evidence, never offered to the (frozen V1) selector.
+        kept, dropped = partition_suspended(signals, self.config.strategies.entry_suspended)
+        for i in dropped:
+            append_event(self.conn, chains[i], "SIGNAL_REJECTED", now, canonical, {
+                "strategy_key": signals[i].strategy_key, "direction": signals[i].direction,
+                "raw_confidence": signals[i].raw_confidence, "expected_net_edge": None,
+                "reason": REJECTED_ENTRY_SUSPENDED,
+            }, strategy_key=signals[i].strategy_key)
+        signals, chains = [signals[i] for i in kept], [chains[i] for i in kept]
+        if not signals:
+            return self._record(canonical, analysis.bar_time, "SELECTOR", "FLAT",
+                                f"every signal came from an entry-suspended strategy ({REJECTED_ENTRY_SUSPENDED})")
+
         broker = self.symbols[canonical]
         tick = self.gateway.symbol_info_tick(broker)
         spec = self.gateway.symbol_info(broker)
-        cost = live_cost_estimate(self.config, canonical, spec, tick)
-        selection = select_and_journal_proposal(self.conn, signals, chains, {canonical: cost}, now_utc=now)
+        cost = live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
+                                  max_hold_seconds=max_hold_horizon_seconds(self.exit_params))
+        selection = select_and_journal_proposal(self.conn, signals, chains, {canonical: cost}, now_utc=now,
+                                                edge_evidence=self.edge_evidence)
         if selection.selected is None:
-            decision = BLOCK_COST if cost is None else "FLAT"
+            if cost is None:
+                decision = BLOCK_COST
+            elif all(e.rejection_reason == REJECTED_EDGE_UNVALIDATED for e in selection.candidates):
+                decision = BLOCK_EDGE_UNVALIDATED
+            else:
+                decision = "FLAT"
             return self._record(canonical, analysis.bar_time, "SELECTOR", decision, selection.reason)
         signal = selection.selected
         chain = chains[signals.index(signal)]
@@ -684,7 +897,12 @@ class DemoRuntime:
             execution_quote=validate_execution_quote(tick, max_quote_age_seconds=DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS,
                                                      now=self.clock()),
             news_result=self.news.block_for(canonical, now),
-            cost_estimate=live_cost_estimate(self.config, canonical, spec, tick),
+            cost_estimate=live_cost_estimate(self.config, canonical, spec, tick, now_utc=now,
+                                             max_hold_seconds=max_hold_horizon_seconds(self.exit_params)),
+            edge_evidence=executable_evidence(self.edge_evidence.for_signal(signal)),
+            public_key=self.public_key, now_utc=now,
+            proposal_features=(self.latest[canonical].feature_vector if canonical in self.latest else None),
+            entry_suspended_strategy_keys=frozenset(self.config.strategies.entry_suspended),
             open_or_pending_symbols=sorted({p.canonical_symbol for p in open_positions + pending}),
             correlation_matrix=self.correlation,
             risk_gate_input=RiskGateInput(

@@ -103,6 +103,7 @@ def get_unresolved_closes(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def record_close_intent(
     conn: sqlite3.Connection, *, broker_position_id: str, broker_symbol: str, position_direction: str,
     requested_volume: float, magic: int, comment: str, now_utc: int,
+    quote_bid: float | None = None, quote_ask: float | None = None, quote_time_msc: int | None = None,
 ) -> int:
     """Write-ahead row, committed before `order_send` is called. Raises
     `CloseRequestConflict` when the position already has an unresolved
@@ -115,10 +116,10 @@ def record_close_intent(
     try:
         cursor = conn.execute(
             "INSERT INTO close_requests (position_id, broker_position_id, broker_symbol, position_direction, "
-            "requested_volume, magic, comment, requested_at_utc, send_outcome, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "requested_volume, magic, comment, requested_at_utc, send_outcome, status, quote_bid, quote_ask, "
+            "quote_time_msc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (local["id"] if local is not None else None, str(broker_position_id), broker_symbol, position_direction,
-             requested_volume, magic, comment, now_utc, SENDING, UNRESOLVED),
+             requested_volume, magic, comment, now_utc, SENDING, UNRESOLVED, quote_bid, quote_ask, quote_time_msc),
         )
     except sqlite3.IntegrityError as exc:  # a concurrent writer won the partial unique index
         raise CloseRequestConflict(f"position {broker_position_id}: {exc}") from exc
@@ -129,13 +130,17 @@ def record_close_intent(
 
 def settle_close_request(
     conn: sqlite3.Connection, close_request_id: int, *, send_outcome: str, send_detail: str,
-    retcode: int | None, status: str, now_utc: int,
+    retcode: int | None, status: str, now_utc: int, broker_order_ticket: str | None = None,
 ) -> None:
     """Record what the send proved. `status` UNRESOLVED keeps the request
-    open and raises the UNKNOWN_OUTCOME incident that blocks new entries."""
+    open and raises the UNKNOWN_OUTCOME incident that blocks new entries.
+    `broker_order_ticket` (the ticket the send itself returned) is exit-cost
+    evidence only: it links closing deals to this request and never affects
+    the resolution; a known ticket is never overwritten with NULL."""
     conn.execute(
-        "UPDATE close_requests SET send_outcome = ?, send_detail = ?, retcode = ? WHERE id = ?",
-        (send_outcome, send_detail, retcode, close_request_id),
+        "UPDATE close_requests SET send_outcome = ?, send_detail = ?, retcode = ?, "
+        "broker_order_ticket = COALESCE(broker_order_ticket, ?) WHERE id = ?",
+        (send_outcome, send_detail, retcode, broker_order_ticket, close_request_id),
     )
     if status == UNRESOLVED:
         _ensure_incident(conn, close_request_id, f"close outcome not proven ({send_outcome}): {send_detail}", now_utc)

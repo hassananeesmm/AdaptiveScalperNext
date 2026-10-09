@@ -28,7 +28,6 @@ from adaptive_scalper.backtest.types import (
     REJECT_NEWS,
     REJECT_RISK,
     REJECT_STALE_SIGNAL,
-    BacktestConfig,
 )
 from adaptive_scalper.paper.engine import PaperSessionConfigMismatchError, run_paper_cycle
 from adaptive_scalper.paper.state import get_paper_trades, get_session
@@ -38,6 +37,7 @@ from adaptive_scalper.portfolio.exposure import PositionExposure
 from adaptive_scalper.risk.governor import RiskLimits
 from adaptive_scalper.simulation.fill_model import COST_UNVERIFIED_ASSUMPTION, FILL_MODEL_VERSION, FillAssumptions
 from adaptive_scalper.simulation.types import EvidenceOrigin
+from edge_fixtures import v1_replay_config
 from sim_helpers import (
     RES,
     START,
@@ -156,7 +156,7 @@ def test_drawdown_ceiling_survives_paper_cycles(monkeypatch, db):
 
 def test_research_config_cannot_raise_per_trade_risk_above_the_hard_ceiling():
     with pytest.raises(ValueError, match="hard ceiling"):
-        BacktestConfig(risk_per_trade_pct=0.5)
+        v1_replay_config(risk_per_trade_pct=0.5)
 
 
 def test_external_exposure_at_max_open_positions_blocks_the_entry(monkeypatch):
@@ -198,7 +198,7 @@ def test_both_stop_and_target_inside_one_bar_resolves_to_the_stop(monkeypatch):
 @pytest.mark.parametrize("seed", [31, 32, 33])
 def test_no_simulated_fill_ever_precedes_its_decision(seed):
     b = random_walk_bars(600, seed=seed)
-    cfg = BacktestConfig(fill_assumptions=FillAssumptions(slippage_price=0.02, commission_monetary_per_lot=7.0))
+    cfg = v1_replay_config(fill_assumptions=FillAssumptions(slippage_price=0.02, commission_monetary_per_lot=7.0))
     result = run_backtest(b, SYMBOL, RES, spec(), config=cfg, now_utc=START)
     assert len(result.trades) >= 3
     references = set()
@@ -255,7 +255,7 @@ def test_every_cost_component_is_reported_and_sums_to_total_cost(monkeypatch):
 
 def test_unverified_default_costs_are_labeled_as_such():
     b = random_walk_bars(300, seed=5)
-    result = run_backtest(b, SYMBOL, RES, spec(), config=BacktestConfig(), now_utc=START)
+    result = run_backtest(b, SYMBOL, RES, spec(), config=v1_replay_config(), now_utc=START)
     assert result.cost_provenance == COST_UNVERIFIED_ASSUMPTION
     assert result.fill_model_version == FILL_MODEL_VERSION
     assert all(tr.cost_provenance == COST_UNVERIFIED_ASSUMPTION for tr in result.trades)
@@ -300,7 +300,7 @@ def test_a_new_paper_session_decides_only_the_most_recent_bar(db):
     # Deep supplied history is feature context, never replayed as
     # PAPER_LIVE_DATA trades (BUG_BACKLOG #10).
     b = random_walk_bars(400, seed=11)
-    result = run_paper_cycle(db, b, SYMBOL, RES, spec(), config=BacktestConfig(), now_utc=START)
+    result = run_paper_cycle(db, b, SYMBOL, RES, spec(), config=v1_replay_config(), now_utc=START)
     assert result.ran is True
     assert result.new_trades == ()
     assert result.last_processed_bar_time_utc == b[-1].time
@@ -309,8 +309,8 @@ def test_a_new_paper_session_decides_only_the_most_recent_bar(db):
 
 def test_resuming_a_paper_session_under_a_different_config_fails_closed(db):
     b = random_walk_bars(200, seed=12)
-    run_paper_cycle(db, b[:150], SYMBOL, RES, spec(), config=BacktestConfig(), now_utc=START)
-    changed = BacktestConfig(fill_assumptions=FillAssumptions(slippage_price=0.05, commission_monetary_per_lot=0.0))
+    run_paper_cycle(db, b[:150], SYMBOL, RES, spec(), config=v1_replay_config(), now_utc=START)
+    changed = v1_replay_config(fill_assumptions=FillAssumptions(slippage_price=0.05, commission_monetary_per_lot=0.0))
     with pytest.raises(PaperSessionConfigMismatchError, match="new PAPER session"):
         run_paper_cycle(db, b, SYMBOL, RES, spec(), config=changed, now_utc=START)
     fresh = run_paper_cycle(db, b, SYMBOL, RES, spec(), config=changed, session_key="PAPER:XAUUSD:M5:v2", now_utc=START)
@@ -319,11 +319,11 @@ def test_resuming_a_paper_session_under_a_different_config_fails_closed(db):
 
 def test_a_legacy_session_with_history_but_no_fingerprint_is_refused(db):
     b = random_walk_bars(200, seed=13)
-    run_paper_cycle(db, b[:150], SYMBOL, RES, spec(), config=BacktestConfig(), now_utc=START)
+    run_paper_cycle(db, b[:150], SYMBOL, RES, spec(), config=v1_replay_config(), now_utc=START)
     db.execute("UPDATE paper_session_state SET config_fingerprint = NULL")
     db.commit()
     with pytest.raises(PaperSessionConfigMismatchError):
-        run_paper_cycle(db, b, SYMBOL, RES, spec(), config=BacktestConfig(), now_utc=START)
+        run_paper_cycle(db, b, SYMBOL, RES, spec(), config=v1_replay_config(), now_utc=START)
 
 
 def test_a_legacy_session_without_history_is_bound_to_the_current_config(db):
@@ -333,16 +333,16 @@ def test_a_legacy_session_without_history_is_bound_to_the_current_config(db):
         "10000.0, 0, 1, 1)"
     )
     db.commit()
-    result = run_paper_cycle(db, random_walk_bars(100, seed=14), SYMBOL, RES, spec(), config=BacktestConfig(),
+    result = run_paper_cycle(db, random_walk_bars(100, seed=14), SYMBOL, RES, spec(), config=v1_replay_config(),
                              now_utc=START)
     assert get_session(db, result.session_key).config_fingerprint == result.config_fingerprint
 
 
 def test_a_session_key_cannot_be_reused_for_another_symbol(db):
     b = random_walk_bars(100, seed=15)
-    run_paper_cycle(db, b, SYMBOL, RES, spec(), config=BacktestConfig(), session_key="shared", now_utc=START)
+    run_paper_cycle(db, b, SYMBOL, RES, spec(), config=v1_replay_config(), session_key="shared", now_utc=START)
     with pytest.raises(PaperSessionConfigMismatchError):
-        run_paper_cycle(db, b, "GBPJPY", RES, spec(), config=BacktestConfig(), session_key="shared", now_utc=START)
+        run_paper_cycle(db, b, "GBPJPY", RES, spec(), config=v1_replay_config(), session_key="shared", now_utc=START)
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +360,7 @@ def _used(db, b, used_for, *, symbol=SYMBOL, resolution=RES, origin=EvidenceOrig
 
 
 def _oos(db, b, run_id="oos", **kwargs):
-    return run_untouched_oos(b, SYMBOL, RES, spec(), conn=db, run_id=run_id, config=BacktestConfig(),
+    return run_untouched_oos(b, SYMBOL, RES, spec(), conn=db, run_id=run_id, config=v1_replay_config(),
                              now_utc=START, **kwargs)
 
 

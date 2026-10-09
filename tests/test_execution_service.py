@@ -55,6 +55,7 @@ from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits
 from adaptive_scalper.strategies.base import StrategySignal
+from edge_fixtures import TEST_PUBLIC_KEY, fixture_validated_evidence
 
 
 @pytest.fixture()
@@ -133,6 +134,10 @@ def _permission_input(**overrides) -> FinalPermissionInput:
         direction_check=DirectionCheck(True, "direction_allowed", "ok"),
         execution_quote=ExecutionQuoteCheck(True, EXECUTION_VALID, "ok"),
         news_result=NewsBlockResult(NEWS_ALLOW, "no applicable event", None, None, None),
+        # Execution mechanics after final permission are under test; the edge
+        # gate's FLAT default is covered in tests/test_final_permission.py.
+        edge_evidence=fixture_validated_evidence(),
+        public_key=TEST_PUBLIC_KEY, now_utc=10_000, proposal_features={},
         cost_estimate=estimate_cost(spread_price=0.1, commission_price_equivalent=0.0,
                                      expected_slippage_price=0.0, swap_price_equivalent=0.0,
                                      uncertainty_margin_pct=0.0),

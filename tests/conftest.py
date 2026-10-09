@@ -36,3 +36,20 @@ def _block_live_metatrader5(request, monkeypatch):
 
     monkeypatch.setattr(mt5_module, "_import_mt5", _blocked)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _test_evidence_freeze_date(monkeypatch):
+    """Fixture certificates carry 1970 evidence intervals (runtime fakes run
+    on 2023 clocks). For the test session ONLY the research-freeze date of
+    CURRENT_PROTOCOL is relaxed -- every other preregistered threshold is
+    unchanged. Production has no such hook: the executable API takes no
+    protocol, and test_validation_certificate.py checks the production
+    value in a clean interpreter."""
+    import dataclasses
+
+    from adaptive_scalper.validation import certificate
+
+    monkeypatch.setattr(certificate, "CURRENT_PROTOCOL",
+                        dataclasses.replace(certificate.PREREGISTERED_PROTOCOL, min_evidence_start_utc=0))
+    yield

@@ -11,6 +11,7 @@ from adaptive_scalper.paper.engine import run_paper_cycle
 from adaptive_scalper.paper.state import get_paper_trades, get_session
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.simulation.fill_model import FillAssumptions
+from edge_fixtures import v1_replay_config
 
 CANONICAL_SYMBOL = "XAUUSD"
 RESOLUTION = "M5"
@@ -44,7 +45,7 @@ def _trending_bars(n: int, *, start_price: float = 2000.0, step: float = 0.5, st
 def _config(**overrides) -> BacktestConfig:
     defaults = dict(fill_assumptions=FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0))
     defaults.update(overrides)
-    return BacktestConfig(**defaults)
+    return v1_replay_config(**defaults)
 
 
 def _seed(db, bars, config=None, **kwargs):

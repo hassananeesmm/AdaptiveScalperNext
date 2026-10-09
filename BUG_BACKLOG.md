@@ -5,7 +5,36 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
-ASN-018 [HIGH, strategy/selector — research finding, not changed] The selector ranks candidates by
+ASN-031 [P1, validation — 2026-10-03, by design] No certificate-issuing validation pipeline exists, so no evidence can
+ever verify and the system is FLAT by construction. Building it (forward-only data, preregistered protocol,
+time-ordered purged calibration, key provisioned outside Git) is a separate, human-reviewed task.
+2026-10-03 hardening: certificates are now Ed25519 (`edge_certificate/v2`); the issuer holds the private seed
+offline, the runtime only the public key (`ASN_EDGE_CERTIFICATE_PUBLIC_KEY_FILE`); the certificate binds the model
+and calibrator artifact SHA-256 and the gate recomputes P(win) from those artifacts. No artifact, key or
+certificate has been created — still FLAT by construction.
+
+ASN-032 [LOW, architecture — 2026-10-03] The shadow observer and lifecycle evaluator are proven unable to reach a
+broker mutation at MODULE level (transitive import walk), but run inside the DEMO runtime process. A separate
+read-only shadow process would make the isolation physical (proposal only; design note
+docs/design/ASN-032_SHADOW_PROCESS_ISOLATION.md, not implemented).
+
+ASN-028 [P1, position_management — audit D5/D7, 2026-10-03, NOT changed executably] The V1 review treats "entry
+trigger no longer fires" as "thesis invalidated" and measures remaining edge as distance-to-target minus cost (no
+probability, ignores the stop). 161 of 408 DEMO positions closed one bar after entry this way (−759.89 USD). The
+explicit lifecycle contract exists in observer form (`shadow/lifecycle.py`); changing executable exits needs
+forward shadow evidence or a correctness-only equivalence argument. Pinned by
+tests/test_strategy_lifecycle.py::test_characterization_v1_executable_review_still_treats_trigger_loss_as_invalidation.
+
+ASN-029 [LOW, observability — 2026-10-03] `position_management_state.threshold_cross_at_utc` is never written, so
+threshold→decision latency cannot be measured. Measured decision→fill R loss is ≈ 0 (BTC −0.006 R, XAU +0.003 R).
+
+ASN-030 [INFO, costs — 2026-10-03] Per-kind exit-cost tails are not yet estimable (FINAL exit observations: BTC
+stop-loss n=68, XAU stop-loss n=38, agent closes 13/15, take-profit 1). The configured BTC per-fill 11.97 stays as
+the conservative figure; cost model v2 (per fill kind, conservative quantiles) waits for sample size.
+
+~~ASN-018 [HIGH, strategy/selector — research finding, not changed]~~ FIXED 2026-10-03 on
+`fix/v1-loss-root-cause-correctness` (`7ba9dce`): the executable EV no longer reads raw_confidence; it needs VALIDATED
+EdgeEvidence (default FLAT). The selector ranked candidates by
 `p·target − (1−p)·stop − cost` with `p = raw_confidence` taken at face value. `microstructure_acceleration`
 sets `raw_confidence = min(1, 2·|acceleration|/ATR)`; its realized gross hit rate is flat at 0.38–0.48 in
 every confidence bucket (including 1.00), so expected net edge overstates realized edge by about 1 R and the

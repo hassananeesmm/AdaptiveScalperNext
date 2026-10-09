@@ -1,27 +1,38 @@
-"""Expected net edge gate (directive section 34).
+"""Expected net edge gate (directive section 34; GitHub issue #6).
 
 expected_net_edge = expected_gross_edge - total_cost
 
-Stage 0 (directive section 61: no model/RAG influence yet — deterministic
-strategies only): `expected_gross_edge` comes directly from the
-strategy's OWN hypothesis (`StrategySignal.raw_confidence`,
-`target_distance`, `stop_distance`) via a standard expected-value
-calculation, not from a trained model. Once a model/RAG/selector exist,
-this is exactly the seam where their bounded adjustments (directive
-section 71) would plug in — this function's signature does not need to
-change; only what's passed as the confidence would.
+`expected_gross_edge` comes ONLY from an `EdgeEvidence` object
+(costs/edge_evidence.py): a calibrated win probability and the realized
+lifecycle payoff. `StrategySignal.raw_confidence` is a heuristic score and
+never enters this formula directly. No evidence -> BLOCK_EDGE_UNVALIDATED
+(FLAT), distinct from BLOCK_COST (cost unknown) and BLOCK_EXPECTED_EDGE
+(evidence and cost known, net edge too small).
+
+`executable=True` (DEMO final permission) additionally refuses any evidence
+that is not VALIDATED, so research-replay evidence (LEGACY_UNCALIBRATED) or a
+test fixture can never authorize a broker order.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from adaptive_scalper.costs.model import CostEstimate
+import math
+
+from adaptive_scalper.costs.edge_evidence import EVIDENCE_VALIDATED, EdgeEvidence
+from adaptive_scalper.validation.certificate import (
+    CertificateCheck,
+    certified_probability,
+    verify_certificate,
+)
+from adaptive_scalper.costs.model import HORIZON_FULL_ROUND_TRIP, CostEstimate, require_horizon
 from adaptive_scalper.strategies.base import StrategySignal
 
 ALLOW = "ALLOW"
 BLOCK_COST = "BLOCK_COST"
 BLOCK_EXPECTED_EDGE = "BLOCK_EXPECTED_EDGE"
+BLOCK_EDGE_UNVALIDATED = "BLOCK_EDGE_UNVALIDATED"
 
 
 @dataclass(frozen=True)
@@ -31,44 +42,82 @@ class EdgeEvaluation:
     expected_net_edge: float
     sufficient: bool
     reason: str
-
-
-def expected_gross_edge_price(signal: StrategySignal) -> float:
-    """Expected value in PRICE units, from the strategy's own
-    stop/target/confidence alone:
-
-        EV = p * target_distance - (1 - p) * stop_distance
-
-    where p = raw_confidence. This assumes the strategy's implied
-    probability is taken at face value (Stage 0) — no calibration
-    adjustment happens here."""
-    p = signal.raw_confidence
-    return p * signal.target_distance - (1 - p) * signal.stop_distance
+    evidence_status: str = ""
+    edge_model: str = ""
 
 
 def evaluate_expected_edge(
-    signal: StrategySignal, cost: CostEstimate, min_net_edge_price: float = 0.0
+    signal: StrategySignal, cost: CostEstimate, evidence: EdgeEvidence, min_net_edge_price: float = 0.0
 ) -> EdgeEvaluation:
-    gross = expected_gross_edge_price(signal)
+    require_horizon(cost, HORIZON_FULL_ROUND_TRIP, "entry expected-edge gate")
+    gross = evidence.expected_gross_edge_price
     net = gross - cost.total_cost
     sufficient = net > min_net_edge_price
     reason = (
         f"gross_edge={gross:.5f} total_cost={cost.total_cost:.5f} "
-        f"net_edge={net:.5f} min_required={min_net_edge_price:.5f}"
+        f"net_edge={net:.5f} min_required={min_net_edge_price:.5f} "
+        f"edge_model={evidence.model_id} evidence={evidence.status}"
     )
-    return EdgeEvaluation(gross, cost, net, sufficient, reason)
+    return EdgeEvaluation(gross, cost, net, sufficient, reason, evidence.status, evidence.model_id)
+
+
+def executable_edge_check(
+    signal: StrategySignal, evidence: EdgeEvidence | None, *, public_key: bytes | None, now_utc: int | None,
+    proposal_features: dict | None,
+) -> CertificateCheck:
+    """May this evidence authorize a broker order for THIS proposal now?
+
+    Status VALIDATED is necessary, never sufficient: the Ed25519 signature
+    (public key only), binding, freshness and the CURRENT protocol are
+    re-verified (no protocol can be passed in), then P(win) is RECOMPUTED
+    from the certified model/calibrator artifacts and the proposal's causal
+    features -- a probability that did not come from that exact model is
+    rejected."""
+    if evidence is None:
+        return CertificateCheck(False, "NO_EDGE_EVIDENCE")
+    if evidence.status != EVIDENCE_VALIDATED:
+        return CertificateCheck(False, f"EVIDENCE_{evidence.status}")
+    if now_utc is None:
+        return CertificateCheck(False, "NO_CLOCK")
+    if evidence.stop_distance_price is None or not math.isclose(evidence.stop_distance_price, signal.stop_distance,
+                                                                rel_tol=1e-9, abs_tol=1e-12):
+        return CertificateCheck(False, "EVIDENCE_FOR_ANOTHER_PROPOSAL")
+    check = verify_certificate(
+        evidence.certificate, public_key=public_key, now_utc=now_utc, strategy_key=signal.strategy_key,
+        strategy_version=signal.strategy_version, canonical_symbol=signal.canonical_symbol,
+        direction=signal.direction,
+    )
+    if not check.ok:
+        return check
+    prediction = certified_probability(evidence.certificate, evidence.model_artifact, evidence.calibrator_artifact,
+                                       proposal_features)
+    if not prediction.ok:
+        return CertificateCheck(False, prediction.reason)
+    if evidence.probability is None or not math.isclose(evidence.probability.value, prediction.probability,
+                                                        rel_tol=0.0, abs_tol=1e-12):
+        return CertificateCheck(False, "PROBABILITY_NOT_FROM_CERTIFIED_MODEL")
+    return CertificateCheck(True, "VERIFIED")
 
 
 def evaluate_cost_gate(
-    signal: StrategySignal, cost: CostEstimate | None, min_net_edge_price: float = 0.0
+    signal: StrategySignal, cost: CostEstimate | None, min_net_edge_price: float = 0.0, *,
+    evidence: EdgeEvidence | None = None, executable: bool = True, public_key: bytes | None = None,
+    now_utc: int | None = None, proposal_features: dict | None = None,
 ) -> tuple[str, EdgeEvaluation | None]:
-    """The gate a composed final permission check calls. `cost=None`
-    means costs could not be determined at all (e.g. no live quote/
-    contract spec) — that's `BLOCK_COST`, distinct from `BLOCK_EXPECTED_EDGE`
-    (costs ARE known, but the net edge doesn't clear the bar)."""
+    """The gate a composed final permission check calls. `cost=None` means
+    costs could not be determined (BLOCK_COST); no usable evidence means the
+    expected edge is unknowable (BLOCK_EDGE_UNVALIDATED); both block.
+    `executable=True` additionally demands a verified certificate and a
+    probability recomputed from the certified model."""
     if cost is None:
         return BLOCK_COST, None
-    evaluation = evaluate_expected_edge(signal, cost, min_net_edge_price)
+    require_horizon(cost, HORIZON_FULL_ROUND_TRIP, "entry cost gate")
+    if evidence is None:
+        return BLOCK_EDGE_UNVALIDATED, None
+    if executable and not executable_edge_check(signal, evidence, public_key=public_key, now_utc=now_utc,
+                                                proposal_features=proposal_features).ok:
+        return BLOCK_EDGE_UNVALIDATED, None
+    evaluation = evaluate_expected_edge(signal, cost, evidence, min_net_edge_price)
     if not evaluation.sufficient:
         return BLOCK_EXPECTED_EDGE, evaluation
     return ALLOW, evaluation

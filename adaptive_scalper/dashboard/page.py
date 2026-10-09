@@ -649,7 +649,7 @@ function multiPositionPanel(p){
     bar:v.bar_status,open_position_strategy:v.open_position_strategy,quote:v.quote_status,
     quote_age_s:v.quote_age_seconds,signal:v.signal_status,
     latest_signals:(v.latest_signals&&v.latest_signals.signals.length)?v.latest_signals.signals.map(s=>
-      s.strategy_key+" "+(s.direction||"")+(s.raw_confidence!=null?" p="+Number(s.raw_confidence).toFixed(2):"")).join("; "):"none",
+      s.strategy_key+" "+(s.direction||"")+(s.raw_confidence!=null?" raw score="+Number(s.raw_confidence).toFixed(2):"")).join("; "):"none",
     cost_eligible:v.cost_eligible,news:v.news,
     last_decision:v.last_decision?(v.last_decision.stage+" "+v.last_decision.decision+
       (v.last_decision.strategy_key?" ("+v.last_decision.strategy_key+")":"")):null,

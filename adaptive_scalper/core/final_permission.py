@@ -66,7 +66,9 @@ from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, ALLOWED
 from adaptive_scalper.core.kill_switch import KillSwitchState
 from adaptive_scalper.core.permission import ActionKind, evaluate_kill_switch_permission
 from adaptive_scalper.costs.edge import ALLOW as _COST_ALLOW
-from adaptive_scalper.costs.edge import evaluate_cost_gate
+from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED as _COST_BLOCK_EDGE_UNVALIDATED
+from adaptive_scalper.costs.edge import evaluate_cost_gate, executable_edge_check
+from adaptive_scalper.costs.edge_evidence import EdgeEvidence
 from adaptive_scalper.costs.model import CostEstimate
 from adaptive_scalper.execution.reconciliation import CLEAN as _RECONCILIATION_CLEAN
 from adaptive_scalper.gateway.demo_gate import DemoVerificationResult
@@ -99,6 +101,7 @@ BLOCK_DUPLICATE = "BLOCK_DUPLICATE"
 BLOCK_REENTRY_CHURN = "BLOCK_REENTRY_CHURN"
 BLOCK_PORTFOLIO_RISK = "BLOCK_PORTFOLIO_RISK"
 BLOCK_OTHER = "BLOCK_OTHER"
+BLOCK_STRATEGY_SUSPENDED = "BLOCK_STRATEGY_SUSPENDED"
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,22 @@ class FinalPermissionInput:
     pending_positions: list[PositionExposure]
     portfolio_risk_limits: PortfolioRiskLimits
     min_net_edge_price: float = 0.0
+    # VALIDATED expected-edge evidence for this proposal (costs/edge_evidence.py).
+    # None -- the default, and the only possibility until a calibration has
+    # passed a preregistered protocol -- blocks with BLOCK_EDGE_UNVALIDATED.
+    edge_evidence: EdgeEvidence | None = None
+    # Certificate verification inputs (validation/certificate.py): the Ed25519
+    # PUBLIC key only (no key -> nothing verifies) and the proposal's causal
+    # feature vector, from which P(win) is recomputed with the certified
+    # model. The protocol is NOT an input: verification always uses the
+    # module's CURRENT_PROTOCOL.
+    public_key: bytes | None = None
+    now_utc: int | None = None
+    proposal_features: dict | None = None
+    # Config `strategies.entry_suspended` (release 0.2.8). Checked here too, so
+    # a suspended strategy can never reach broker exposure even if a caller
+    # skipped the pre-selector filter or holds verified evidence for it.
+    entry_suspended_strategy_keys: frozenset[str] = frozenset()
     # (decision, reason) from position_management.re_entry.evaluate_reentry,
     # or None when this proposal is not a re-entry scenario (no relevant
     # prior exit exists) and the check is simply not applicable.
@@ -194,11 +213,28 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
     if inp.news_result.decision != _NEWS_ALLOW:
         return FinalPermissionResult(inp.news_result.decision, inp.news_result.reason)
 
-    cost_decision, edge_eval = evaluate_cost_gate(inp.signal, inp.cost_estimate, inp.min_net_edge_price)
+    if inp.signal.strategy_key in inp.entry_suspended_strategy_keys:
+        return FinalPermissionResult(BLOCK_STRATEGY_SUSPENDED,
+                                     f"{inp.signal.strategy_key} is entry-suspended (strategies.entry_suspended)")
+
+    # executable=True: only certificate-verified edge evidence can authorize a
+    # broker order; missing/legacy/test/forged/expired evidence is
+    # BLOCK_EDGE_UNVALIDATED (issue #6, audit section 8).
+    cost_decision, edge_eval = evaluate_cost_gate(
+        inp.signal, inp.cost_estimate, inp.min_net_edge_price, evidence=inp.edge_evidence, executable=True,
+        public_key=inp.public_key, now_utc=inp.now_utc, proposal_features=inp.proposal_features,
+    )
     if cost_decision != _COST_ALLOW:
-        return FinalPermissionResult(
-            cost_decision, edge_eval.reason if edge_eval is not None else "cost could not be determined"
-        )
+        if edge_eval is not None:
+            detail = edge_eval.reason
+        elif cost_decision == _COST_BLOCK_EDGE_UNVALIDATED:
+            check = executable_edge_check(inp.signal, inp.edge_evidence, public_key=inp.public_key,
+                                          now_utc=inp.now_utc, proposal_features=inp.proposal_features)
+            detail = (f"no verified edge evidence for this proposal ({check.reason}); "
+                      f"a raw score is not a probability")
+        else:
+            detail = "cost could not be determined"
+        return FinalPermissionResult(cost_decision, detail)
 
     corr_decision, corr_reason = evaluate_correlation_gate(
         inp.signal.canonical_symbol, inp.open_or_pending_symbols, inp.correlation_matrix
