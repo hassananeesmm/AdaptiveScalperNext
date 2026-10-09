@@ -38,7 +38,7 @@ exported by the operator). Changes on this branch (tighten-only; details WORKLOG
 - ASN-035 CLOSED (blocked PROPOSED orders are inert audit records, pinned by tests); ASN-036 OPEN (cost-stress
   components not recorded, so protocol criterion 5 is not measurable).
 - CI: `.github/workflows/ci.yml` runs the full suite on pushes to main and on every pull request.
-Status: IMPLEMENTED, TESTED-FAKE, TESTED-WINDOWS (suite result in WORKLOG). Not deployed: deploying needs operator
+Status: IMPLEMENTED, TESTED-FAKE, TESTED-WINDOWS (suite 2228 passed / 9 skipped / 0 failed). Not deployed: deploying needs operator
 approval, a verified backup, migration 0033 rehearsal on a production copy and a flat restart. On first start the
 pre-0033 value 9,759.63 is adopted (LEGACY_ADOPTED) for the running IC Markets DEMO account, so the 5.19 % drawdown
 block persists -- by design.

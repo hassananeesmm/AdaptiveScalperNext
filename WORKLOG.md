@@ -3300,3 +3300,7 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
 - DEMO activation: NOT activated. Criterion 5 fails (no strategy with genuine forward evidence, no certificate
   pipeline); criterion 3 fails (drawdown 5.19 % >= 5 % without any baseline reset); criterion 1 open (broker
   cash-history export). Entries stay blocked; the runtime keeps collecting shadow evidence.
+- Full suite on the committed branch tree (`f80c09d`, clean worktree, Windows, shared .venv, serial, 10 min 4 s):
+  **2228 passed / 9 skipped / 0 failed / 2 warnings**. (An earlier run before the CLI registry pin was updated: 2226
+  passed / 1 failed -- `test_every_directive_command_is_registered`, which pins the command list and correctly flagged
+  the two new commands.)
