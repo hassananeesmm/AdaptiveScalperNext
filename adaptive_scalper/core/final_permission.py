@@ -85,6 +85,8 @@ from adaptive_scalper.portfolio.correlation import ALLOW as _CORRELATION_ALLOW
 from adaptive_scalper.portfolio.correlation import CorrelationResult, evaluate_correlation_gate
 from adaptive_scalper.portfolio.exposure import ALLOW as _PORTFOLIO_RISK_ALLOW
 from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits, PositionExposure, evaluate_portfolio_risk_gate
+from adaptive_scalper.risk.entry_regime import adx_entry_block
+from adaptive_scalper.risk.entry_window import entry_window_block
 from adaptive_scalper.risk.governor import ALLOW as _RISK_ALLOW
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits, evaluate_risk_gate
 from adaptive_scalper.strategies.base import StrategySignal
@@ -146,6 +148,15 @@ class FinalPermissionInput:
     # or None when this proposal is not a re-entry scenario (no relevant
     # prior exit exists) and the check is simply not applicable.
     reentry_check: tuple[str, str] | None = None
+    # Config `entry_window` (operator entry hours, risk/entry_window.py):
+    # (start_hour_utc, end_hour_utc), or None when no window is configured.
+    # Evaluated against `now_utc`; a configured window with now_utc None blocks.
+    entry_window_hours: tuple[int, int] | None = None
+    # Config `entry_regime` (risk/entry_regime.py): the proposal's ADX on the
+    # latest closed bars and the operator threshold (None = not configured).
+    # A configured threshold with entry_adx None blocks.
+    entry_adx: float | None = None
+    min_entry_adx: float | None = None
 
 
 @dataclass(frozen=True)
@@ -212,6 +223,14 @@ def evaluate_final_permission(inp: FinalPermissionInput) -> FinalPermissionResul
 
     if inp.news_result.decision != _NEWS_ALLOW:
         return FinalPermissionResult(inp.news_result.decision, inp.news_result.reason)
+
+    session_block = entry_window_block(inp.now_utc, inp.entry_window_hours)
+    if session_block is not None:
+        return FinalPermissionResult(*session_block)
+
+    regime_block = adx_entry_block(inp.entry_adx, inp.min_entry_adx)
+    if regime_block is not None:
+        return FinalPermissionResult(*regime_block)
 
     if inp.signal.strategy_key in inp.entry_suspended_strategy_keys:
         return FinalPermissionResult(BLOCK_STRATEGY_SUSPENDED,

@@ -5,6 +5,14 @@ delete) once fixed, with the fixing commit/date noted.
 
 ## Open
 
+ASN-033 [LOW, research CLI -- 2026-10-09, pre-existing] `cli/research.py` builds research run/trial ids from the
+wall-clock SECOND (`backtest:{symbol}:{resolution}:{now}`, likewise `oos:`), and `research_trials.trial_id` is
+UNIQUE: two backtests of the same symbol/resolution finishing in the same second raise sqlite3.IntegrityError.
+Seen once as a timing flake of `tests/test_cli_commands.py::test_backtest_walk_forward_path_stress_and_purged_validation`
+(full suite 2026-10-09: 1 failed / 2166 passed; the test passes alone). Code unchanged since a073ec1, unrelated
+to the risk-tightening branch. Fix (not done): a collision-free id (e.g. append a short random or monotonic
+suffix) -- touches research ledger identity, so it needs its own reviewed change.
+
 ASN-031 [P1, validation — 2026-10-03, by design] No certificate-issuing validation pipeline exists, so no evidence can
 ever verify and the system is FLAT by construction. Building it (forward-only data, preregistered protocol,
 time-ordered purged calibration, key provisioned outside Git) is a separate, human-reviewed task.

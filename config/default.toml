@@ -42,6 +42,44 @@ pre_high_impact_minutes = 30
 post_high_impact_minutes = 30
 fail_closed = true
 
+[entry_window]
+# Operator policy (2026-10-09): NEW entries (PAPER and DEMO, every symbol) only
+# during the London/New York overlap, [12:00, 20:00) UTC; none in Asian hours.
+# An operator restriction, not a measured edge (directive section 73): session
+# behaviour keeps being measured (shadow candidates are still recorded outside
+# the window). Exits and position management run around the clock.
+enabled = true
+start_hour_utc = 12
+end_hour_utc = 20
+
+[entry_regime]
+# Operator policy (2026-10-09): NEW entries only when Wilder ADX(14) on the
+# entry-resolution closed bars is strictly above 20 (directional momentum).
+# Blocks only; not a validated edge filter. Exits are never restricted.
+min_adx = 20.0
+adx_period = 14
+
+[microstructure]
+# Observer only (2026-10-09, operator spec "Asset B: BTCUSD"): rolling 10-minute
+# VWAP with +/- 2.0 volume-weighted standard-deviation bands over closed M1 bars,
+# published each cycle to runtime_state key "microstructure". No trading authority.
+vwap_symbols = ["BTCUSD"]
+vwap_resolution = "M1"
+vwap_window_minutes = 10
+vwap_band_std = 2.0
+# Candle properties of each closed entry (M5) bar -- lower/upper wick ratio, body
+# ratio, close location -- plus EMA(20) and ADX(14) of the closes. Observation only.
+candle_symbols = ["XAUUSD", "BTCUSD"]
+candle_ema_period = 20
+
+[hard_stop]
+# Hard cut-loss backstop (2026-10-09, operator spec "Asset B: BTCUSD"): close a
+# BTCUSD position at market when price has moved MORE than 0.5 % against its
+# broker fill price (bid for a BUY, ask for a SELL), independent of its broker
+# SL. Tighten-only backstop: every DEMO BTCUSD stop so far was inside it
+# (n=294, max 0.414 %), so it binds only if the broker SL fails or a gap occurs.
+max_adverse_move_pct = { BTCUSD = 0.5 }
+
 [database]
 path = "data/adaptive_scalper.sqlite3"
 

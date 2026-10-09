@@ -99,3 +99,23 @@ def test_breach_surfaces_own_working_orders_for_the_operator(tmp_path):
         magic=engine.config.runtime.magic, comment="ASN"))
     assert engine.demo._daily_loss_circuit_breaker(int(clock.now), {}) is True
     assert any("901" in d for d in _events(conn, "DAILY_LOSS_WORKING_ORDERS"))
+
+
+def test_trip_locks_new_entries_until_the_next_utc_day_even_if_the_operator_clears(tmp_path):
+    from adaptive_scalper.core.kill_switch import clear as clear_kill_switch
+    from adaptive_scalper.runtime.demo import BLOCK_RISK
+
+    clock, engine, conn, gateway = _started(tmp_path)
+    gateway.set_account(demo_account(balance=10000.0, equity=9700.0))
+    step(engine, clock, seconds=3)
+    assert get_kill_switch_state(conn).status == KillSwitchStatus.ENGAGED
+
+    # Positions flattened, the loss recovered below the limit, the operator clears the kill switch:
+    gateway.set_account(demo_account(balance=10000.0, equity=10000.0))
+    clear_kill_switch(conn, "reviewed", OperatorAuthority("test-operator"))
+    decision, reason = engine.demo.global_entry_block(int(clock.now))
+    assert decision == BLOCK_RISK and "locked until 00:00 UTC" in reason
+
+    next_day = (int(clock.now) // 86400 + 1) * 86400 + 1
+    block = engine.demo.global_entry_block(next_day)
+    assert block is None or "locked until 00:00 UTC" not in block[1]
