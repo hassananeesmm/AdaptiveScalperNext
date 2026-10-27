@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from adaptive_scalper.learning.lifecycle import InvalidLifecycleTransitionError, ModelLifecycleState
+from adaptive_scalper.learning.lifecycle import (
+    InvalidLifecycleTransitionError,
+    ModelLifecycleState,
+)
 from adaptive_scalper.learning.registry import (
     RetiredStrategyModelError,
     get_current_model,

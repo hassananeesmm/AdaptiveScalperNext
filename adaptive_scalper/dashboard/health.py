@@ -121,7 +121,7 @@ def compute_health(
         try:
             terminal = gateway.terminal_info()
             mt5_connected = bool(terminal and terminal.connected)
-        except Exception as exc:  # gateway calls must never crash the dashboard
+        except Exception as exc:  # noqa: BLE001 - gateway calls must never crash the dashboard
             mt5_connected = False
             reasons.append(f"gateway.terminal_info() raised {type(exc).__name__}: {exc}")
         if mt5_connected is False:

@@ -20,8 +20,7 @@ HOOKS_DIR = PROJECT_ROOT / ".claude" / "hooks"
 GUARDRAILS = HOOKS_DIR / "guardrails.py"
 
 sys.path.insert(0, str(HOOKS_DIR))
-import guardrails  # noqa: E402
-
+import guardrails
 
 # --------------------------------------------------------------------------
 # Pure policy function tests
@@ -122,6 +121,7 @@ def run_hook(payload: dict) -> dict:
         text=True,
         timeout=30,
         env=env,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
@@ -236,6 +236,7 @@ def test_e2e_malformed_json_fails_open():
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert proc.returncode == 0
     result = json.loads(proc.stdout)

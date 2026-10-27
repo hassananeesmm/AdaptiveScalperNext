@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from adaptive_scalper.costs.model import estimate_cost, estimate_cost_from_evidence, price_equivalent_of_monetary_cost
+from adaptive_scalper.costs.model import (
+    estimate_cost,
+    estimate_cost_from_evidence,
+    price_equivalent_of_monetary_cost,
+)
 
 
 def test_price_equivalent_of_monetary_cost_basic_conversion():
@@ -73,7 +77,7 @@ def test_estimate_cost_zero_margin_means_total_equals_subtotal():
     ("swap_price_equivalent", -1.0),
 ])
 def test_estimate_cost_rejects_negative_components(field, value):
-    kwargs = dict(spread_price=1.0, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0)
+    kwargs = {"spread_price": 1.0, "commission_price_equivalent": 0.0, "expected_slippage_price": 0.0, "swap_price_equivalent": 0.0}
     kwargs[field] = value
     with pytest.raises(ValueError):
         estimate_cost(**kwargs)
@@ -88,7 +92,7 @@ def test_estimate_cost_rejects_negative_uncertainty_margin_pct():
 
 
 def test_margin_never_reduces_effective_cost():
-    common = dict(spread_price=1.0, commission_price_equivalent=0.0, expected_slippage_price=0.0, swap_price_equivalent=0.0)
+    common = {"spread_price": 1.0, "commission_price_equivalent": 0.0, "expected_slippage_price": 0.0, "swap_price_equivalent": 0.0}
     zero_margin = estimate_cost(**common, uncertainty_margin_pct=0.0)
     with_margin = estimate_cost(**common, uncertainty_margin_pct=0.2)
     assert with_margin.total_cost > zero_margin.total_cost
@@ -112,7 +116,7 @@ def test_evidence_returns_estimate_when_everything_is_known():
     "spread_price", "commission_price_equivalent", "expected_slippage_price", "swap_price_equivalent",
 ])
 def test_evidence_returns_none_when_any_single_component_is_unknown(missing_field):
-    kwargs = dict(spread_price=1.0, commission_price_equivalent=0.5, expected_slippage_price=0.2, swap_price_equivalent=0.0)
+    kwargs = {"spread_price": 1.0, "commission_price_equivalent": 0.5, "expected_slippage_price": 0.2, "swap_price_equivalent": 0.0}
     kwargs[missing_field] = None
     result = estimate_cost_from_evidence(**kwargs)
     assert result is None

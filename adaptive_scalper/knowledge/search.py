@@ -17,8 +17,7 @@ from datetime import datetime
 from adaptive_scalper.knowledge.model import STATUS_DEPRECATED, Concept, KnowledgeBundle
 
 _TOKEN = re.compile(r"[a-z0-9_]{2,}")
-_STOP = frozenset("the and for with that this from are was were not but you your its into only when then than "
-                  "has have had any all can may must never one two per via".split())
+_STOP = frozenset(["the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "not", "but", "you", "your", "its", "into", "only", "when", "then", "than", "has", "have", "had", "any", "all", "can", "may", "must", "never", "one", "two", "per", "via"])
 
 
 def tokenize(text: str) -> list[str]:

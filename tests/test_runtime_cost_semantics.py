@@ -9,7 +9,7 @@ backtest/PAPER engine must use the same convention, and swap is horizon-aware
 the broker's server-midnight rollover.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -23,22 +23,25 @@ from adaptive_scalper.costs.model import (
     CostEstimate,
     estimate_cost,
 )
-from adaptive_scalper.costs.swap_horizon import rollovers_crossed, swap_price_for_horizon
+from adaptive_scalper.costs.swap_horizon import (
+    rollovers_crossed,
+    swap_price_for_horizon,
+)
 from adaptive_scalper.gateway.types import Bar, SymbolSpec, SymbolTradeMode, Tick
+from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
 from adaptive_scalper.runtime.demo import (
     CLOSE_LATENCY_ALLOWANCE_SECONDS,
     live_cost_estimate,
     live_remaining_exit_cost_estimate,
     max_hold_horizon_seconds,
 )
-from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
 from adaptive_scalper.selector.selector import select_proposal
 from adaptive_scalper.simulation.fill_model import FillAssumptions
 from adaptive_scalper.strategies.base import StrategySignal
 
 # 2026-07-15 12:00 UTC: US DST in effect, server (UTC+3) midnight = 21:00 UTC.
-NOON_UTC = int(datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc).timestamp())
-SERVER_MIDNIGHT_UTC = int(datetime(2026, 7, 15, 21, 0, tzinfo=timezone.utc).timestamp())
+NOON_UTC = int(datetime(2026, 7, 15, 12, 0, tzinfo=UTC).timestamp())
+SERVER_MIDNIGHT_UTC = int(datetime(2026, 7, 15, 21, 0, tzinfo=UTC).timestamp())
 HOLD = 660
 
 
@@ -74,10 +77,10 @@ def _remaining(cfg=None, now=NOON_UTC, hold=HOLD):
 
 
 def _signal(**kw) -> StrategySignal:
-    base = dict(strategy_key="momentum_continuation", strategy_version=1, canonical_symbol="XAUUSD",
-                direction="BUY", raw_confidence=0.9, stop_distance=10.0, target_distance=30.0,
-                expected_duration_seconds=600, entry_method="market", regime="TRENDING_UP",
-                rationale="test", feature_schema_version=1, data_timestamp=NOON_UTC)
+    base = {"strategy_key": "momentum_continuation", "strategy_version": 1, "canonical_symbol": "XAUUSD",
+                "direction": "BUY", "raw_confidence": 0.9, "stop_distance": 10.0, "target_distance": 30.0,
+                "expected_duration_seconds": 600, "entry_method": "market", "regime": "TRENDING_UP",
+                "rationale": "test", "feature_schema_version": 1, "data_timestamp": NOON_UTC}
     base.update(kw)
     return StrategySignal(**base)
 

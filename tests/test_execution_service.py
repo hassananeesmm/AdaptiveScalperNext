@@ -4,6 +4,7 @@ review round 1 findings #7,#8,#9 and round 2 findings #1,#2)."""
 from __future__ import annotations
 
 import pytest
+from edge_fixtures import TEST_PUBLIC_KEY, fixture_validated_evidence
 
 from adaptive_scalper.core.final_permission import FinalPermissionInput
 from adaptive_scalper.core.kill_switch import KillSwitchState, KillSwitchStatus
@@ -55,7 +56,6 @@ from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits
 from adaptive_scalper.strategies.base import StrategySignal
-from edge_fixtures import TEST_PUBLIC_KEY, fixture_validated_evidence
 
 
 @pytest.fixture()
@@ -72,27 +72,27 @@ def db(tmp_path):
 
 
 def _demo_account(**overrides) -> AccountSnapshot:
-    defaults = dict(
-        login=123, trade_mode=TradeMode.DEMO, balance=10000.0, equity=10000.0, margin_free=10000.0,
-        currency="USD", server="ICMarketsSC-Demo", company="IC Markets", trade_allowed=True, trade_expert=True,
-    )
+    defaults = {
+        "login": 123, "trade_mode": TradeMode.DEMO, "balance": 10000.0, "equity": 10000.0, "margin_free": 10000.0,
+        "currency": "USD", "server": "ICMarketsSC-Demo", "company": "IC Markets", "trade_allowed": True, "trade_expert": True,
+    }
     defaults.update(overrides)
     return AccountSnapshot(**defaults)
 
 
 def _demo_terminal(**overrides) -> TerminalSnapshot:
-    defaults = dict(connected=True, trade_allowed=True, build=1000, name="MT5", company="MetaQuotes", path="")
+    defaults = {"connected": True, "trade_allowed": True, "build": 1000, "name": "MT5", "company": "MetaQuotes", "path": ""}
     defaults.update(overrides)
     return TerminalSnapshot(**defaults)
 
 
 def _symbol_spec(**overrides) -> SymbolSpec:
-    defaults = dict(
-        name="XAUUSDm", description="Gold", currency_base="XAU", currency_profit="USD", currency_margin="USD",
-        digits=2, point=0.01, trade_contract_size=100.0, volume_min=0.01, volume_max=50.0, volume_step=0.01,
-        trade_tick_size=0.01, trade_tick_value=1.0, spread=20, visible=True,
-        trade_mode=SymbolTradeMode.FULL, filling_mode=3,
-    )
+    defaults = {
+        "name": "XAUUSDm", "description": "Gold", "currency_base": "XAU", "currency_profit": "USD", "currency_margin": "USD",
+        "digits": 2, "point": 0.01, "trade_contract_size": 100.0, "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01,
+        "trade_tick_size": 0.01, "trade_tick_value": 1.0, "spread": 20, "visible": True,
+        "trade_mode": SymbolTradeMode.FULL, "filling_mode": 3,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 
@@ -104,60 +104,60 @@ def _demo_gateway(cls=FakeGateway, **overrides) -> FakeGateway:
     terminal_info/symbol_info/symbol_info_tick calls) sees a genuinely
     tradable setup rather than incidentally blocking on missing fixture
     data every test would otherwise need to reason about."""
-    defaults = dict(
-        account=_demo_account(), terminal=_demo_terminal(), symbols=[_symbol_spec()],
-        ticks={"XAUUSDm": Tick(time=5000, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)},
-    )
+    defaults = {
+        "account": _demo_account(), "terminal": _demo_terminal(), "symbols": [_symbol_spec()],
+        "ticks": {"XAUUSDm": Tick(time=5000, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)},
+    }
     defaults.update(overrides)
     return cls(**defaults)
 
 
 def _signal(**overrides) -> StrategySignal:
-    defaults = dict(
-        strategy_key="momentum_continuation", strategy_version=1, canonical_symbol="XAUUSD",
-        direction="BUY", raw_confidence=0.6, stop_distance=1.0, target_distance=2.0,
-        expected_duration_seconds=300, entry_method="MARKET", regime="TRENDING_UP",
-        rationale="test", feature_schema_version=1, data_timestamp=1000,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "strategy_version": 1, "canonical_symbol": "XAUUSD",
+        "direction": "BUY", "raw_confidence": 0.6, "stop_distance": 1.0, "target_distance": 2.0,
+        "expected_duration_seconds": 300, "entry_method": "MARKET", "regime": "TRENDING_UP",
+        "rationale": "test", "feature_schema_version": 1, "data_timestamp": 1000,
+    }
     defaults.update(overrides)
     return StrategySignal(**defaults)
 
 
 def _permission_input(**overrides) -> FinalPermissionInput:
-    defaults = dict(
-        mode="DEMO", signal=_signal(),
-        kill_switch_state=KillSwitchState(status=KillSwitchStatus.DISENGAGED, reason="test",
+    defaults = {
+        "mode": "DEMO", "signal": _signal(),
+        "kill_switch_state": KillSwitchState(status=KillSwitchStatus.DISENGAGED, reason="test",
                                            changed_at="2026-01-01T00:00:00Z", changed_by="operator"),
-        demo_verification=DemoVerificationResult(allowed=True, block_reason=None, detail="DEMO confirmed"),
-        reconciliation_status=CLEAN, has_dangerous_unknown_order=False, duplicate_active_order=False,
-        asset_identity=SymbolValidationResult("XAUUSD", "XAUUSD", True, VALID, "ok"),
-        direction_check=DirectionCheck(True, "direction_allowed", "ok"),
-        execution_quote=ExecutionQuoteCheck(True, EXECUTION_VALID, "ok"),
-        news_result=NewsBlockResult(NEWS_ALLOW, "no applicable event", None, None, None),
+        "demo_verification": DemoVerificationResult(allowed=True, block_reason=None, detail="DEMO confirmed"),
+        "reconciliation_status": CLEAN, "has_dangerous_unknown_order": False, "duplicate_active_order": False,
+        "asset_identity": SymbolValidationResult("XAUUSD", "XAUUSD", True, VALID, "ok"),
+        "direction_check": DirectionCheck(True, "direction_allowed", "ok"),
+        "execution_quote": ExecutionQuoteCheck(True, EXECUTION_VALID, "ok"),
+        "news_result": NewsBlockResult(NEWS_ALLOW, "no applicable event", None, None, None),
         # Execution mechanics after final permission are under test; the edge
         # gate's FLAT default is covered in tests/test_final_permission.py.
-        edge_evidence=fixture_validated_evidence(),
-        public_key=TEST_PUBLIC_KEY, now_utc=10_000, proposal_features={},
-        cost_estimate=estimate_cost(spread_price=0.1, commission_price_equivalent=0.0,
+        "edge_evidence": fixture_validated_evidence(),
+        "public_key": TEST_PUBLIC_KEY, "now_utc": 10_000, "proposal_features": {},
+        "cost_estimate": estimate_cost(spread_price=0.1, commission_price_equivalent=0.0,
                                      expected_slippage_price=0.0, swap_price_equivalent=0.0,
                                      uncertainty_margin_pct=0.0),
-        open_or_pending_symbols=[], correlation_matrix={},
-        risk_gate_input=RiskGateInput(
+        "open_or_pending_symbols": [], "correlation_matrix": {},
+        "risk_gate_input": RiskGateInput(
             proposed_symbol="XAUUSD", proposed_monetary_risk=20.0, equity=10000,
             current_total_open_risk=0.0, current_total_pending_risk=0.0,
             current_positions_count=0, current_positions_for_symbol=0,
             daily_realized_pnl=0.0, peak_equity=10000,
         ),
-        risk_limits=RiskLimits(
+        "risk_limits": RiskLimits(
             risk_per_trade_pct=0.25, max_total_open_risk_pct=0.75, max_daily_loss_pct=2.0,
             max_drawdown_pct=5.0, max_open_positions=2, max_positions_per_symbol=1,
         ),
-        open_positions=[], pending_positions=[],
-        portfolio_risk_limits=PortfolioRiskLimits(
+        "open_positions": [], "pending_positions": [],
+        "portfolio_risk_limits": PortfolioRiskLimits(
             max_total_open_risk_pct=5.0, max_symbol_risk_pct=5.0,
             max_currency_direction_risk_pct=5.0, max_correlated_cluster_risk_pct=5.0,
         ),
-    )
+    }
     defaults.update(overrides)
     return FinalPermissionInput(**defaults)
 
@@ -180,13 +180,13 @@ def _sequence(*evidences):
 
 
 def _submit(db, gw, fetch_fresh_evidence, **overrides):
-    defaults = dict(
-        conn=db, gateway=gw, chain_key="chain-1", client_request_id="req-1", canonical_symbol="XAUUSD",
-        broker_symbol="XAUUSDm", direction="BUY", volume=0.05, stop_loss=1990.0, take_profit=2020.0,
-        fetch_fresh_evidence=fetch_fresh_evidence, now_utc=5000, history_window_seconds=10000,
-        clock=lambda: 5000.0,  # matches _demo_gateway()'s default tick time=5000 -> always fresh unless overridden
-        max_spread_price=5.0,  # fake quotes are 2.0 wide; the cap itself: tests/test_spread_cap.py
-    )
+    defaults = {
+        "conn": db, "gateway": gw, "chain_key": "chain-1", "client_request_id": "req-1", "canonical_symbol": "XAUUSD",
+        "broker_symbol": "XAUUSDm", "direction": "BUY", "volume": 0.05, "stop_loss": 1990.0, "take_profit": 2020.0,
+        "fetch_fresh_evidence": fetch_fresh_evidence, "now_utc": 5000, "history_window_seconds": 10000,
+        "clock": lambda: 5000.0,  # matches _demo_gateway()'s default tick time=5000 -> always fresh unless overridden
+        "max_spread_price": 5.0,  # fake quotes are 2.0 wide; the cap itself: tests/test_spread_cap.py
+    }
     defaults.update(overrides)
     return submit_new_entry(**defaults)
 
@@ -711,7 +711,9 @@ def test_unresolvable_partial_fill_becomes_unknown_and_blocks_new_entries(db):
     assert outcome.order.state == OrderState.UNKNOWN
     assert db.execute("SELECT COUNT(*) AS n FROM positions").fetchone()["n"] == 0
 
-    from adaptive_scalper.execution.reconciliation import has_dangerous_unresolved_unknown
+    from adaptive_scalper.execution.reconciliation import (
+        has_dangerous_unresolved_unknown,
+    )
     assert has_dangerous_unresolved_unknown(db) is True
 
 
@@ -753,7 +755,9 @@ def test_timeout_retcode_becomes_unknown_never_blindly_resent(db):
     assert outcome.order.state == OrderState.UNKNOWN
     assert len(gw.order_send_calls) == 1  # exactly one attempt, never auto-resent
 
-    from adaptive_scalper.execution.reconciliation import has_dangerous_unresolved_unknown
+    from adaptive_scalper.execution.reconciliation import (
+        has_dangerous_unresolved_unknown,
+    )
     assert has_dangerous_unresolved_unknown(db) is True
 
 
@@ -787,7 +791,9 @@ def test_unresolvable_position_becomes_unknown_and_records_incident(db):
     assert outcome.status == UNKNOWN
     assert outcome.order.state == OrderState.UNKNOWN
 
-    from adaptive_scalper.execution.reconciliation import has_dangerous_unresolved_unknown
+    from adaptive_scalper.execution.reconciliation import (
+        has_dangerous_unresolved_unknown,
+    )
     assert has_dangerous_unresolved_unknown(db) is True
 
 

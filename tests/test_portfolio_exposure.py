@@ -208,10 +208,10 @@ def test_cluster_exposure_empty_when_only_one_symbol_open():
 # --------------------------------------------------------------------------
 
 def _limits(**overrides) -> PortfolioRiskLimits:
-    defaults = dict(
-        max_total_open_risk_pct=1.0, max_symbol_risk_pct=1.0,
-        max_currency_direction_risk_pct=1.0, max_correlated_cluster_risk_pct=1.0,
-    )
+    defaults = {
+        "max_total_open_risk_pct": 1.0, "max_symbol_risk_pct": 1.0,
+        "max_currency_direction_risk_pct": 1.0, "max_correlated_cluster_risk_pct": 1.0,
+    }
     defaults.update(overrides)
     return PortfolioRiskLimits(**defaults)
 
@@ -318,7 +318,7 @@ def test_na_correlation_never_counted_toward_cluster():
 
 
 def test_pending_risk_counts_toward_total():
-    decision, reason = evaluate_portfolio_risk_gate(
+    decision, _reason = evaluate_portfolio_risk_gate(
         proposed_symbol="XAUUSD", proposed_direction="BUY", proposed_monetary_risk=20.0, equity=10000,
         open_positions=[], pending_positions=[PositionExposure("GBPJPY", "BUY", 90.0)],
         correlation_matrix={}, limits=_limits(max_total_open_risk_pct=1.0),

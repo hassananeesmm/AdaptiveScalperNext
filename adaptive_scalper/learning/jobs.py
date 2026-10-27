@@ -23,8 +23,14 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, RETIRED_STRATEGY_KEYS
-from adaptive_scalper.learning.dataset import TrainingRow, build_training_rows_from_records
+from adaptive_scalper.config.constants import (
+    ALLOWED_CANONICAL_SYMBOLS,
+    RETIRED_STRATEGY_KEYS,
+)
+from adaptive_scalper.learning.dataset import (
+    TrainingRow,
+    build_training_rows_from_records,
+)
 from adaptive_scalper.learning.lifecycle import ModelLifecycleState
 from adaptive_scalper.learning.model_walk_forward import (
     DEFAULT_FOLDS,
@@ -33,7 +39,10 @@ from adaptive_scalper.learning.model_walk_forward import (
     run_model_walk_forward,
 )
 from adaptive_scalper.learning.observer import entry_model_key
-from adaptive_scalper.learning.promotion import PromotionEvidence, evaluate_promotion_gate
+from adaptive_scalper.learning.promotion import (
+    PromotionEvidence,
+    evaluate_promotion_gate,
+)
 from adaptive_scalper.learning.registry import ModelRecord
 from adaptive_scalper.learning.training import (
     DEFAULT_MIN_TRAINING_SAMPLES,

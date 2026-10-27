@@ -19,10 +19,21 @@ import pytest
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.persistence import record_backtest_run
 from adaptive_scalper.features.bar_features import NUMERIC_FEATURE_FIELDS
-from adaptive_scalper.learning.dataset import FEATURE_COLUMNS, TrainingRow, build_training_rows_from_records
-from adaptive_scalper.learning.jobs import SOURCE_PAPER, TrainingJobError, run_training_job
+from adaptive_scalper.learning.dataset import (
+    FEATURE_COLUMNS,
+    TrainingRow,
+    build_training_rows_from_records,
+)
+from adaptive_scalper.learning.jobs import (
+    SOURCE_PAPER,
+    TrainingJobError,
+    run_training_job,
+)
 from adaptive_scalper.learning.lifecycle import ModelLifecycleState
-from adaptive_scalper.learning.model_walk_forward import calibration_bins, run_model_walk_forward
+from adaptive_scalper.learning.model_walk_forward import (
+    calibration_bins,
+    run_model_walk_forward,
+)
 from adaptive_scalper.learning.observer import SCORED, EntryObserver
 from adaptive_scalper.learning.promotion import ALLOW
 from adaptive_scalper.persistence import connect, migrate
@@ -256,7 +267,10 @@ def test_a_second_run_carries_rollback_evidence(conn, tmp_path):
 
 
 def test_costs_are_only_realistic_when_broker_confirmed(conn, tmp_path):
-    from adaptive_scalper.learning.promotion import BLOCK_COSTS_NOT_REALISTIC, BLOCK_OOS_NOT_UNTOUCHED
+    from adaptive_scalper.learning.promotion import (
+        BLOCK_COSTS_NOT_REALISTIC,
+        BLOCK_OOS_NOT_UNTOUCHED,
+    )
 
     _seed_backtest(conn, _rows(600), provenance="UNVERIFIED_ASSUMPTION")
     report = run_training_job(conn, canonical_symbol="XAUUSD", artifact_dir=str(tmp_path / "m"), n_folds=4,

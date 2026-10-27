@@ -33,9 +33,16 @@ import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from adaptive_scalper.research.stats import deflated_sharpe_ratio, probabilistic_sharpe_ratio, return_moments
+from adaptive_scalper.research.stats import (
+    deflated_sharpe_ratio,
+    probabilistic_sharpe_ratio,
+    return_moments,
+)
 from adaptive_scalper.simulation.fill_model import COST_BROKER_DEMO_CONFIRMED
-from adaptive_scalper.validation.certificate import PREREGISTERED_PROTOCOL, ProtocolThresholds
+from adaptive_scalper.validation.certificate import (
+    PREREGISTERED_PROTOCOL,
+    ProtocolThresholds,
+)
 
 LABEL_INSUFFICIENT = "FORWARD EVIDENCE INSUFFICIENT — SYSTEM REMAINS FLAT"
 LABEL_REJECTED = "FORWARD EDGE REJECTED — SYSTEM REMAINS FLAT"
@@ -111,7 +118,7 @@ def block_bootstrap_lower_bound(blocks: list[list[float]], *, resamples: int = B
         values = [v for block in drawn for v in block]
         means.append(sum(values) / len(values))
     means.sort()
-    return means[int(math.floor((1.0 - confidence) * resamples))]
+    return means[math.floor((1.0 - confidence) * resamples)]
 
 
 def evaluate_group(

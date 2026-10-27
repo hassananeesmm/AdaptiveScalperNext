@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import itertools
 import json
 import sqlite3
 import textwrap
@@ -925,7 +926,7 @@ def compute_metrics(trades: list[dict]) -> dict:
 def _distribution(values: list[float], edges: list[float]) -> list[dict]:
     out = []
     bounds = [float("-inf"), *edges, float("inf")]
-    for lo, hi in zip(bounds[:-1], bounds[1:], strict=True):
+    for lo, hi in itertools.pairwise(bounds):
         if lo == float("-inf"):
             label = f"< {hi:g}"
         elif hi == float("inf"):

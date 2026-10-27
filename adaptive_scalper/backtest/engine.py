@@ -81,8 +81,8 @@ half spread either side). Every fill records its causal reference
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 
 from adaptive_scalper.backtest.dataset import build_dataset_snapshot
 from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
@@ -114,17 +114,32 @@ from adaptive_scalper.backtest.types import (
     SimulatedTrade,
 )
 from adaptive_scalper.costs.edge import ALLOW as _COST_ALLOW
-from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED as _COST_BLOCK_EDGE_UNVALIDATED
+from adaptive_scalper.costs.edge import (
+    BLOCK_EDGE_UNVALIDATED as _COST_BLOCK_EDGE_UNVALIDATED,
+)
 from adaptive_scalper.costs.edge import BLOCK_EXPECTED_EDGE as _COST_BLOCK_EXPECTED_EDGE
 from adaptive_scalper.costs.edge import evaluate_cost_gate
 from adaptive_scalper.costs.edge_evidence import edge_provider_of
-from adaptive_scalper.costs.model import remaining_exit_cost_from_evidence, round_trip_cost_from_evidence
-from adaptive_scalper.costs.swap_horizon import rollovers_crossed, swap_price_for_horizon
-from adaptive_scalper.features.bar_features import FEATURE_SCHEMA_VERSION, compute_bar_features, numeric_feature_vector
+from adaptive_scalper.costs.model import (
+    remaining_exit_cost_from_evidence,
+    round_trip_cost_from_evidence,
+)
+from adaptive_scalper.costs.swap_horizon import (
+    rollovers_crossed,
+    swap_price_for_horizon,
+)
+from adaptive_scalper.features.bar_features import (
+    FEATURE_SCHEMA_VERSION,
+    compute_bar_features,
+    numeric_feature_vector,
+)
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
 from adaptive_scalper.history.resolutions import resolution_seconds
 from adaptive_scalper.portfolio.correlation import ALLOW as _CORRELATION_ALLOW
-from adaptive_scalper.portfolio.correlation import CorrelationResult, evaluate_correlation_gate
+from adaptive_scalper.portfolio.correlation import (
+    CorrelationResult,
+    evaluate_correlation_gate,
+)
 from adaptive_scalper.portfolio.exposure import ALLOW as _PORTFOLIO_ALLOW
 from adaptive_scalper.portfolio.exposure import (
     PositionExposure,
@@ -138,10 +153,18 @@ from adaptive_scalper.position_management.adaptive_exit import (
     evaluate_adaptive_exit,
     resolve_new_stop_price,
 )
-from adaptive_scalper.position_management.expectancy import ExpectancyEvidence, evaluate_position_expectancy
+from adaptive_scalper.position_management.expectancy import (
+    ExpectancyEvidence,
+    evaluate_position_expectancy,
+)
 from adaptive_scalper.regimes.classifier import RegimeTracker, classify_regime
 from adaptive_scalper.risk.governor import ALLOW as _RISK_ALLOW
-from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits, calculate_safe_volume, evaluate_risk_gate
+from adaptive_scalper.risk.governor import (
+    RiskGateInput,
+    RiskLimits,
+    calculate_safe_volume,
+    evaluate_risk_gate,
+)
 from adaptive_scalper.selector.selector import select_proposal
 from adaptive_scalper.selector.suspension import partition_suspended
 from adaptive_scalper.simulation.fill_model import (

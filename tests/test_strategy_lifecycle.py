@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from adaptive_scalper.position_management.expectancy import ExpectancyEvidence, evaluate_position_expectancy
+from adaptive_scalper.position_management.expectancy import (
+    ExpectancyEvidence,
+    evaluate_position_expectancy,
+)
 from adaptive_scalper.shadow.lifecycle import (
     HORIZON_PREREGISTERED,
     THESIS_COUPLED_TO_ENTRY_TRIGGER,
@@ -17,11 +20,11 @@ from adaptive_scalper.strategies import build_active_registry
 
 
 def _explicit(**kw):
-    base = dict(strategy_key="candidate_v2", strategy_version=1, eligibility="x", entry_trigger="event",
-                initial_risk="1 ATR", payoff_and_horizon="fixed 900 s", horizon_seconds=900,
-                horizon_status=HORIZON_PREREGISTERED, thesis_mode=THESIS_EXPLICIT,
-                thesis_valid_condition="price above the breakout level",
-                thesis_invalidated_condition="close back inside the range", profit_management=None)
+    base = {"strategy_key": "candidate_v2", "strategy_version": 1, "eligibility": "x", "entry_trigger": "event",
+                "initial_risk": "1 ATR", "payoff_and_horizon": "fixed 900 s", "horizon_seconds": 900,
+                "horizon_status": HORIZON_PREREGISTERED, "thesis_mode": THESIS_EXPLICIT,
+                "thesis_valid_condition": "price above the breakout level",
+                "thesis_invalidated_condition": "close back inside the range", "profit_management": None}
     base.update(kw)
     return StrategyLifecycle(**base)
 

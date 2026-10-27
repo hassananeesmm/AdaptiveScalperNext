@@ -56,8 +56,8 @@ this module DOES honor as defense in depth.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.protocol import Gateway
@@ -225,15 +225,15 @@ def modify_protective_stop_safely(
     independently at each round; omit to use real `time.time()`. Tests
     proving genuine staleness detection pass a fake clock that advances
     between rounds."""
-    round_kwargs = dict(
-        broker_position_id=broker_position_id,
-        expected_direction=expected_direction,
-        expected_volume=expected_volume,
-        broker_symbol=broker_symbol,
-        proposed_stop_price=proposed_stop_price,
-        max_quote_age_seconds=max_quote_age_seconds,
-        clock=clock,
-    )
+    round_kwargs = {
+        "broker_position_id": broker_position_id,
+        "expected_direction": expected_direction,
+        "expected_volume": expected_volume,
+        "broker_symbol": broker_symbol,
+        "proposed_stop_price": proposed_stop_price,
+        "max_quote_age_seconds": max_quote_age_seconds,
+        "clock": clock,
+    }
 
     round1 = _resolve_round(gateway, **round_kwargs)
     if round1.blocked is not None:
@@ -247,7 +247,7 @@ def modify_protective_stop_safely(
 
     try:
         check: OrderCheckResult = gateway.order_check(request)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - order_check transport failure: nothing was sent
         return StopModificationOutcome(
             BROKER_CONSTRAINT, f"order_check raised {type(exc).__name__}: {exc} -- nothing was sent",
         )
@@ -275,7 +275,7 @@ def modify_protective_stop_safely(
         # must itself pass order_check; the round-1 check does not cover it.
         try:
             recheck: OrderCheckResult = gateway.order_check(final_request)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - order_check transport failure: nothing was sent
             return StopModificationOutcome(
                 BROKER_CONSTRAINT, f"order_check of the rebuilt request raised {type(exc).__name__}: {exc} -- nothing was sent",
             )
@@ -287,7 +287,7 @@ def modify_protective_stop_safely(
 
     try:
         result = gateway.order_send(final_request)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - order_send may have reached the broker: stop change UNKNOWN
         return StopModificationOutcome(UNKNOWN, f"order_send raised {type(exc).__name__}: {exc} -- stop change unknown")
     interpretation = interpret_retcode(result.retcode)
 

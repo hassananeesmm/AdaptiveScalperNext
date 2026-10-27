@@ -13,7 +13,11 @@ import sqlite3
 
 import pytest
 
-from adaptive_scalper.execution.close import CLOSE_UNRESOLVED, UNKNOWN, close_position_safely
+from adaptive_scalper.execution.close import (
+    CLOSE_UNRESOLVED,
+    UNKNOWN,
+    close_position_safely,
+)
 from adaptive_scalper.execution.close_requests import (
     RESOLVED_CLOSED,
     RESOLVED_NOT_EXECUTED,
@@ -334,9 +338,9 @@ def test_a_proven_full_close_and_a_definitive_rejection_resolve_immediately():
 
 
 def test_only_one_unresolved_close_per_position_is_ever_recorded():
-    conn, gw, ticket = _setup()
-    kwargs = dict(broker_position_id=ticket, broker_symbol="XAUUSDm", position_direction="BUY",
-                  requested_volume=0.05, magic=MAGIC, comment="x")
+    conn, _gw, ticket = _setup()
+    kwargs = {"broker_position_id": ticket, "broker_symbol": "XAUUSDm", "position_direction": "BUY",
+                  "requested_volume": 0.05, "magic": MAGIC, "comment": "x"}
     record_close_intent(conn, **kwargs, now_utc=NOW)
     with pytest.raises(CloseRequestConflict):
         record_close_intent(conn, **kwargs, now_utc=NOW + 1)

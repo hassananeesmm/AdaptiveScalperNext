@@ -134,8 +134,8 @@ def apply_unknown_resolutions(
 
     outcomes = []
     for order in orders:
-        kwargs = dict(current_positions=positions, current_pending_orders=pending,
-                      history_orders=history_orders, history_deals=history_deals)
+        kwargs = {"current_positions": positions, "current_pending_orders": pending,
+                      "history_orders": history_orders, "history_deals": history_deals}
         if order.broker_order_id is not None:
             res = resolve_unknown_order(order, **kwargs)
         else:

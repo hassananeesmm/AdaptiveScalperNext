@@ -16,7 +16,10 @@ import argparse
 from adaptive_scalper.cli.common import CliError, open_db, print_json
 from adaptive_scalper.core import kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
-from adaptive_scalper.core.peak_equity_reset import PeakEquityResetRefused, operator_reset
+from adaptive_scalper.core.peak_equity_reset import (
+    PeakEquityResetRefused,
+    operator_reset,
+)
 from adaptive_scalper.risk import peak_equity
 
 

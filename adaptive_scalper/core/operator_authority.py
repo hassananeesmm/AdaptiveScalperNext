@@ -30,7 +30,7 @@ resulting object, never its internals.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class OperatorAuthority:
@@ -38,13 +38,13 @@ class OperatorAuthority:
     state change. See module docstring for what this does and does not
     guarantee."""
 
-    __slots__ = ("operator_id", "granted_at")
+    __slots__ = ("granted_at", "operator_id")
 
     def __init__(self, operator_id: str) -> None:
         if not operator_id or not operator_id.strip():
             raise ValueError("OperatorAuthority requires a non-empty operator_id")
         self.operator_id = operator_id
-        self.granted_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        self.granted_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     def __repr__(self) -> str:  # no secrets to redact, but keep it tidy
         return f"OperatorAuthority(operator_id={self.operator_id!r}, granted_at={self.granted_at!r})"

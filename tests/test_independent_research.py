@@ -12,6 +12,7 @@ import json
 import sqlite3
 
 import pytest
+from sim_helpers import RES, SYMBOL, config, random_walk_bars, spec
 
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.types import LOST_TO_HIGHER_EDGE, CandidateRecord
@@ -21,7 +22,6 @@ from adaptive_scalper.research import trade_analysis as ta
 from adaptive_scalper.research.ledger import family_sharpe_variance, record_trial
 from adaptive_scalper.research.selector_study import selector_study
 from adaptive_scalper.strategies import build_active_registry, select_active_strategies
-from sim_helpers import RES, SYMBOL, config, random_walk_bars, spec
 
 ALL_KEYS = tuple(s.key for s in build_active_registry().all_active())
 
@@ -210,8 +210,8 @@ def test_simulated_costs_are_itemised_and_gross_equals_net_plus_cost(study):
 
 
 def _view(net, cost, risk=10.0, **kw):
-    base = dict(symbol="XAUUSD", strategy_key="s", direction="BUY", entry_time_utc=0, exit_time_utc=600,
-                exit_reason="X", entry_regime="RANGE", initial_risk=risk, net=net, total_cost=cost)
+    base = {"symbol": "XAUUSD", "strategy_key": "s", "direction": "BUY", "entry_time_utc": 0, "exit_time_utc": 600,
+                "exit_reason": "X", "entry_regime": "RANGE", "initial_risk": risk, "net": net, "total_cost": cost}
     base.update(kw)
     return ta.TradeView(**base)
 

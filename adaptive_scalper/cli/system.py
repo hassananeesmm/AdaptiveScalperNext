@@ -8,17 +8,34 @@ import argparse
 import json
 import time
 
-from adaptive_scalper.cli.common import CliError, add_symbol_arg, open_db, open_gateway, print_json
-from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, ALLOWED_MODES, RETIRED_STRATEGY_KEYS
+from adaptive_scalper.cli.common import (
+    CliError,
+    add_symbol_arg,
+    open_db,
+    open_gateway,
+    print_json,
+)
+from adaptive_scalper.config.constants import (
+    ALLOWED_CANONICAL_SYMBOLS,
+    ALLOWED_MODES,
+    RETIRED_STRATEGY_KEYS,
+)
 from adaptive_scalper.config.loader import ConfigError
 from adaptive_scalper.core import kill_switch
-from adaptive_scalper.costs.observations import summarize_exit_observations, summarize_observations
+from adaptive_scalper.costs.observations import (
+    summarize_exit_observations,
+    summarize_observations,
+)
 from adaptive_scalper.dashboard.health import compute_health
 from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
 from adaptive_scalper.persistence.database import integrity_check, quick_check
 from adaptive_scalper.preflight import run_preflight
-from adaptive_scalper.runtime.state import decision_counts, get_state_with_age, recent_events
+from adaptive_scalper.runtime.state import (
+    decision_counts,
+    get_state_with_age,
+    recent_events,
+)
 from adaptive_scalper.strategies import build_active_registry
 
 
@@ -188,7 +205,7 @@ def cmd_journal_recent(args: argparse.Namespace) -> int:
         params.append(args.symbol)
     rows = conn.execute(sql + " ORDER BY je.id DESC LIMIT ?", (*params, args.limit)).fetchall()
     conn.close()
-    print_json([{**{k: r[k] for k in r.keys() if k != "payload_json"}, "payload": json.loads(r["payload_json"])}
+    print_json([{**{k: r[k] for k in r.keys() if k != "payload_json"}, "payload": json.loads(r["payload_json"])}  # noqa: SIM118 - sqlite3.Row iterates values, not keys
                 for r in rows])
     return 0
 

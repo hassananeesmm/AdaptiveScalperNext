@@ -80,7 +80,7 @@ def publish_vwap_bands(conn: sqlite3.Connection, gateway: Gateway, config: AppCo
                 continue
             out[canonical] = {**bands.as_dict(), "resolution": cfg.vwap_resolution,
                               "last_close": bars[-1].close, "position": _position(bars[-1].close, bands)}
-        except Exception as exc:  # observation must never affect trading
+        except Exception as exc:  # noqa: BLE001 - observation must never affect trading
             logger.warning("microstructure observer failed for %s: %s", canonical, exc)
             out[canonical] = {"status": UNAVAILABLE, "reason": f"{type(exc).__name__}: {exc}"}
             record_event(conn, "WARNING", "microstructure", "MICROSTRUCTURE_OBSERVER_FAILED",
@@ -90,7 +90,7 @@ def publish_vwap_bands(conn: sqlite3.Connection, gateway: Gateway, config: AppCo
     for canonical in candle_tracked:
         try:
             candles[canonical] = _candle_snapshot(gateway, config, symbols[canonical], now)
-        except Exception as exc:  # observation must never affect trading
+        except Exception as exc:  # noqa: BLE001 - observation must never affect trading
             logger.warning("candle observer failed for %s: %s", canonical, exc)
             candles[canonical] = {"status": UNAVAILABLE, "reason": f"{type(exc).__name__}: {exc}"}
     snapshot = {"at": now, "symbols": out, "candles": candles}

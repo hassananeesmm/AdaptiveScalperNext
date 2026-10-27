@@ -23,10 +23,11 @@ real, named gaps, not silently absent.
 
 from __future__ import annotations
 
+import itertools
 import math
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from adaptive_scalper.gateway.types import Bar
 
@@ -76,7 +77,7 @@ class FeatureSnapshot:
 def _validate_bars(bars: list[Bar]) -> None:
     if not bars:
         raise FeatureError("bars must be non-empty")
-    for prev, cur in zip(bars, bars[1:]):
+    for prev, cur in itertools.pairwise(bars):
         if cur.time <= prev.time:
             raise FeatureError(
                 f"bars must be strictly ascending by time; got {prev.time} then {cur.time} "
@@ -86,7 +87,7 @@ def _validate_bars(bars: list[Bar]) -> None:
 
 def _log_returns(closes: list[float]) -> list[float]:
     out = []
-    for prev, cur in zip(closes, closes[1:]):
+    for prev, cur in itertools.pairwise(closes):
         if prev > 0 and cur > 0:
             out.append(math.log(cur / prev))
     return out
@@ -184,11 +185,11 @@ def compute_bar_features(
     efficiency_ratio = None
     if len(window_closes) > 1:
         net = abs(window_closes[-1] - window_closes[0])
-        path = sum(abs(b - a) for a, b in zip(window_closes, window_closes[1:]))
+        path = sum(abs(b - a) for a, b in itertools.pairwise(window_closes))
         efficiency_ratio = (net / path) if path > 0 else None
 
     directional_persistence = None
-    diffs_all = [b - a for a, b in zip(window_closes, window_closes[1:])]
+    diffs_all = [b - a for a, b in itertools.pairwise(window_closes)]
     if diffs_all and diffs_all[-1] != 0:
         latest_sign = diffs_all[-1] > 0
         matching = sum(1 for d in diffs_all if d != 0 and (d > 0) == latest_sign)
@@ -223,7 +224,7 @@ def compute_bar_features(
         if spread_price > 0:
             movement_to_cost = atr / spread_price
 
-    dt = datetime.fromtimestamp(current.time, tz=timezone.utc)
+    dt = datetime.fromtimestamp(current.time, tz=UTC)
     effective_now = now if now is not None else current.time
 
     return FeatureSnapshot(

@@ -13,8 +13,8 @@ from adaptive_scalper.execution.close import (
     BROKER_CONSTRAINT,
     CANCELLED,
     FULLY_CLOSED,
-    NOT_DEMO,
     NO_QUOTE,
+    NOT_DEMO,
     PARTIAL_CLOSE,
     REJECTED,
     SYMBOL_MISMATCH,
@@ -39,36 +39,36 @@ from adaptive_scalper.persistence import connect, migrate
 
 
 def _demo_account(**overrides) -> AccountSnapshot:
-    defaults = dict(
-        login=123, trade_mode=TradeMode.DEMO, balance=10000.0, equity=10000.0, margin_free=10000.0,
-        currency="USD", server="ICMarketsSC-Demo", company="IC Markets", trade_allowed=True, trade_expert=True,
-    )
+    defaults = {
+        "login": 123, "trade_mode": TradeMode.DEMO, "balance": 10000.0, "equity": 10000.0, "margin_free": 10000.0,
+        "currency": "USD", "server": "ICMarketsSC-Demo", "company": "IC Markets", "trade_allowed": True, "trade_expert": True,
+    }
     defaults.update(overrides)
     return AccountSnapshot(**defaults)
 
 
 def _demo_terminal(**overrides) -> TerminalSnapshot:
-    defaults = dict(connected=True, trade_allowed=True, build=1000, name="MT5", company="MetaQuotes", path="")
+    defaults = {"connected": True, "trade_allowed": True, "build": 1000, "name": "MT5", "company": "MetaQuotes", "path": ""}
     defaults.update(overrides)
     return TerminalSnapshot(**defaults)
 
 
 def _symbol_spec(**overrides) -> SymbolSpec:
-    defaults = dict(
-        name="XAUUSDm", description="Gold", currency_base="XAU", currency_profit="USD", currency_margin="USD",
-        digits=2, point=0.01, trade_contract_size=100.0, volume_min=0.01, volume_max=50.0, volume_step=0.01,
-        trade_tick_size=0.01, trade_tick_value=1.0, spread=20, visible=True,
-        trade_mode=SymbolTradeMode.FULL, filling_mode=3,
-    )
+    defaults = {
+        "name": "XAUUSDm", "description": "Gold", "currency_base": "XAU", "currency_profit": "USD", "currency_margin": "USD",
+        "digits": 2, "point": 0.01, "trade_contract_size": 100.0, "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01,
+        "trade_tick_size": 0.01, "trade_tick_value": 1.0, "spread": 20, "visible": True,
+        "trade_mode": SymbolTradeMode.FULL, "filling_mode": 3,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 
 
 def _demo_gateway(**gw_overrides) -> FakeGateway:
-    defaults = dict(
-        account=_demo_account(), terminal=_demo_terminal(), symbols=[_symbol_spec()],
-        ticks={"XAUUSDm": Tick(time=5000, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)},
-    )
+    defaults = {
+        "account": _demo_account(), "terminal": _demo_terminal(), "symbols": [_symbol_spec()],
+        "ticks": {"XAUUSDm": Tick(time=5000, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)},
+    }
     defaults.update(gw_overrides)
     return FakeGateway(**defaults)
 
@@ -80,10 +80,10 @@ def _open_position(gw: FakeGateway, direction: str = "BUY", volume: float = 0.05
 
 
 def _close(gw, ticket, **overrides):
-    defaults = dict(
-        broker_position_id=ticket, expected_direction="BUY", expected_volume=0.05, broker_symbol="XAUUSDm",
-        clock=lambda: 5000.0,  # matches _demo_gateway()'s default tick time=5000 -> always fresh
-    )
+    defaults = {
+        "broker_position_id": ticket, "expected_direction": "BUY", "expected_volume": 0.05, "broker_symbol": "XAUUSDm",
+        "clock": lambda: 5000.0,  # matches _demo_gateway()'s default tick time=5000 -> always fresh
+    }
     defaults.update(overrides)
     return close_position_safely(gw, **defaults)
 
@@ -175,7 +175,7 @@ def test_account_not_demo_blocks_close_entirely():
     ticket_gw = _demo_gateway()  # open the position on a genuinely DEMO gateway first
     ticket = _open_position(ticket_gw, direction="BUY", volume=0.05)
     # Reuse the same in-memory position state but with a REAL account snapshot:
-    gw._open_positions = ticket_gw._open_positions  # noqa: SLF001 -- test-only state transplant
+    gw._open_positions = ticket_gw._open_positions  # test-only state transplant
 
     outcome = _close(gw, ticket)
     assert outcome.status == NOT_DEMO

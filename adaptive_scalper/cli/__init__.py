@@ -26,7 +26,16 @@ from __future__ import annotations
 import argparse
 import sys
 
-from adaptive_scalper.cli import data, dashboard, knowledge, learning, operator, research, runtime, system
+from adaptive_scalper.cli import (
+    dashboard,
+    data,
+    knowledge,
+    learning,
+    operator,
+    research,
+    runtime,
+    system,
+)
 from adaptive_scalper.cli.common import DEFAULT_CONFIG_PATH, CliError
 from adaptive_scalper.config.loader import ConfigError
 

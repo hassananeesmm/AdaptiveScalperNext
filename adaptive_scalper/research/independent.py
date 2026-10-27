@@ -41,21 +41,33 @@ from adaptive_scalper.backtest.dataset import compute_bars_checksum
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
 from adaptive_scalper.backtest.persistence import record_backtest_run
-from adaptive_scalper.backtest.types import BacktestConfig, BacktestResult, CandidateRecord
+from adaptive_scalper.backtest.types import (
+    BacktestConfig,
+    BacktestResult,
+    CandidateRecord,
+)
 from adaptive_scalper.backtest.walk_forward import _fold_ranges
 
 # Research never imports the gateway package (tests/test_research_validation.py): bars are
 # gateway `Bar` records and the spec a `SymbolSpec`, passed through untouched.
 Bars = list
 Spec = object
-from adaptive_scalper.research.ledger import family_sharpe_variance, family_trial_count, record_trial
+from adaptive_scalper.research.ledger import (
+    family_sharpe_variance,
+    family_trial_count,
+    record_trial,
+)
 from adaptive_scalper.research.stats import (
     deflated_sharpe_ratio,
     probabilistic_sharpe_ratio,
     probability_of_backtest_overfitting,
     return_moments,
 )
-from adaptive_scalper.research.trade_analysis import TradeView, from_simulated, summarize
+from adaptive_scalper.research.trade_analysis import (
+    TradeView,
+    from_simulated,
+    summarize,
+)
 from adaptive_scalper.strategies import select_active_strategies
 
 # The untouched out-of-sample holdout reserved before any research was run
@@ -206,7 +218,7 @@ def run_independent_study(
             study.sessions[key] = _run_session(
                 key, (key,), bars, ranges, canonical_symbol, resolution, spec, config, now, None, checksum,
             )
-        except Exception as exc:  # recorded as a FAILED trial by persist_study
+        except Exception as exc:  # noqa: BLE001 - recorded as a FAILED trial by persist_study
             study.sessions[key] = SessionResult(
                 session=key, strategy_keys=(key,), canonical_symbol=canonical_symbol, resolution=resolution,
                 config_fingerprint="", bars_checksum=checksum, folds=(), fold_index_ranges=(),

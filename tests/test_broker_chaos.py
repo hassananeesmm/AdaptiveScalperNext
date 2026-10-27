@@ -11,45 +11,6 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
-
-from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
-from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
-from adaptive_scalper.core.kill_switch import get_state as kill_switch_state
-from adaptive_scalper.core.operator_authority import OperatorAuthority
-from adaptive_scalper.execution.close import ALREADY_CLOSED, FULLY_CLOSED, NOT_DEMO, PARTIAL_CLOSE
-from adaptive_scalper.execution.close import UNKNOWN as CLOSE_UNKNOWN
-from adaptive_scalper.execution.close import close_position_safely
-from adaptive_scalper.execution.reconciliation import (
-    BLOCKING_MISMATCH,
-    CLEAN,
-    RECOVERED,
-    get_open_positions,
-    has_dangerous_unresolved_unknown,
-    run_reconciliation,
-)
-from adaptive_scalper.execution.recovery import apply_unknown_resolutions, quarantine_interrupted_submissions
-from adaptive_scalper.execution.service import (
-    BLOCKED_BROKER_CONSTRAINT,
-    BLOCKED_BROKER_STATE,
-    FILLED,
-    PARTIAL,
-    RESTING,
-    UNKNOWN,
-    submit_new_entry,
-)
-from adaptive_scalper.execution.state_machine import OrderState
-from adaptive_scalper.execution.stop_modification import UNKNOWN as STOP_UNKNOWN
-from adaptive_scalper.execution.stop_modification import modify_protective_stop_safely
-from adaptive_scalper.execution.store import create_order, get_order_by_client_request_id
-from adaptive_scalper.gateway.types import (
-    HistoricalDeal,
-    HistoricalOrder,
-    OrderSendResult,
-    PositionSnapshot,
-    SymbolTradeMode,
-    TradeMode,
-)
-from adaptive_scalper.persistence import connect, migrate
 from chaos_harness import (
     BROKER_SYMBOL,
     NOW,
@@ -67,6 +28,56 @@ from chaos_harness import (
 )
 from test_execution_service import _good_evidence
 
+from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
+from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
+from adaptive_scalper.core.kill_switch import get_state as kill_switch_state
+from adaptive_scalper.core.operator_authority import OperatorAuthority
+from adaptive_scalper.execution.close import (
+    ALREADY_CLOSED,
+    FULLY_CLOSED,
+    NOT_DEMO,
+    PARTIAL_CLOSE,
+    close_position_safely,
+)
+from adaptive_scalper.execution.close import UNKNOWN as CLOSE_UNKNOWN
+from adaptive_scalper.execution.reconciliation import (
+    BLOCKING_MISMATCH,
+    CLEAN,
+    RECOVERED,
+    get_open_positions,
+    has_dangerous_unresolved_unknown,
+    run_reconciliation,
+)
+from adaptive_scalper.execution.recovery import (
+    apply_unknown_resolutions,
+    quarantine_interrupted_submissions,
+)
+from adaptive_scalper.execution.service import (
+    BLOCKED_BROKER_CONSTRAINT,
+    BLOCKED_BROKER_STATE,
+    FILLED,
+    PARTIAL,
+    RESTING,
+    UNKNOWN,
+    submit_new_entry,
+)
+from adaptive_scalper.execution.state_machine import OrderState
+from adaptive_scalper.execution.stop_modification import UNKNOWN as STOP_UNKNOWN
+from adaptive_scalper.execution.stop_modification import modify_protective_stop_safely
+from adaptive_scalper.execution.store import (
+    create_order,
+    get_order_by_client_request_id,
+)
+from adaptive_scalper.gateway.types import (
+    HistoricalDeal,
+    HistoricalOrder,
+    OrderSendResult,
+    PositionSnapshot,
+    SymbolTradeMode,
+    TradeMode,
+)
+from adaptive_scalper.persistence import connect, migrate
+
 CLIENT_ID = "req-chaos-1"
 
 
@@ -80,13 +91,13 @@ def db(tmp_path):
 
 
 def _submit(db, gw, **overrides):
-    kwargs = dict(
-        conn=db, gateway=gw, chain_key="chain-chaos", client_request_id=CLIENT_ID, canonical_symbol="XAUUSD",
-        broker_symbol=BROKER_SYMBOL, direction="BUY", volume=0.05, stop_loss=1990.0, take_profit=2020.0,
-        fetch_fresh_evidence=lambda: _good_evidence(), now_utc=NOW, history_window_seconds=600,
-        clock=lambda: float(NOW),
-        max_spread_price=5.0,  # fake quotes are 2.0 wide; the cap itself: tests/test_spread_cap.py
-    )
+    kwargs = {
+        "conn": db, "gateway": gw, "chain_key": "chain-chaos", "client_request_id": CLIENT_ID, "canonical_symbol": "XAUUSD",
+        "broker_symbol": BROKER_SYMBOL, "direction": "BUY", "volume": 0.05, "stop_loss": 1990.0, "take_profit": 2020.0,
+        "fetch_fresh_evidence": lambda: _good_evidence(), "now_utc": NOW, "history_window_seconds": 600,
+        "clock": lambda: float(NOW),
+        "max_spread_price": 5.0,  # fake quotes are 2.0 wide; the cap itself: tests/test_spread_cap.py
+    }
     kwargs.update(overrides)
     return submit_new_entry(**kwargs)
 

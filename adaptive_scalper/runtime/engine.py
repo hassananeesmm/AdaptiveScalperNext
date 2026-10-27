@@ -40,18 +40,26 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from adaptive_scalper.config.constants import RETIRED_STRATEGY_KEYS
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.costs.observations import sweep_exit_costs
-from adaptive_scalper.execution.reconciliation import run_reconciliation
 from adaptive_scalper.execution.close_requests import resolve_unresolved_closes
-from adaptive_scalper.execution.recovery import apply_unknown_resolutions, quarantine_interrupted_submissions
+from adaptive_scalper.execution.reconciliation import run_reconciliation
+from adaptive_scalper.execution.recovery import (
+    apply_unknown_resolutions,
+    quarantine_interrupted_submissions,
+)
 from adaptive_scalper.gateway.protocol import Gateway
-from adaptive_scalper.gateway.server_time import INCONCLUSIVE, MISMATCH, VERIFIED, classify_quote_clock
+from adaptive_scalper.gateway.server_time import (
+    INCONCLUSIVE,
+    MISMATCH,
+    VERIFIED,
+    classify_quote_clock,
+)
 from adaptive_scalper.gateway.spec_store import save_symbol_spec
 from adaptive_scalper.gateway.symbol_resolver import persist_all, resolve_all
 from adaptive_scalper.gateway.symbol_validation import (
@@ -431,7 +439,7 @@ class RuntimeEngine:
                 }
                 if account.trade_mode != TradeMode.DEMO:
                     errors.append("NON_DEMO_ACCOUNT_CONNECTED: new exposure prohibited")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - broker snapshot failure recorded in the snapshot errors
             errors.append(f"account snapshot: {type(exc).__name__}")
 
         try:
@@ -443,7 +451,7 @@ class RuntimeEngine:
                 }
             else:
                 errors.append("MT5 terminal information unavailable")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - broker snapshot failure recorded in the snapshot errors
             errors.append(f"terminal snapshot: {type(exc).__name__}")
 
         if snapshot["terminal"]["connected"] and snapshot["account"] is not None:
@@ -461,7 +469,7 @@ class RuntimeEngine:
                         "spread_points": round((tick.ask - tick.bid) / spec.point, 1)
                         if spec.point > 0 else None,
                     }
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - broker snapshot failure recorded in the snapshot errors
                     errors.append(f"{canonical}: {type(exc).__name__}")
 
             if self.mode == "DEMO" and snapshot["account"]["trade_mode"] == "DEMO":
@@ -473,7 +481,7 @@ class RuntimeEngine:
                          "take_profit": p.take_profit, "floating_pnl": p.profit}
                         for p in self.gateway.positions_get()
                     ]
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - broker snapshot failure recorded in the snapshot errors
                     errors.append(f"broker positions: {type(exc).__name__}")
 
         put_state(self.conn, "live_telemetry", snapshot, now_utc=now)
@@ -521,7 +529,7 @@ class RuntimeEngine:
         degrades knowledge context, never the engine)."""
         try:
             advisor = KnowledgeAdvisor.from_path(clock=self.clock)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - OKF bundle unavailable: health marked DEGRADED
             logger.warning("OKF knowledge bundle unavailable: %s", exc)
             self._health("okf", "DEGRADED", f"bundle unavailable: {type(exc).__name__}")
             return None
@@ -535,7 +543,7 @@ class RuntimeEngine:
         degrades advisory context only; it never stops the engine."""
         try:
             report = ingest_rag_memories(self.conn, now_utc=self.now())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - RAG ingestion failure: health marked DEGRADED
             logger.warning("RAG ingestion raised: %s", exc)
             self._health("rag_ingest", "DEGRADED", f"ingestion failed: {type(exc).__name__}")
             return
@@ -549,14 +557,14 @@ class RuntimeEngine:
         try:
             sweep_exit_costs(self.conn, now_utc=self.now())
             self._health("cost_evidence", "OK")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - cost evidence sweep failure: health marked DEGRADED
             logger.warning("cost evidence sweep failed: %s", exc)
             self._health("cost_evidence", "DEGRADED", f"sweep failed: {type(exc).__name__}")
 
     def _rebuild_rag(self) -> None:
         try:
             status = self.rag.rebuild_index(self.conn)
-        except Exception as exc:  # advisory only: never allowed to fail the engine
+        except Exception as exc:  # noqa: BLE001 - advisory only: never allowed to fail the engine
             status = "DEGRADED"
             logger.warning("RAG index rebuild raised: %s", exc)
         self._health("rag", status, "" if status == "OK" else "index rebuild failed; advisory context degraded")

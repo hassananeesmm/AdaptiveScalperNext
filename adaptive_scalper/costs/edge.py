@@ -16,18 +16,21 @@ test fixture can never authorize a broker order.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
-import math
-
 from adaptive_scalper.costs.edge_evidence import EVIDENCE_VALIDATED, EdgeEvidence
+from adaptive_scalper.costs.model import (
+    HORIZON_FULL_ROUND_TRIP,
+    CostEstimate,
+    require_horizon,
+)
+from adaptive_scalper.strategies.base import StrategySignal
 from adaptive_scalper.validation.certificate import (
     CertificateCheck,
     certified_probability,
     verify_certificate,
 )
-from adaptive_scalper.costs.model import HORIZON_FULL_ROUND_TRIP, CostEstimate, require_horizon
-from adaptive_scalper.strategies.base import StrategySignal
 
 ALLOW = "ALLOW"
 BLOCK_COST = "BLOCK_COST"

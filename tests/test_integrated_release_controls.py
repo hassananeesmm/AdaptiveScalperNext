@@ -15,15 +15,18 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from edge_fixtures import FixtureValidatedProvider, fixture_validated_evidence
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 from adaptive_scalper.config.loader import load_config
-from adaptive_scalper.core.final_permission import BLOCK_STRATEGY_SUSPENDED, evaluate_final_permission
+from adaptive_scalper.core.final_permission import (
+    BLOCK_STRATEGY_SUSPENDED,
+    evaluate_final_permission,
+)
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.persistence import connect, database, migrate
-from edge_fixtures import FixtureValidatedProvider, fixture_validated_evidence
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 MICRO = "microstructure_acceleration"
 START_AT = T0 + 60 * STEP + 10
@@ -49,7 +52,7 @@ def test_final_permission_blocks_a_suspended_strategy_even_with_verified_evidenc
 
 def test_demo_with_verified_evidence_for_everything_never_trades_microstructure_and_still_observes_it(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
+    engine, conn, _gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     engine.config.strategies.entry_suspended = [MICRO]
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
@@ -117,10 +120,14 @@ def test_a_fresh_database_migrates_to_32_with_append_only_shadow_tables(tmp_path
 # --- 21: incompatible PAPER fingerprint ------------------------------------------------------
 
 def test_a_paper_session_from_the_previous_fill_model_is_refused(tmp_path, monkeypatch):
-    from adaptive_scalper.backtest import fingerprint
-    from adaptive_scalper.paper.engine import PaperSessionConfigMismatchError, run_paper_cycle
     from edge_fixtures import v1_replay_config
     from sim_helpers import RES, START, SYMBOL, random_walk_bars, spec
+
+    from adaptive_scalper.backtest import fingerprint
+    from adaptive_scalper.paper.engine import (
+        PaperSessionConfigMismatchError,
+        run_paper_cycle,
+    )
 
     conn = connect(tmp_path / "paper.sqlite3")
     migrate(conn)
@@ -147,7 +154,7 @@ def test_kill_switch_blocks_new_exposure_even_with_verified_evidence(tmp_path):
 
 def test_uninitialized_kill_switch_blocks_even_with_verified_evidence(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
+    engine, _conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     engine.startup()                                 # the operator never bootstrapped the kill switch
     step(engine, clock, seconds=STEP * 6, tick=4)
     assert gateway.calls["order_send"] == 0

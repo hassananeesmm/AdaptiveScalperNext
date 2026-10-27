@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 from adaptive_scalper.core.operator_authority import OperatorAuthority
@@ -75,7 +75,7 @@ _UNINITIALIZED = KillSwitchState(
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def get_state(conn: sqlite3.Connection) -> KillSwitchState:

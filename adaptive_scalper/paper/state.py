@@ -15,7 +15,10 @@ import sqlite3
 import time
 from dataclasses import asdict, dataclass
 
-from adaptive_scalper.backtest.persistence import TRADE_PROVENANCE_COLUMNS, trade_provenance_values
+from adaptive_scalper.backtest.persistence import (
+    TRADE_PROVENANCE_COLUMNS,
+    trade_provenance_values,
+)
 from adaptive_scalper.backtest.types import (
     OpenPositionState,
     PendingEntryState,

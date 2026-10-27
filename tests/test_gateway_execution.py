@@ -5,12 +5,22 @@ from __future__ import annotations
 
 import pytest
 
-from adaptive_scalper.gateway.fake_gateway import FAKE_RETCODE_DONE, FAKE_RETCODE_NOT_FOUND, FakeGateway
-from adaptive_scalper.gateway.types import OrderAction, OrderRequest, PendingOrderSnapshot, PositionSnapshot, Tick
+from adaptive_scalper.gateway.fake_gateway import (
+    FAKE_RETCODE_DONE,
+    FAKE_RETCODE_NOT_FOUND,
+    FakeGateway,
+)
+from adaptive_scalper.gateway.types import (
+    OrderAction,
+    OrderRequest,
+    PendingOrderSnapshot,
+    PositionSnapshot,
+    Tick,
+)
 
 
 def _deal_request(**overrides) -> OrderRequest:
-    defaults = dict(action=OrderAction.DEAL, symbol="XAUUSDm", direction="BUY", volume=0.05, price=2000.0)
+    defaults = {"action": OrderAction.DEAL, "symbol": "XAUUSDm", "direction": "BUY", "volume": 0.05, "price": 2000.0}
     defaults.update(overrides)
     return OrderRequest(**defaults)
 

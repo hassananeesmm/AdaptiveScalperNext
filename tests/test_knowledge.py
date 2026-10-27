@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ast
 import textwrap
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -37,7 +37,7 @@ from adaptive_scalper.knowledge.validate import is_valid, scan_text, validate_bu
 from adaptive_scalper.strategies import build_active_registry
 
 REPO = Path(__file__).resolve().parents[1]
-NOW = datetime(2026, 9, 24, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 24, tzinfo=UTC)
 
 GOOD = """\
 ---
@@ -346,12 +346,13 @@ def test_the_advisor_payload_contains_no_authority_fields():
 
 
 def test_a_missing_bundle_degrades_the_engine_knowledge_health_only(tmp_path, monkeypatch):
-    import adaptive_scalper.knowledge.advisor as advisor_module
     from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+
+    import adaptive_scalper.knowledge.advisor as advisor_module
 
     monkeypatch.setattr(advisor_module, "DEFAULT_BUNDLE", tmp_path / "does-not-exist")
     clock = FakeClock(T0 + 60 * STEP + 10)
-    engine, conn, _ = build_engine(tmp_path / "db", mode="PAPER", clock=clock)
+    engine, _conn, _ = build_engine(tmp_path / "db", mode="PAPER", clock=clock)
     engine.startup()
     step(engine, clock, seconds=STEP * 2, tick=4)
     assert engine.component_health["okf"]["status"] == "DEGRADED"
@@ -421,9 +422,10 @@ def test_the_retrieval_benchmark_reports_every_retriever():
 def test_demo_journals_okf_evidence_with_no_authority(tmp_path):
     import json
 
+    from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+
     from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
     from adaptive_scalper.core.operator_authority import OperatorAuthority
-    from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
     clock = FakeClock(T0 + 60 * STEP + 10)
     engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock)

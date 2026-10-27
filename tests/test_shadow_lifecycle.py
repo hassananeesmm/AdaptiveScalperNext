@@ -12,17 +12,20 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from edge_fixtures import v1_replay_config
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+from sim_helpers import RES, START, SYMBOL, random_walk_bars, spec
 
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
-from adaptive_scalper.shadow.lifecycle_counterfactual import RESOLVED, simulate_candidate_lifecycle
+from adaptive_scalper.shadow.lifecycle_counterfactual import (
+    RESOLVED,
+    simulate_candidate_lifecycle,
+)
 from adaptive_scalper.simulation.fill_model import FillAssumptions
 from adaptive_scalper.strategies import build_active_registry
-from edge_fixtures import v1_replay_config
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
-from sim_helpers import RES, START, SYMBOL, random_walk_bars, spec
 
 ROOT = Path(__file__).resolve().parents[1] / "adaptive_scalper"
 BAR = 300
@@ -107,7 +110,7 @@ def test_mfe_mae_are_measured_in_r_and_bounded_by_the_exit():
 def test_unknown_cost_leaves_net_r_unknown():
     bars = random_walk_bars(700, seed=7)
     config = _config()
-    result, log = _replay(bars, config)
+    _result, log = _replay(bars, config)
     strategies = {s.key: s for s in build_active_registry().all_active()}
     cand = next(c for c in log if c.selected)
     o = simulate_candidate_lifecycle(

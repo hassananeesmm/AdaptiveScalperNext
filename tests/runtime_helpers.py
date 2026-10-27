@@ -9,12 +9,13 @@ through `ChaosGateway`'s fault plan.
 
 from __future__ import annotations
 
+from chaos_harness import ChaosGateway, demo_account, demo_terminal
+
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.gateway.types import Bar, SymbolSpec, SymbolTradeMode, Tick
 from adaptive_scalper.news.types import ProviderError
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.runtime.engine import RuntimeComponents, RuntimeEngine
-from chaos_harness import ChaosGateway, demo_account, demo_terminal
 
 STEP = 300
 T0 = 1_750_000_200  # aligned to a 5-minute boundary
@@ -33,12 +34,12 @@ class FakeClock:
 
 def spec_for(canonical: str, **overrides) -> SymbolSpec:
     base = {
-        "XAUUSD": dict(description="Gold vs US Dollar", currency_base="XAU", currency_profit="USD", digits=2,
-                       point=0.01, trade_tick_size=0.01, trade_tick_value=1.0, trade_contract_size=100.0),
-        "GBPJPY": dict(description="Great Britain Pound vs Japanese Yen", currency_base="GBP", currency_profit="JPY",
-                       digits=3, point=0.001, trade_tick_size=0.001, trade_tick_value=0.65, trade_contract_size=100000.0),
-        "BTCUSD": dict(description="Bitcoin vs US Dollar", currency_base="USD", currency_profit="USD", digits=2,
-                       point=0.01, trade_tick_size=0.01, trade_tick_value=0.01, trade_contract_size=1.0),
+        "XAUUSD": {"description": "Gold vs US Dollar", "currency_base": "XAU", "currency_profit": "USD", "digits": 2,
+                       "point": 0.01, "trade_tick_size": 0.01, "trade_tick_value": 1.0, "trade_contract_size": 100.0},
+        "GBPJPY": {"description": "Great Britain Pound vs Japanese Yen", "currency_base": "GBP", "currency_profit": "JPY",
+                       "digits": 3, "point": 0.001, "trade_tick_size": 0.001, "trade_tick_value": 0.65, "trade_contract_size": 100000.0},
+        "BTCUSD": {"description": "Bitcoin vs US Dollar", "currency_base": "USD", "currency_profit": "USD", "digits": 2,
+                       "point": 0.01, "trade_tick_size": 0.01, "trade_tick_value": 0.01, "trade_contract_size": 1.0},
     }[canonical]
     fields = dict(name=canonical, currency_margin="USD", volume_min=0.01, volume_max=50.0, volume_step=0.01,
                   spread=10, visible=True, trade_mode=SymbolTradeMode.FULL, filling_mode=3, **base)

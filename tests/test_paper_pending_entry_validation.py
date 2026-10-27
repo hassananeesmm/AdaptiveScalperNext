@@ -23,7 +23,14 @@ from adaptive_scalper.paper.state import (
     save_session_state,
 )
 from adaptive_scalper.persistence import connect, migrate
-from tests.test_paper_engine import CANONICAL_SYMBOL, RESOLUTION, _config, _seed, _symbol_spec, _trending_bars
+from tests.test_paper_engine import (
+    CANONICAL_SYMBOL,
+    RESOLUTION,
+    _config,
+    _seed,
+    _symbol_spec,
+    _trending_bars,
+)
 
 KEY = "PAPER:XAUUSD:M5"
 CURSOR = 1_000_200
@@ -44,11 +51,11 @@ def session_db(db):
 
 
 def _pending(**overrides) -> PendingEntryState:
-    defaults = dict(
-        strategy_key="momentum_continuation", direction="BUY", stop_distance=5.0, target_distance=10.0,
-        regime="TRENDING_UP", raw_confidence=0.7, signal_time_utc=CURSOR, entry_features={"return_1": 0.5},
-        strategy_version=1, canonical_symbol="XAUUSD",
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "direction": "BUY", "stop_distance": 5.0, "target_distance": 10.0,
+        "regime": "TRENDING_UP", "raw_confidence": 0.7, "signal_time_utc": CURSOR, "entry_features": {"return_1": 0.5},
+        "strategy_version": 1, "canonical_symbol": "XAUUSD",
+    }
     defaults.update(overrides)
     return PendingEntryState(**defaults)
 

@@ -6,11 +6,25 @@ first failure, records evidence, and never sends."""
 from __future__ import annotations
 
 import pytest
+from chaos_harness import (
+    NOW,
+    chaos_gateway,
+    demo_account,
+    demo_terminal,
+    fresh_tick,
+    gold_spec,
+    raise_,
+    returns,
+)
 
-from adaptive_scalper.execution.order_check_probe import BLOCKED, CHECKED, ERROR, run_order_check_probe
+from adaptive_scalper.execution.order_check_probe import (
+    BLOCKED,
+    CHECKED,
+    ERROR,
+    run_order_check_probe,
+)
 from adaptive_scalper.gateway.types import OrderCheckResult, SymbolTradeMode, TradeMode
 from adaptive_scalper.persistence import connect, migrate
-from chaos_harness import NOW, chaos_gateway, demo_account, demo_terminal, fresh_tick, gold_spec, raise_, returns
 
 
 @pytest.fixture

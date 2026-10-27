@@ -19,12 +19,12 @@ from adaptive_scalper.persistence import connect, migrate
 
 
 def _symbol(name: str, **overrides) -> SymbolSpec:
-    defaults = dict(
-        name=name, description="", currency_base="USD", currency_profit="USD",
-        currency_margin="USD", digits=2, point=0.01, trade_contract_size=100.0,
-        volume_min=0.01, volume_max=100.0, volume_step=0.01, trade_tick_size=0.01,
-        trade_tick_value=1.0, spread=10, visible=True, trade_mode=SymbolTradeMode.FULL,
-    )
+    defaults = {
+        "name": name, "description": "", "currency_base": "USD", "currency_profit": "USD",
+        "currency_margin": "USD", "digits": 2, "point": 0.01, "trade_contract_size": 100.0,
+        "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01, "trade_tick_size": 0.01,
+        "trade_tick_value": 1.0, "spread": 10, "visible": True, "trade_mode": SymbolTradeMode.FULL,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 

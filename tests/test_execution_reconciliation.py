@@ -27,36 +27,45 @@ from adaptive_scalper.execution.reconciliation import (
     resolve_incident,
     run_reconciliation,
 )
-from adaptive_scalper.execution.store import create_order, get_active_orders, transition_order_state
 from adaptive_scalper.execution.state_machine import OrderState
+from adaptive_scalper.execution.store import (
+    create_order,
+    get_active_orders,
+    transition_order_state,
+)
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
-from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder, PendingOrderSnapshot, PositionSnapshot
+from adaptive_scalper.gateway.types import (
+    HistoricalDeal,
+    HistoricalOrder,
+    PendingOrderSnapshot,
+    PositionSnapshot,
+)
 from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.persistence import connect, migrate
 
 
 def _local(**overrides) -> LocalPositionRecord:
-    defaults = dict(
-        id=1, broker_position_id="pos-1", canonical_symbol="XAUUSD", direction="BUY",
-        volume=0.05, entry_price=2000.0, initial_monetary_risk=20.0, strategy_key="momentum_continuation",
-        opened_at_utc=1000,
-    )
+    defaults = {
+        "id": 1, "broker_position_id": "pos-1", "canonical_symbol": "XAUUSD", "direction": "BUY",
+        "volume": 0.05, "entry_price": 2000.0, "initial_monetary_risk": 20.0, "strategy_key": "momentum_continuation",
+        "opened_at_utc": 1000,
+    }
     defaults.update(overrides)
     return LocalPositionRecord(**defaults)
 
 
 def _closing_deal(**overrides) -> HistoricalDeal:
-    defaults = dict(
-        ticket=900, order=800, time=4500, type=1, entry=1, magic=0, position_id=1,
-        volume=0.05, price=2010.0, commission=-0.5, swap=0.0, profit=10.0, fee=0.0,
-        symbol="XAUUSDm", comment="", external_id="",
-    )
+    defaults = {
+        "ticket": 900, "order": 800, "time": 4500, "type": 1, "entry": 1, "magic": 0, "position_id": 1,
+        "volume": 0.05, "price": 2010.0, "commission": -0.5, "swap": 0.0, "profit": 10.0, "fee": 0.0,
+        "symbol": "XAUUSDm", "comment": "", "external_id": "",
+    }
     defaults.update(overrides)
     return HistoricalDeal(**defaults)
 
 
 def _broker(**overrides) -> BrokerPositionSnapshot:
-    defaults = dict(broker_position_id="pos-1", canonical_symbol="XAUUSD", direction="BUY", volume=0.05)
+    defaults = {"broker_position_id": "pos-1", "canonical_symbol": "XAUUSD", "direction": "BUY", "volume": 0.05}
     defaults.update(overrides)
     return BrokerPositionSnapshot(**defaults)
 
@@ -227,11 +236,11 @@ def test_classify_mixed_missing_and_orphan_is_blocking():
 # --------------------------------------------------------------------------
 
 def _insert_local_position(conn, **overrides):
-    row = dict(
-        broker_position_id="pos-1", canonical_symbol="XAUUSD", direction="BUY", volume=0.05,
-        entry_price=2000.0, initial_monetary_risk=20.0, strategy_key="momentum_continuation",
-        status="OPEN", opened_at_utc=1000,
-    )
+    row = {
+        "broker_position_id": "pos-1", "canonical_symbol": "XAUUSD", "direction": "BUY", "volume": 0.05,
+        "entry_price": 2000.0, "initial_monetary_risk": 20.0, "strategy_key": "momentum_continuation",
+        "status": "OPEN", "opened_at_utc": 1000,
+    }
     row.update(overrides)
     conn.execute(
         """
@@ -506,19 +515,19 @@ def test_recovery_is_atomic_position_deals_and_journal_together(db):
 # --------------------------------------------------------------------------
 
 def _local_order(**overrides):
-    defaults = dict(
-        id=1, client_request_id="req-1", chain_key=None, canonical_symbol="XAUUSD",
-        broker_symbol="XAUUSDm", direction="BUY", requested_volume=0.05, stop_loss=None,
-        take_profit=None, state=OrderState.RESTING, broker_order_id="500", broker_position_id=None,
-        last_broker_retcode=None, last_broker_comment=None, created_at_utc=1000, updated_at_utc=1000,
-    )
+    defaults = {
+        "id": 1, "client_request_id": "req-1", "chain_key": None, "canonical_symbol": "XAUUSD",
+        "broker_symbol": "XAUUSDm", "direction": "BUY", "requested_volume": 0.05, "stop_loss": None,
+        "take_profit": None, "state": OrderState.RESTING, "broker_order_id": "500", "broker_position_id": None,
+        "last_broker_retcode": None, "last_broker_comment": None, "created_at_utc": 1000, "updated_at_utc": 1000,
+    }
     defaults.update(overrides)
     from adaptive_scalper.execution.store import OrderRecord
     return OrderRecord(**defaults)
 
 
 def _pending(broker_order_id="500", **overrides):
-    defaults = dict(broker_order_id=broker_order_id, symbol="XAUUSDm", direction="BUY", volume=0.05, price=1990.0, magic=0, comment="")
+    defaults = {"broker_order_id": broker_order_id, "symbol": "XAUUSDm", "direction": "BUY", "volume": 0.05, "price": 1990.0, "magic": 0, "comment": ""}
     defaults.update(overrides)
     return PendingOrderSnapshot(**defaults)
 
@@ -639,8 +648,14 @@ def test_run_reconciliation_is_idempotent_across_repeated_calls(db):
 # --------------------------------------------------------------------------
 
 def test_broker_symbols_are_translated_through_the_persisted_mapping(tmp_path):
-    from adaptive_scalper.execution.reconciliation import broker_to_canonical_map, canonical_for_broker_symbol
-    from adaptive_scalper.gateway.symbol_resolver import ResolutionResult, persist_resolution
+    from adaptive_scalper.execution.reconciliation import (
+        broker_to_canonical_map,
+        canonical_for_broker_symbol,
+    )
+    from adaptive_scalper.gateway.symbol_resolver import (
+        ResolutionResult,
+        persist_resolution,
+    )
     from adaptive_scalper.persistence import connect, migrate
 
     conn = connect(tmp_path / "map.sqlite3")

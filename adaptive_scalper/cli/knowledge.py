@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from datetime import UTC
 
 from adaptive_scalper.cli.common import open_db, print_json
 from adaptive_scalper.knowledge.advisor import DEFAULT_BUNDLE
@@ -116,10 +117,10 @@ def cmd_okf_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_okf_search(args: argparse.Namespace) -> int:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     bundle = validate_bundle(args.bundle)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     direct = lookup(bundle, args.query)
     hits = [direct] if direct is not None else [h.concept for h in search(bundle, args.query, top_k=args.top_k)]
     print_json([{**concept_summary(c, now), "description": c.description} for c in hits])

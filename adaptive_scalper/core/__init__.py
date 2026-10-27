@@ -15,15 +15,15 @@ from adaptive_scalper.core.permission import (
 )
 
 __all__ = [
+    "ActionKind",
     "KillSwitchState",
     "KillSwitchStatus",
+    "OperatorAuthority",
+    "PermissionResult",
     "bootstrap",
     "clear",
     "engage",
+    "evaluate_kill_switch_permission",
     "get_state",
     "history",
-    "OperatorAuthority",
-    "ActionKind",
-    "PermissionResult",
-    "evaluate_kill_switch_permission",
 ]

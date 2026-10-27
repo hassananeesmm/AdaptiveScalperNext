@@ -13,12 +13,12 @@ import dataclasses
 import sqlite3
 
 import pytest
+from test_shadow_observer import BAR, D, _bar, _candidate
 
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.shadow import lifecycle as lc
 from adaptive_scalper.shadow import observer as obs
 from adaptive_scalper.shadow.lifecycle_counterfactual import LIFECYCLE_EVALUATOR_VERSION
-from test_shadow_observer import BAR, D, _bar, _candidate
 
 
 @pytest.fixture()

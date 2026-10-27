@@ -6,12 +6,21 @@ sessions resumed, never a kill-switch change."""
 
 from __future__ import annotations
 
+from edge_fixtures import FixtureValidatedProvider
+from runtime_helpers import (
+    STEP,
+    T0,
+    FakeClock,
+    LiveMarketGateway,
+    build_engine,
+    default_market,
+    step,
+)
+
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.kill_switch import get_state as kill_switch_state
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.paper.state import list_sessions
-from edge_fixtures import FixtureValidatedProvider
-from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, build_engine, default_market, step
 
 START_AT = T0 + 60 * STEP + 10
 

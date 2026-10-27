@@ -16,7 +16,8 @@ says so.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC as TZ_UTC
+from datetime import datetime
 from pathlib import Path
 
 from adaptive_scalper.gateway.server_time import (
@@ -59,7 +60,7 @@ def require_utc(conn: sqlite3.Connection) -> None:
 
 def _backup(conn: sqlite3.Connection, db_path: str, backup_dir: Path, now_utc: int) -> Path:
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.fromtimestamp(now_utc, tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.fromtimestamp(now_utc, tz=TZ_UTC).strftime("%Y%m%dT%H%M%SZ")
     target = backup_dir / f"{Path(db_path).stem}.pre-server-time-conversion.{stamp}.sqlite3"
     dst = sqlite3.connect(target)
     try:

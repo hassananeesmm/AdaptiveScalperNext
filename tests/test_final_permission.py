@@ -6,6 +6,7 @@ far is wired into one ALLOW/BLOCK_* decision.
 from __future__ import annotations
 
 import pytest
+from edge_fixtures import TEST_PUBLIC_KEY, fixture_validated_evidence
 
 from adaptive_scalper.core.final_permission import (
     ALLOW,
@@ -25,7 +26,10 @@ from adaptive_scalper.core.final_permission import (
 from adaptive_scalper.core.kill_switch import KillSwitchState, KillSwitchStatus
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.execution.reconciliation import BLOCKING_MISMATCH, CLEAN
-from adaptive_scalper.gateway.demo_gate import BLOCK_ACCOUNT_NOT_DEMO, DemoVerificationResult
+from adaptive_scalper.gateway.demo_gate import (
+    BLOCK_ACCOUNT_NOT_DEMO,
+    DemoVerificationResult,
+)
 from adaptive_scalper.gateway.symbol_validation import (
     EXECUTION_STALE_QUOTE,
     EXECUTION_VALID,
@@ -42,16 +46,15 @@ from adaptive_scalper.portfolio.correlation import CorrelationResult
 from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits, PositionExposure
 from adaptive_scalper.risk.governor import RiskGateInput, RiskLimits
 from adaptive_scalper.strategies.base import StrategySignal
-from edge_fixtures import TEST_PUBLIC_KEY, fixture_validated_evidence
 
 
 def _signal(**overrides) -> StrategySignal:
-    defaults = dict(
-        strategy_key="momentum_continuation", strategy_version=1, canonical_symbol="XAUUSD",
-        direction="BUY", raw_confidence=0.6, stop_distance=1.0, target_distance=2.0,
-        expected_duration_seconds=300, entry_method="MARKET", regime="TRENDING_UP",
-        rationale="test", feature_schema_version=1, data_timestamp=1000,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "strategy_version": 1, "canonical_symbol": "XAUUSD",
+        "direction": "BUY", "raw_confidence": 0.6, "stop_distance": 1.0, "target_distance": 2.0,
+        "expected_duration_seconds": 300, "entry_method": "MARKET", "regime": "TRENDING_UP",
+        "rationale": "test", "feature_schema_version": 1, "data_timestamp": 1000,
+    }
     defaults.update(overrides)
     return StrategySignal(**defaults)
 
@@ -88,50 +91,50 @@ def _good_cost():
 
 
 def _risk_limits(**overrides) -> RiskLimits:
-    defaults = dict(
-        risk_per_trade_pct=0.25, max_total_open_risk_pct=0.75, max_daily_loss_pct=2.0,
-        max_drawdown_pct=5.0, max_open_positions=2, max_positions_per_symbol=1,
-    )
+    defaults = {
+        "risk_per_trade_pct": 0.25, "max_total_open_risk_pct": 0.75, "max_daily_loss_pct": 2.0,
+        "max_drawdown_pct": 5.0, "max_open_positions": 2, "max_positions_per_symbol": 1,
+    }
     defaults.update(overrides)
     return RiskLimits(**defaults)
 
 
 def _portfolio_risk_limits(**overrides) -> PortfolioRiskLimits:
-    defaults = dict(
-        max_total_open_risk_pct=5.0, max_symbol_risk_pct=5.0,
-        max_currency_direction_risk_pct=5.0, max_correlated_cluster_risk_pct=5.0,
-    )
+    defaults = {
+        "max_total_open_risk_pct": 5.0, "max_symbol_risk_pct": 5.0,
+        "max_currency_direction_risk_pct": 5.0, "max_correlated_cluster_risk_pct": 5.0,
+    }
     defaults.update(overrides)
     return PortfolioRiskLimits(**defaults)
 
 
 def _risk_input(**overrides) -> RiskGateInput:
-    defaults = dict(
-        proposed_symbol="XAUUSD", proposed_monetary_risk=20.0, equity=10000,
-        current_total_open_risk=0.0, current_total_pending_risk=0.0,
-        current_positions_count=0, current_positions_for_symbol=0,
-        daily_realized_pnl=0.0, peak_equity=10000,
-    )
+    defaults = {
+        "proposed_symbol": "XAUUSD", "proposed_monetary_risk": 20.0, "equity": 10000,
+        "current_total_open_risk": 0.0, "current_total_pending_risk": 0.0,
+        "current_positions_count": 0, "current_positions_for_symbol": 0,
+        "daily_realized_pnl": 0.0, "peak_equity": 10000,
+    }
     defaults.update(overrides)
     return RiskGateInput(**defaults)
 
 
 def _full_allow_input(**overrides) -> FinalPermissionInput:
-    defaults = dict(
-        mode="DEMO", signal=_signal(), kill_switch_state=_kill_switch(),
-        demo_verification=_demo_ok(), reconciliation_status=CLEAN,
-        has_dangerous_unknown_order=False, duplicate_active_order=False,
-        asset_identity=_identity_ok(),
-        direction_check=_direction_ok(), execution_quote=_quote_ok(),
-        news_result=_news_ok(), cost_estimate=_good_cost(),
-        open_or_pending_symbols=[], correlation_matrix={},
-        risk_gate_input=_risk_input(), risk_limits=_risk_limits(),
-        open_positions=[], pending_positions=[], portfolio_risk_limits=_portfolio_risk_limits(),
+    defaults = {
+        "mode": "DEMO", "signal": _signal(), "kill_switch_state": _kill_switch(),
+        "demo_verification": _demo_ok(), "reconciliation_status": CLEAN,
+        "has_dangerous_unknown_order": False, "duplicate_active_order": False,
+        "asset_identity": _identity_ok(),
+        "direction_check": _direction_ok(), "execution_quote": _quote_ok(),
+        "news_result": _news_ok(), "cost_estimate": _good_cost(),
+        "open_or_pending_symbols": [], "correlation_matrix": {},
+        "risk_gate_input": _risk_input(), "risk_limits": _risk_limits(),
+        "open_positions": [], "pending_positions": [], "portfolio_risk_limits": _portfolio_risk_limits(),
         # Gates AFTER the edge gate are under test here; the edge gate's
         # fail-closed default is tested in test_edge_gate_* below.
-        edge_evidence=fixture_validated_evidence(),
-        public_key=TEST_PUBLIC_KEY, now_utc=10_000, proposal_features={},
-    )
+        "edge_evidence": fixture_validated_evidence(),
+        "public_key": TEST_PUBLIC_KEY, "now_utc": 10_000, "proposal_features": {},
+    }
     defaults.update(overrides)
     return FinalPermissionInput(**defaults)
 

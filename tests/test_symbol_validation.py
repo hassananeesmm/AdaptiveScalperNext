@@ -6,7 +6,10 @@ also check out, and any doubt fails closed."""
 import pytest
 
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
-from adaptive_scalper.gateway.symbol_resolver import ResolutionResult, persist_resolution
+from adaptive_scalper.gateway.symbol_resolver import (
+    ResolutionResult,
+    persist_resolution,
+)
 from adaptive_scalper.gateway.symbol_validation import (
     ASSET_IDENTITY_MISMATCH,
     DIRECTION_ALLOWED,
@@ -37,18 +40,18 @@ from adaptive_scalper.persistence import connect, migrate
 
 
 def _symbol(name: str = "XAUUSD", **overrides) -> SymbolSpec:
-    defaults = dict(
-        name=name, description="Gold vs US Dollar", currency_base="XAU", currency_profit="USD",
-        currency_margin="XAU", digits=2, point=0.01, trade_contract_size=100.0,
-        volume_min=0.01, volume_max=100.0, volume_step=0.01, trade_tick_size=0.01,
-        trade_tick_value=1.0, spread=10, visible=True, trade_mode=SymbolTradeMode.FULL,
-    )
+    defaults = {
+        "name": name, "description": "Gold vs US Dollar", "currency_base": "XAU", "currency_profit": "USD",
+        "currency_margin": "XAU", "digits": 2, "point": 0.01, "trade_contract_size": 100.0,
+        "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01, "trade_tick_size": 0.01,
+        "trade_tick_value": 1.0, "spread": 10, "visible": True, "trade_mode": SymbolTradeMode.FULL,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 
 
 def _tick(**overrides) -> Tick:
-    defaults = dict(time=1_700_000_000, bid=2000.00, ask=2000.20, last=2000.10, volume=1.0)
+    defaults = {"time": 1_700_000_000, "bid": 2000.00, "ask": 2000.20, "last": 2000.10, "volume": 1.0}
     defaults.update(overrides)
     return Tick(**defaults)
 

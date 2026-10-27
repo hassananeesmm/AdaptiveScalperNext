@@ -14,19 +14,24 @@ import sqlite3
 from types import SimpleNamespace
 
 import pytest
+from chaos_harness import demo_account
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 from adaptive_scalper.config.loader import EntryWindowConfig
+from adaptive_scalper.core import peak_equity_reset as reset_mod
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
-from adaptive_scalper.core import peak_equity_reset as reset_mod
 from adaptive_scalper.persistence.database import connect, migrate
 from adaptive_scalper.risk import peak_equity as pe
-from adaptive_scalper.risk.governor import BLOCK_RISK, RiskGateInput, RiskLimits, evaluate_risk_gate
 from adaptive_scalper.risk.entry_window import BLOCK_SESSION
+from adaptive_scalper.risk.governor import (
+    BLOCK_RISK,
+    RiskGateInput,
+    RiskLimits,
+    evaluate_risk_gate,
+)
 from adaptive_scalper.runtime.state import get_state, put_state
-from chaos_harness import demo_account
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 LOGIN, SERVER = 1234567, "Example-Demo"
 NOW = 1_791_000_000
@@ -171,10 +176,10 @@ def _engaged(conn):
 
 
 def _reset(conn, evidence, **overrides):
-    kwargs = dict(login=LOGIN, server=SERVER, new_peak=9300.0, authority=OperatorAuthority("test-operator"),
-                  evidence_path=evidence,
-                  reason="withdrawal of 450.00 confirmed in the broker statement", acknowledge_lower=True,
-                  now_utc=NOW + 100)
+    kwargs = {"login": LOGIN, "server": SERVER, "new_peak": 9300.0, "authority": OperatorAuthority("test-operator"),
+                  "evidence_path": evidence,
+                  "reason": "withdrawal of 450.00 confirmed in the broker statement", "acknowledge_lower": True,
+                  "now_utc": NOW + 100}
     kwargs.update(overrides)
     return reset_mod.operator_reset(conn, **kwargs)
 
@@ -190,15 +195,15 @@ def test_reset_is_refused_unless_the_kill_switch_is_engaged(conn, evidence):
 
 
 @pytest.mark.parametrize("overrides,match", [
-    (dict(reason="too short"), "reason of at least"),
-    (dict(reason="   "), "reason of at least"),
-    (dict(authority="test-operator"), "OperatorAuthority is required"),
-    (dict(authority=None), "OperatorAuthority is required"),
-    (dict(new_peak=math.nan), "positive finite"),
-    (dict(new_peak=0.0), "positive finite"),
-    (dict(login=0), "login must be"),
-    (dict(server=""), "server is required"),
-    (dict(acknowledge_lower=False), "explicit acknowledgement"),
+    ({"reason": "too short"}, "reason of at least"),
+    ({"reason": "   "}, "reason of at least"),
+    ({"authority": "test-operator"}, "OperatorAuthority is required"),
+    ({"authority": None}, "OperatorAuthority is required"),
+    ({"new_peak": math.nan}, "positive finite"),
+    ({"new_peak": 0.0}, "positive finite"),
+    ({"login": 0}, "login must be"),
+    ({"server": ""}, "server is required"),
+    ({"acknowledge_lower": False}, "explicit acknowledgement"),
 ])
 def test_reset_preconditions_refuse_and_write_nothing(conn, evidence, overrides, match):
     _observe(conn, 10000.0)
@@ -216,7 +221,7 @@ def test_reset_needs_an_existing_evidence_file(conn, tmp_path):
 
 
 def test_reset_needs_a_flat_book(conn, evidence, monkeypatch):
-    import adaptive_scalper.execution.reconciliation as reconciliation
+    from adaptive_scalper.execution import reconciliation
 
     _observe(conn, 10000.0)
     _engaged(conn)
@@ -322,7 +327,7 @@ def test_the_position_cycle_raises_the_peak_while_entries_are_blocked_by_the_ses
 
 
 def test_demo_global_block_reports_the_drawdown_against_the_bound_baseline(tmp_path):
-    clock, engine, conn, gateway = _started(tmp_path)
+    clock, engine, _conn, gateway = _started(tmp_path)
     step(engine, clock, seconds=3)                                        # baseline 10000
     gateway.set_account(demo_account(balance=9400.0, equity=9400.0))
     step(engine, clock, seconds=3)
@@ -331,7 +336,7 @@ def test_demo_global_block_reports_the_drawdown_against_the_bound_baseline(tmp_p
 
 
 def test_demo_blocks_entries_after_an_account_change(tmp_path):
-    clock, engine, conn, gateway = _started(tmp_path)
+    clock, engine, _conn, gateway = _started(tmp_path)
     step(engine, clock, seconds=3)
     gateway.set_account(demo_account(login=987654, balance=20000.0, equity=20000.0))
     step(engine, clock, seconds=3)

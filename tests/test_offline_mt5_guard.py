@@ -28,7 +28,7 @@ def test_environment_guard_blocks_mt5_in_a_fresh_process():
     result = subprocess.run(
         [sys.executable, "-c",
          "from adaptive_scalper.gateway.mt5_gateway import _import_mt5; _import_mt5()"],
-        capture_output=True, text=True, env=env, timeout=30,
+        capture_output=True, text=True, env=env, timeout=30, check=False,
     )
     assert result.returncode != 0
     assert "ASN_DISABLE_MT5=1" in result.stderr
@@ -42,7 +42,6 @@ def test_the_live_gateway_cannot_initialize_inside_the_offline_suite():
 
 def test_the_cli_broker_path_fails_closed_inside_the_offline_suite():
     from adaptive_scalper.cli.common import CliError, open_gateway
-
     from adaptive_scalper.config.loader import AppConfig
 
     with pytest.raises(CliError, match="MetaTrader5 unavailable"):

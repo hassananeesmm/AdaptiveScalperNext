@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from adaptive_scalper.gateway.broker_constraints import FILLING_FOK, FILLING_IOC, derive_filling_type
+from adaptive_scalper.gateway.broker_constraints import (
+    FILLING_FOK,
+    FILLING_IOC,
+    derive_filling_type,
+)
 
 
 def test_prefers_ioc_when_both_supported():

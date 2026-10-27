@@ -17,10 +17,21 @@ import sqlite3
 import time
 
 from adaptive_scalper.backtest.types import BacktestResult
-from adaptive_scalper.cli.common import CliError, add_symbol_arg, open_db, parse_utc, print_json
+from adaptive_scalper.cli.common import (
+    CliError,
+    add_symbol_arg,
+    open_db,
+    parse_utc,
+    print_json,
+)
 from adaptive_scalper.gateway.spec_store import load_symbol_spec
 from adaptive_scalper.history.store import get_bars
-from adaptive_scalper.research.ledger import family_sharpe_variance, family_trial_count, new_trial_id, record_trial
+from adaptive_scalper.research.ledger import (
+    family_sharpe_variance,
+    family_trial_count,
+    new_trial_id,
+    record_trial,
+)
 from adaptive_scalper.strategies import build_active_registry
 
 
@@ -109,7 +120,10 @@ def cmd_walk_forward(args: argparse.Namespace) -> int:
 
 
 def cmd_oos(args: argparse.Namespace) -> int:
-    from adaptive_scalper.backtest.oos import DatasetContaminatedError, run_untouched_oos
+    from adaptive_scalper.backtest.oos import (
+        DatasetContaminatedError,
+        run_untouched_oos,
+    )
 
     cfg, conn = open_db(args.config, require_utc_history=True)
     bars, spec, config, news = _inputs(args, conn, cfg)
@@ -140,7 +154,7 @@ def _latest_run_trades(conn, symbol: str, run_id: str | None):
         run_id = row["run_id"]
     rows = conn.execute("SELECT * FROM backtest_trades WHERE run_id = ? ORDER BY entry_time_utc", (run_id,)).fetchall()
     fields = {f.name for f in dataclasses.fields(SimulatedTrade)}
-    trades = tuple(SimulatedTrade(**{k: r[k] for k in r.keys() if k in fields}) for r in rows
+    trades = tuple(SimulatedTrade(**{k: r[k] for k in r.keys() if k in fields}) for r in rows  # noqa: SIM118 - sqlite3.Row iterates values, not keys
                    if r["realized_pnl"] is not None)
     return run_id, trades
 
@@ -161,7 +175,11 @@ def cmd_path_stress(args: argparse.Namespace) -> int:
 
 def cmd_purged_validation(args: argparse.Namespace) -> int:
     from adaptive_scalper.research.splits import LabelInterval, purged_kfold
-    from adaptive_scalper.research.stats import deflated_sharpe_ratio, probabilistic_sharpe_ratio, return_moments
+    from adaptive_scalper.research.stats import (
+        deflated_sharpe_ratio,
+        probabilistic_sharpe_ratio,
+        return_moments,
+    )
 
     _, conn = open_db(args.config)
     run_id, trades = _latest_run_trades(conn, args.symbol, args.run_id)
@@ -275,7 +293,11 @@ def cmd_independent_research(args: argparse.Namespace) -> int:
         trial_family,
     )
     from adaptive_scalper.research.selector_study import selector_study
-    from adaptive_scalper.research.trade_analysis import calibration, full_breakdown, summarize
+    from adaptive_scalper.research.trade_analysis import (
+        calibration,
+        full_breakdown,
+        summarize,
+    )
 
     cfg, conn = open_research_db(args.config, args.research_db)
     try:
@@ -360,7 +382,10 @@ def cmd_forward_evidence(args: argparse.Namespace) -> int:
     stores a certificate; never changes what the runtime may do."""
     from adaptive_scalper.config.loader import load_config
     from adaptive_scalper.persistence.database import connect_readonly
-    from adaptive_scalper.research.independent import DSR_VARIANCE_MIN_OBSERVATIONS, _same_file
+    from adaptive_scalper.research.independent import (
+        DSR_VARIANCE_MIN_OBSERVATIONS,
+        _same_file,
+    )
     from adaptive_scalper.validation.forward_evidence import evaluate_database
 
     cfg = load_config(args.config)

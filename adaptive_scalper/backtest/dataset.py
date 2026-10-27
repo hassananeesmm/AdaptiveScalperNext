@@ -29,7 +29,7 @@ def compute_bars_checksum(bars: list[Bar]) -> str:
     hasher = hashlib.sha256()
     for b in bars:
         hasher.update(
-            f"{b.time}|{b.open}|{b.high}|{b.low}|{b.close}|{b.tick_volume}|{b.spread}|{b.real_volume}\n".encode("utf-8")
+            f"{b.time}|{b.open}|{b.high}|{b.low}|{b.close}|{b.tick_volume}|{b.spread}|{b.real_volume}\n".encode()
         )
     return hasher.hexdigest()
 

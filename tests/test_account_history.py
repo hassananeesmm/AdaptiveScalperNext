@@ -7,7 +7,12 @@ from __future__ import annotations
 import pytest
 
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
-from adaptive_scalper.gateway.types import AccountSnapshot, HistoricalDeal, HistoricalOrder, TradeMode
+from adaptive_scalper.gateway.types import (
+    AccountSnapshot,
+    HistoricalDeal,
+    HistoricalOrder,
+    TradeMode,
+)
 from adaptive_scalper.history import account_history
 from adaptive_scalper.persistence import connect, migrate
 
@@ -21,31 +26,31 @@ def db(tmp_path):
 
 
 def _account(**overrides) -> AccountSnapshot:
-    defaults = dict(
-        login=90000001, trade_mode=TradeMode.DEMO, balance=10000.0, equity=10000.0,
-        margin_free=10000.0, currency="USD", server="Broker-Demo-Server", company="Test Broker",
-        trade_allowed=True, trade_expert=True,
-    )
+    defaults = {
+        "login": 90000001, "trade_mode": TradeMode.DEMO, "balance": 10000.0, "equity": 10000.0,
+        "margin_free": 10000.0, "currency": "USD", "server": "Broker-Demo-Server", "company": "Test Broker",
+        "trade_allowed": True, "trade_expert": True,
+    }
     defaults.update(overrides)
     return AccountSnapshot(**defaults)
 
 
 def _order(ticket: int, time_setup: int = 1_700_000_000, **overrides) -> HistoricalOrder:
-    defaults = dict(
-        ticket=ticket, time_setup=time_setup, time_done=time_setup + 1, type=0, state=4,
-        magic=0, position_id=ticket, volume_initial=0.1, volume_current=0.0, price_open=2000.0,
-        sl=1990.0, tp=2010.0, price_current=2005.0, symbol="XAUUSD", comment="", external_id="",
-    )
+    defaults = {
+        "ticket": ticket, "time_setup": time_setup, "time_done": time_setup + 1, "type": 0, "state": 4,
+        "magic": 0, "position_id": ticket, "volume_initial": 0.1, "volume_current": 0.0, "price_open": 2000.0,
+        "sl": 1990.0, "tp": 2010.0, "price_current": 2005.0, "symbol": "XAUUSD", "comment": "", "external_id": "",
+    }
     defaults.update(overrides)
     return HistoricalOrder(**defaults)
 
 
 def _deal(ticket: int, time: int = 1_700_000_000, **overrides) -> HistoricalDeal:
-    defaults = dict(
-        ticket=ticket, order=ticket, time=time, type=0, entry=0, magic=0, position_id=ticket,
-        volume=0.1, price=2000.0, commission=-0.5, swap=0.0, profit=5.0, fee=0.0,
-        symbol="XAUUSD", comment="", external_id="",
-    )
+    defaults = {
+        "ticket": ticket, "order": ticket, "time": time, "type": 0, "entry": 0, "magic": 0, "position_id": ticket,
+        "volume": 0.1, "price": 2000.0, "commission": -0.5, "swap": 0.0, "profit": 5.0, "fee": 0.0,
+        "symbol": "XAUUSD", "comment": "", "external_id": "",
+    }
     defaults.update(overrides)
     return HistoricalDeal(**defaults)
 

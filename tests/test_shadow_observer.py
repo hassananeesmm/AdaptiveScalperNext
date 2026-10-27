@@ -13,13 +13,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.gateway.types import Bar
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.shadow import observer as obs
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 ROOT = Path(__file__).resolve().parents[1] / "adaptive_scalper"
 BAR = 300
@@ -83,15 +83,15 @@ def db(tmp_path):
 
 
 def _candidate(**kw):
-    base = dict(canonical_symbol="XAUUSD", resolution="M5", bar_seconds=BAR, decision_bar_time_utc=D - BAR,
-                strategy_key="microstructure_acceleration", strategy_version=1, direction="BUY", raw_score=0.9,
-                stop_distance=1.0, target_distance=2.0, expected_duration_seconds=180, raw_regime="RANGE",
-                confirmed_regime="RANGE", regime_confidence=0.7, session="LONDON", news_status="ALLOW",
-                news_detail="", spread_points=10, spread_percentile=0.4, atr=1.0, realized_volatility=0.01,
-                movement_to_cost=3.0, estimated_round_trip_cost_price=0.2, cost_horizon="FULL_ROUND_TRIP",
-                cost_provenance="BROKER_DEMO_CONFIRMED", edge_model="NONE", scheduler_lag_seconds=0.1,
-                selector_disposition=obs.REJECTED, rejection_reason="no_validated_edge_evidence",
-                model_observer_score=None, features={"atr": 1.0, "bad": float("nan")})
+    base = {"canonical_symbol": "XAUUSD", "resolution": "M5", "bar_seconds": BAR, "decision_bar_time_utc": D - BAR,
+                "strategy_key": "microstructure_acceleration", "strategy_version": 1, "direction": "BUY", "raw_score": 0.9,
+                "stop_distance": 1.0, "target_distance": 2.0, "expected_duration_seconds": 180, "raw_regime": "RANGE",
+                "confirmed_regime": "RANGE", "regime_confidence": 0.7, "session": "LONDON", "news_status": "ALLOW",
+                "news_detail": "", "spread_points": 10, "spread_percentile": 0.4, "atr": 1.0, "realized_volatility": 0.01,
+                "movement_to_cost": 3.0, "estimated_round_trip_cost_price": 0.2, "cost_horizon": "FULL_ROUND_TRIP",
+                "cost_provenance": "BROKER_DEMO_CONFIRMED", "edge_model": "NONE", "scheduler_lag_seconds": 0.1,
+                "selector_disposition": obs.REJECTED, "rejection_reason": "no_validated_edge_evidence",
+                "model_observer_score": None, "features": {"atr": 1.0, "bad": float("nan")}}
     base.update(kw)
     return obs.ShadowCandidate(**base)
 
@@ -181,7 +181,7 @@ def test_an_observer_failure_never_changes_a_decision(tmp_path, monkeypatch):
         engine, conn, _ = build_engine(path, mode="DEMO", clock=clock)
         _boot(conn)
         if broken:
-            import adaptive_scalper.runtime.demo as demo
+            from adaptive_scalper.runtime import demo
 
             def boom(*_a, **_k):
                 raise RuntimeError("shadow disk full")

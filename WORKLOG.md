@@ -3304,3 +3304,25 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   **2228 passed / 9 skipped / 0 failed / 2 warnings**. (An earlier run before the CLI registry pin was updated: 2226
   passed / 1 failed -- `test_every_directive_command_is_registered`, which pins the command list and correctly flagged
   the two new commands.)
+
+## 2026-10-27 -- Ruff lint cleanup candidate (branch `chore/ruff-cleanup`, base `488d575`)
+
+- Lint-only change set (ruff 0.16.9 default rules): 184 files, no behavioral
+  change intended. Nothing deployed; the deployed `v0.2.9` checkout, the
+  production database, the kill switch and the DEMO runtime are untouched.
+- Origin: an earlier bulk `ruff --fix` run directly in the deployed
+  checkout introduced four regressions, all repaired here: SIM118 on
+  `sqlite3.Row` (`cli/system.py`, `cli/research.py` keep `.keys()`), deleted
+  pytest fixture imports (`tests/test_paper_pending_entry_hardening.py`),
+  `datetime.UTC` shadowing the `UTC` basis constant (`history/time_basis.py`
+  imports it as `TZ_UTC`), and byte changes to the six SHA-256-frozen V1
+  decision sources (restored byte-identical; ruff waives only I001 there).
+- The original uncommitted change set is preserved outside the repository
+  as a patch against `v0.2.9` (SHA-256 `d400af87...a9f`, 181 files).
+- BLE001 stays enabled: each of the 45 broad handlers carries a local
+  `# noqa: BLE001 - <reason>`. B008 is exempted only for three frozen
+  dataclasses with immutable fields.
+- Verified: `ruff check` (check-only) clean; full suite with MT5 disabled
+  2228 passed / 9 skipped / 0 failed; no config, migration or constants
+  file changed; every numeric-constant change traces to an equivalent
+  rewrite.

@@ -6,14 +6,29 @@ strategy's signal (see test_multi_position.py). No real broker is reached.
 
 from __future__ import annotations
 
+from edge_fixtures import FixtureValidatedProvider
+from runtime_helpers import (
+    STEP,
+    FakeClock,
+    LiveMarketGateway,
+    StaticNewsProvider,
+    build_engine,
+    step,
+)
+from test_multi_position import (
+    START_AT,
+    StubRegistry,
+    StubStrategy,
+    _latest,
+    _open_symbols,
+    independent_market,
+)
+
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
-from adaptive_scalper.dashboard.panels import BLOCKED_BY_NEWS, _decision_label
 from adaptive_scalper.core.operator_authority import OperatorAuthority
+from adaptive_scalper.dashboard.panels import BLOCKED_BY_NEWS, _decision_label
 from adaptive_scalper.execution.reconciliation import get_open_positions
 from adaptive_scalper.news.types import EconomicEvent, Impact
-from runtime_helpers import STEP, FakeClock, LiveMarketGateway, StaticNewsProvider, build_engine, step
-from edge_fixtures import FixtureValidatedProvider
-from test_multi_position import START_AT, StubRegistry, StubStrategy, _latest, _open_symbols, independent_market
 
 
 def _event(currency: str, at: int) -> EconomicEvent:
@@ -41,7 +56,7 @@ def _start_with_news(tmp_path, currency: str):
 
 
 def test_a_news_block_on_one_symbol_leaves_the_other_two_tradable(tmp_path):
-    engine, conn, gateway, clock, stub = _start_with_news(tmp_path, "GBP")
+    engine, conn, _gateway, clock, stub = _start_with_news(tmp_path, "GBP")
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "SELL", "GBPJPY": "BUY"}
     step(engine, clock, seconds=STEP, tick=4)
     assert _open_symbols(conn) == ["BTCUSD", "XAUUSD"]

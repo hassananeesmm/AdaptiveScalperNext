@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 
 import pytest
+from edge_fixtures import v1_replay_config
 
 from adaptive_scalper.learning.dataset import FEATURE_COLUMNS, TrainingRow
 from adaptive_scalper.learning.lifecycle import ModelLifecycleState
@@ -19,7 +20,6 @@ from adaptive_scalper.learning.training import (
     train_entry_outcome_model,
 )
 from adaptive_scalper.persistence import connect, migrate
-from edge_fixtures import v1_replay_config
 
 
 def _separable_rows(n: int, *, start_time: int = 1_000_000, seed: int = 0) -> list[TrainingRow]:

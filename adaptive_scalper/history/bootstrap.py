@@ -29,7 +29,10 @@ import sqlite3
 
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.history import coverage, jobs, store
-from adaptive_scalper.history.resolutions import SUPPORTED_BAR_RESOLUTIONS, resolution_seconds
+from adaptive_scalper.history.resolutions import (
+    SUPPORTED_BAR_RESOLUTIONS,
+    resolution_seconds,
+)
 
 DEFAULT_BAR_YEARS = 5
 DEFAULT_TICK_DAYS = 30
@@ -78,7 +81,7 @@ def bootstrap_bars(
             cursor = next_cursor
             jobs.update_cursor(conn, job.id, cursor, status=jobs.IN_PROGRESS)
             coverage.refresh_bar_coverage(conn, canonical_symbol, resolution)
-    except Exception as exc:  # noqa: BLE001 - persist failure reason, then re-raise
+    except Exception as exc:  # persist failure reason, then re-raise
         jobs.mark_failed(conn, job.id, str(exc))
         raise
 
@@ -118,7 +121,7 @@ def bootstrap_ticks(
             cursor = next_cursor
             jobs.update_cursor(conn, job.id, cursor, status=jobs.IN_PROGRESS)
             coverage.refresh_tick_coverage(conn, canonical_symbol)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         jobs.mark_failed(conn, job.id, str(exc))
         raise
 

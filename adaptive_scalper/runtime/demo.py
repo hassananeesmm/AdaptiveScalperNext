@@ -26,20 +26,27 @@ close / stop-modification services).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
 import sqlite3
 import time
-import dataclasses
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.final_permission import FinalPermissionInput
 from adaptive_scalper.core.kill_switch import KillSwitchStatus
 from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
+from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED
+from adaptive_scalper.costs.edge_evidence import (
+    NO_VALIDATED_EDGE_EVIDENCE,
+    EdgeEvidenceProvider,
+    executable_evidence,
+    require_executable_provider,
+)
 from adaptive_scalper.costs.model import (
     HORIZON_REMAINING_EXIT,
     CostEstimate,
@@ -48,33 +55,36 @@ from adaptive_scalper.costs.model import (
     require_horizon,
     round_trip_cost_from_evidence,
 )
-from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED
-from adaptive_scalper.costs.edge_evidence import (
-    NO_VALIDATED_EDGE_EVIDENCE,
-    EdgeEvidenceProvider,
-    executable_evidence,
-    require_executable_provider,
-)
+from adaptive_scalper.costs.observations import record_entry_observation
 from adaptive_scalper.costs.swap_horizon import swap_price_for_horizon
-from adaptive_scalper.validation.certificate import load_certificate_public_key
+from adaptive_scalper.execution.close import close_position_safely
+from adaptive_scalper.execution.close_requests import (
+    has_unresolved_close,
+    resolve_unresolved_closes,
+)
 from adaptive_scalper.execution.reconciliation import (
     CLEAN,
+    PROTECTIVE_CLOSE_IN_PROGRESS,
+    BrokerPositionSnapshot,
     get_open_positions,
     has_dangerous_unresolved_unknown,
-    PROTECTIVE_CLOSE_IN_PROGRESS,
     reconcile_pending_orders,
     reconcile_positions,
     run_reconciliation,
-    BrokerPositionSnapshot,
 )
-from adaptive_scalper.execution.close import close_position_safely
-from adaptive_scalper.execution.close_requests import has_unresolved_close, resolve_unresolved_closes
 from adaptive_scalper.execution.recovery import apply_unknown_resolutions
-from adaptive_scalper.costs.observations import record_entry_observation
-from adaptive_scalper.execution.service import FILLED, PARTIAL, FreshEvidence, submit_new_entry
+from adaptive_scalper.execution.service import (
+    FILLED,
+    PARTIAL,
+    FreshEvidence,
+    submit_new_entry,
+)
 from adaptive_scalper.execution.store import get_active_orders
 from adaptive_scalper.features.adx import wilder_adx
-from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
+from adaptive_scalper.features.bar_features import (
+    compute_bar_features,
+    numeric_feature_vector,
+)
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
 from adaptive_scalper.gateway.protocol import Gateway
@@ -85,17 +95,31 @@ from adaptive_scalper.gateway.symbol_validation import (
     validate_resolved_symbol,
 )
 from adaptive_scalper.gateway.types import SymbolSpec, Tick
+from adaptive_scalper.history.resolutions import resolution_seconds
 from adaptive_scalper.journal.events import append_event
 from adaptive_scalper.portfolio.correlation import (
     CorrelationResult,
     compute_correlation_matrix,
     describe_correlation_pairs,
 )
-from adaptive_scalper.portfolio.exposure import PositionExposure, portfolio_risk_limits_from_risk_limits
+from adaptive_scalper.portfolio.exposure import (
+    PositionExposure,
+    portfolio_risk_limits_from_risk_limits,
+)
 from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
-from adaptive_scalper.position_management.manager import PositionReviewInput, review_position_once
-from adaptive_scalper.position_management.re_entry import ReentryParams, evaluate_reentry
-from adaptive_scalper.regimes.classifier import RegimeClassification, RegimeTracker, classify_regime
+from adaptive_scalper.position_management.manager import (
+    PositionReviewInput,
+    review_position_once,
+)
+from adaptive_scalper.position_management.re_entry import (
+    ReentryParams,
+    evaluate_reentry,
+)
+from adaptive_scalper.regimes.classifier import (
+    RegimeClassification,
+    RegimeTracker,
+    classify_regime,
+)
 from adaptive_scalper.risk.entry_regime import adx_entry_block
 from adaptive_scalper.risk.entry_window import entry_window_block
 from adaptive_scalper.risk.governor import (
@@ -105,11 +129,16 @@ from adaptive_scalper.risk.governor import (
     risk_limits_from_config,
 )
 from adaptive_scalper.risk.hard_stop import adverse_move_pct, breaches_hard_stop
-from adaptive_scalper.risk.peak_equity import PeakEquityStatus, drawdown_pct, observe_equity
+from adaptive_scalper.risk.peak_equity import (
+    PeakEquityStatus,
+    drawdown_pct,
+    observe_equity,
+)
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.microstructure import publish_vwap_bands
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
+from adaptive_scalper.runtime.paper import paper_config
 from adaptive_scalper.runtime.state import (
     get_position_entry_context,
     get_state,
@@ -118,17 +147,27 @@ from adaptive_scalper.runtime.state import (
     record_event,
     record_position_entry_context,
 )
-from adaptive_scalper.history.resolutions import resolution_seconds
-from adaptive_scalper.selector.selector import REJECTED_EDGE_UNVALIDATED, select_and_journal_proposal, select_proposal
+from adaptive_scalper.selector.selector import (
+    REJECTED_EDGE_UNVALIDATED,
+    select_and_journal_proposal,
+    select_proposal,
+)
+from adaptive_scalper.selector.suspension import (
+    REJECTED_ENTRY_SUSPENDED,
+    partition_suspended,
+)
+from adaptive_scalper.shadow.lifecycle_counterfactual import resolve_lifecycles
 from adaptive_scalper.shadow.observer import LOST_TO_HIGHER_EDGE as SHADOW_LOST
 from adaptive_scalper.shadow.observer import NOT_EVALUATED as SHADOW_NOT_EVALUATED
 from adaptive_scalper.shadow.observer import REJECTED as SHADOW_REJECTED
 from adaptive_scalper.shadow.observer import SELECTED as SHADOW_SELECTED
-from adaptive_scalper.runtime.paper import paper_config
-from adaptive_scalper.shadow.lifecycle_counterfactual import resolve_lifecycles
-from adaptive_scalper.shadow.observer import ShadowCandidate, record_candidates, resolve_due
-from adaptive_scalper.selector.suspension import REJECTED_ENTRY_SUSPENDED, partition_suspended
+from adaptive_scalper.shadow.observer import (
+    ShadowCandidate,
+    record_candidates,
+    resolve_due,
+)
 from adaptive_scalper.strategies.base import StrategySignal
+from adaptive_scalper.validation.certificate import load_certificate_public_key
 
 logger = logging.getLogger(__name__)
 
@@ -905,7 +944,7 @@ class DemoRuntime:
                 "correlation_min_samples": self.config.runtime.correlation_min_samples,
                 "cost_evidence": cost_evidence, "news": news,
             }, now_utc=now)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - observe-only readiness snapshot: logged, never affects trading
             logger.warning("multi-position readiness snapshot failed: %s", exc)
 
     def _record(self, canonical, bar_time, stage, decision, reason, **kwargs) -> dict:
@@ -1033,7 +1072,7 @@ class DemoRuntime:
                 tick=tick, requested_price=price, requested_volume=volume, estimate=cost, features=features,
                 news_windows=self.news.windows_for(canonical), now_utc=now,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - cost observation failure recorded as a WARNING event
             logger.warning("execution cost observation failed: %s", exc)
             record_event(self.conn, "WARNING", "costs", "COST_OBSERVATION_FAILED", f"{type(exc).__name__}: {exc}",
                          canonical_symbol=canonical, dedup_key=f"cost_observation:{canonical}", now_utc=now)

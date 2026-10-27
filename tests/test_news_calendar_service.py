@@ -6,7 +6,12 @@ import pytest
 
 from adaptive_scalper.news.calendar_service import fetch_with_fallback
 from adaptive_scalper.news.providers.cache import CacheProvider, persist_events
-from adaptive_scalper.news.types import EconomicEvent, Impact, ProviderError, ProviderHealth
+from adaptive_scalper.news.types import (
+    EconomicEvent,
+    Impact,
+    ProviderError,
+    ProviderHealth,
+)
 from adaptive_scalper.persistence import connect, migrate
 
 BASE_TIME = 1_700_000_000
@@ -21,12 +26,12 @@ def db(tmp_path):
 
 
 def _event(**overrides) -> EconomicEvent:
-    defaults = dict(
-        event_id="evt-1", provider="test", provider_event_id=None, scheduled_at_utc=BASE_TIME,
-        country="USD", currency="USD", title="CPI m/m", normalized_event_type="US_CPI",
-        impact=Impact.HIGH, actual=None, forecast=None, previous=None, retrieved_at_utc=BASE_TIME,
-        source_reliability="TEST", revision=0, source_identifier="test",
-    )
+    defaults = {
+        "event_id": "evt-1", "provider": "test", "provider_event_id": None, "scheduled_at_utc": BASE_TIME,
+        "country": "USD", "currency": "USD", "title": "CPI m/m", "normalized_event_type": "US_CPI",
+        "impact": Impact.HIGH, "actual": None, "forecast": None, "previous": None, "retrieved_at_utc": BASE_TIME,
+        "source_reliability": "TEST", "revision": 0, "source_identifier": "test",
+    }
     defaults.update(overrides)
     return EconomicEvent(**defaults)
 

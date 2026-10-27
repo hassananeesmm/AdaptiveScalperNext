@@ -16,12 +16,12 @@ import ast
 from pathlib import Path
 
 import pytest
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.costs.edge_evidence import LEGACY_V1_RAW_SCORE_EVIDENCE
 from adaptive_scalper.runtime.engine import RuntimeComponents
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 ROOT = Path(__file__).resolve().parents[1] / "adaptive_scalper"
 START_AT = T0 + 60 * STEP + 10

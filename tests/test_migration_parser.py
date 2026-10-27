@@ -12,8 +12,12 @@ import sqlite3
 
 import pytest
 
-from adaptive_scalper.persistence.database import MigrationError, _split_statements, connect, migrate
-
+from adaptive_scalper.persistence.database import (
+    MigrationError,
+    _split_statements,
+    connect,
+    migrate,
+)
 
 # --------------------------------------------------------------------------
 # 1. Ordinary statements still split correctly

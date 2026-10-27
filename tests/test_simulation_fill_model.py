@@ -14,7 +14,7 @@ from adaptive_scalper.simulation.fill_model import (
 
 
 def _bar(**overrides) -> Bar:
-    defaults = dict(time=1000, open=2000.0, high=2001.0, low=1999.0, close=2000.5, tick_volume=10, spread=20, real_volume=0)
+    defaults = {"time": 1000, "open": 2000.0, "high": 2001.0, "low": 1999.0, "close": 2000.5, "tick_volume": 10, "spread": 20, "real_volume": 0}
     defaults.update(overrides)
     return Bar(**defaults)
 

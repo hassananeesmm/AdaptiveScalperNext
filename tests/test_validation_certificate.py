@@ -20,9 +20,24 @@ import sys
 from pathlib import Path
 
 import pytest
+from edge_fixtures import (
+    TEST_PUBLIC_KEY,
+    TEST_SIGNING_SEED,
+    fixture_artifacts,
+    fixture_certificate,
+    fixture_validated_evidence,
+)
 
-from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED, evaluate_cost_gate, executable_edge_check
-from adaptive_scalper.costs.edge_evidence import EVIDENCE_VALIDATED, CalibratedWinProbability, EdgeEvidence
+from adaptive_scalper.costs.edge import (
+    BLOCK_EDGE_UNVALIDATED,
+    evaluate_cost_gate,
+    executable_edge_check,
+)
+from adaptive_scalper.costs.edge_evidence import (
+    EVIDENCE_VALIDATED,
+    CalibratedWinProbability,
+    EdgeEvidence,
+)
 from adaptive_scalper.strategies.base import StrategySignal
 from adaptive_scalper.validation import certificate as certificate_module
 from adaptive_scalper.validation import ed25519
@@ -43,13 +58,6 @@ from adaptive_scalper.validation.certificate import (
     load_certificate_public_key,
     verify_certificate,
 )
-from edge_fixtures import (
-    TEST_PUBLIC_KEY,
-    TEST_SIGNING_SEED,
-    fixture_artifacts,
-    fixture_certificate,
-    fixture_validated_evidence,
-)
 
 REPO = Path(__file__).resolve().parents[1]
 ROOT = REPO / "adaptive_scalper"
@@ -64,10 +72,10 @@ def _verify(cert, *, key=TEST_PUBLIC_KEY, now=NOW, strategy="momentum_continuati
 
 
 def _signal(**kw) -> StrategySignal:
-    base = dict(strategy_key="momentum_continuation", strategy_version=1, canonical_symbol="XAUUSD",
-                direction="BUY", raw_confidence=0.99, stop_distance=1.0, target_distance=3.0,
-                expected_duration_seconds=600, entry_method="MARKET", regime="TRENDING_UP", rationale="t",
-                feature_schema_version=1, data_timestamp=1000)
+    base = {"strategy_key": "momentum_continuation", "strategy_version": 1, "canonical_symbol": "XAUUSD",
+                "direction": "BUY", "raw_confidence": 0.99, "stop_distance": 1.0, "target_distance": 3.0,
+                "expected_duration_seconds": 600, "entry_method": "MARKET", "regime": "TRENDING_UP", "rationale": "t",
+                "feature_schema_version": 1, "data_timestamp": 1000}
     base.update(kw)
     return StrategySignal(**base)
 
@@ -93,16 +101,16 @@ def test_ed25519_matches_rfc8032_test_vectors():
     vectors = [  # RFC 8032 section 7.1, TEST 1-3: (secret, public, message, signature)
         ("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
          "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "",
-         "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46b"
-         "d25bf5f0595bbe24655141438e7a100b"),
+         ("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46b"
+         "d25bf5f0595bbe24655141438e7a100b")),
         ("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
          "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "72",
-         "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c"
-         "387b2eaeb4302aeeb00d291612bb0c00"),
+         ("92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c"
+         "387b2eaeb4302aeeb00d291612bb0c00")),
         ("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
          "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", "af82",
-         "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc659"
-         "4a7c15e9716ed28dc027beceea1ec40a"),
+         ("6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc659"
+         "4a7c15e9716ed28dc027beceea1ec40a")),
     ]
     for secret, public, message, signature in vectors:
         sk, pk, msg, sig = (bytes.fromhex(x) for x in (secret, public, message, signature))
@@ -535,8 +543,7 @@ def _imported(tree) -> set[str]:
 
 def test_no_hmac_or_symmetric_certificate_path_exists():
     for rel, tree in _production_trees():
-        if rel.startswith("validation/") or rel.startswith("costs/") or rel.startswith("runtime/") \
-                or rel.startswith("core/"):
+        if rel.startswith(("validation/", "costs/", "runtime/", "core/")):
             assert "hmac" not in _imported(tree), rel
     source = (ROOT / "validation" / "certificate.py").read_text(encoding="utf-8")
     for legacy in ("seal_certificate", "load_certificate_key", "ASN_EDGE_CERTIFICATE_KEY_FILE", "compare_digest"):
@@ -602,10 +609,10 @@ def test_production_never_rebinds_or_builds_the_protocol():
                 name = getattr(target, "id", getattr(target, "attr", None))
                 if name in ("CURRENT_PROTOCOL", "PREREGISTERED_PROTOCOL") and rel != "validation/certificate.py":
                     rebinds.append(rel)
-            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "setattr":
-                if any(isinstance(a, ast.Constant) and a.value in ("CURRENT_PROTOCOL", "PREREGISTERED_PROTOCOL")
-                       for a in node.args):
-                    rebinds.append(rel)
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "setattr" and any(
+                    isinstance(a, ast.Constant) and a.value in ("CURRENT_PROTOCOL", "PREREGISTERED_PROTOCOL")
+                    for a in node.args):
+                rebinds.append(rel)
         if _calls(tree, "ProtocolThresholds") and rel != "validation/certificate.py":
             builders.append(rel)
         if _calls(tree, "_verify_against") and rel != "validation/certificate.py":
@@ -664,8 +671,9 @@ def test_wrong_calibration_method_is_refused():
 
 
 def test_executable_permission_rejects_a_protocol_argument():
-    from adaptive_scalper.core.final_permission import FinalPermissionInput
     from test_final_permission import _full_allow_input
+
+    from adaptive_scalper.core.final_permission import FinalPermissionInput
 
     weak = dataclasses.replace(PREREGISTERED_PROTOCOL, min_effective_observations=1, min_psr=0.0, min_dsr=0.0)
     with pytest.raises(TypeError):

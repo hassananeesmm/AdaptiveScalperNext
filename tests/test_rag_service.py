@@ -5,6 +5,7 @@ crashes, no execution capability)."""
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -104,7 +105,7 @@ def test_rag_service_has_no_order_send_or_gateway_import():
     for module_path in (
         "adaptive_scalper/rag/service.py", "adaptive_scalper/rag/index.py", "adaptive_scalper/rag/store.py",
     ):
-        tree = ast.parse(open(module_path, encoding="utf-8").read())
+        tree = ast.parse(Path(module_path).read_text(encoding="utf-8"))
         imported_names = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

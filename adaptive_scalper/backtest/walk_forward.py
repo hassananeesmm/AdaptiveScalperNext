@@ -37,7 +37,11 @@ import time
 
 from adaptive_scalper.backtest.engine import _compute_metrics, run_backtest
 from adaptive_scalper.backtest.persistence import record_backtest_run
-from adaptive_scalper.backtest.types import BacktestConfig, WalkForwardFold, WalkForwardResult
+from adaptive_scalper.backtest.types import (
+    BacktestConfig,
+    WalkForwardFold,
+    WalkForwardResult,
+)
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
 from adaptive_scalper.strategies import select_active_strategies
 

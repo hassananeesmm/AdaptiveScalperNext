@@ -13,11 +13,15 @@ never under `approved`.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
-from adaptive_scalper.knowledge.model import EVIDENCE_TYPES, TRUST_HUMAN_REVIEWED, KnowledgeBundle
+from adaptive_scalper.knowledge.model import (
+    EVIDENCE_TYPES,
+    TRUST_HUMAN_REVIEWED,
+    KnowledgeBundle,
+)
 from adaptive_scalper.knowledge.search import concept_summary, filter_concepts
 from adaptive_scalper.knowledge.validate import validate_bundle
 
@@ -31,12 +35,12 @@ class KnowledgeAdvisor:
         self.clock = clock
 
     @classmethod
-    def from_path(cls, root: str | Path | None = None, *, clock: Callable[[], float] = time.time) -> "KnowledgeAdvisor":
+    def from_path(cls, root: str | Path | None = None, *, clock: Callable[[], float] = time.time) -> KnowledgeAdvisor:
         root = DEFAULT_BUNDLE if root is None else root
-        return cls(validate_bundle(root, now=datetime.fromtimestamp(clock(), timezone.utc)), clock=clock)
+        return cls(validate_bundle(root, now=datetime.fromtimestamp(clock(), UTC)), clock=clock)
 
     def advise(self, *, canonical_symbol: str, strategy_key: str) -> dict:
-        now = datetime.fromtimestamp(self.clock(), timezone.utc)
+        now = datetime.fromtimestamp(self.clock(), UTC)
         relevant = filter_concepts(self.bundle, canonical_symbol=canonical_symbol, strategy_key=strategy_key)
         approved, unverified = [], []
         for concept in relevant:

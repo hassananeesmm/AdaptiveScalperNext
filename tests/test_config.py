@@ -21,7 +21,6 @@ from adaptive_scalper.config.constants import (
 )
 from adaptive_scalper.config.loader import AppConfig, ConfigError, load_config
 
-
 # --------------------------------------------------------------------------
 # Constants
 # --------------------------------------------------------------------------

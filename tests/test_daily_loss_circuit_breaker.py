@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from chaos_harness import demo_account
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+
 from adaptive_scalper.core.kill_switch import KillSwitchStatus
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
@@ -15,8 +18,6 @@ from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.execution.close import CloseOutcome
 from adaptive_scalper.gateway.types import PendingOrderSnapshot, PositionSnapshot
 from adaptive_scalper.runtime import demo as demo_module
-from chaos_harness import demo_account
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 START_AT = T0 + 60 * STEP + 10
 

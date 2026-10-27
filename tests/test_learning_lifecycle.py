@@ -6,8 +6,8 @@ import pytest
 
 from adaptive_scalper.learning.lifecycle import (
     ALLOWED_TRANSITIONS,
-    ModelLifecycleState,
     InvalidLifecycleTransitionError,
+    ModelLifecycleState,
     apply_transition,
     is_terminal,
     validate_transition,

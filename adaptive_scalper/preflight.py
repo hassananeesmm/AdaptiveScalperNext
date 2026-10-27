@@ -8,6 +8,7 @@ safe readiness level supported by current evidence.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import sqlite3
@@ -25,7 +26,11 @@ from adaptive_scalper.gateway.server_time import VERIFIED, classify_quote_clock
 from adaptive_scalper.gateway.symbol_resolver import resolve_all
 from adaptive_scalper.gateway.types import TradeMode
 from adaptive_scalper.history.time_basis import get_basis
-from adaptive_scalper.persistence.database import MIGRATIONS_DIR, connect_readonly, integrity_check
+from adaptive_scalper.persistence.database import (
+    MIGRATIONS_DIR,
+    connect_readonly,
+    integrity_check,
+)
 from adaptive_scalper.runtime.state import get_state_with_age
 
 _IMPORTS = ("pydantic", "fastapi", "uvicorn", "websockets", "httpx", "MetaTrader5", "numpy", "sklearn", "scipy", "joblib", "yaml")
@@ -79,7 +84,7 @@ def run_preflight(
     try:
         cfg: AppConfig = load_config(config_path)
         _check(checks, "configuration", "PASS", f"mode={cfg.mode}; risk ceilings validated")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any configuration load failure blocks preflight
         paper_blockers.append(f"configuration invalid: {exc}")
         _check(checks, "configuration", "FAIL", paper_blockers[-1])
         return {
@@ -223,15 +228,13 @@ def run_preflight(
             warnings.append(f"live spread currently above the hard cap: {', '.join(wide_spread)}")
         _check(checks, "live_spread", "WARN" if wide_spread else "PASS",
                f"above_cap={wide_spread}" if wide_spread else "every fresh quote is within its spread cap")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any MT5 probe failure blocks preflight
         paper_blockers.append(f"MT5 probe failed: {type(exc).__name__}: {exc}")
         _check(checks, "mt5_account", "FAIL", paper_blockers[-1])
     finally:
         if gateway is not None:
-            try:
+            with contextlib.suppress(Exception):
                 gateway.shutdown()
-            except Exception:
-                pass
 
     dashboard_ok = False
     dashboard_detail = "unavailable"

@@ -14,7 +14,13 @@ import argparse
 import contextlib
 import time
 
-from adaptive_scalper.cli.common import CliError, add_symbol_arg, open_db, open_gateway, print_json
+from adaptive_scalper.cli.common import (
+    CliError,
+    add_symbol_arg,
+    open_db,
+    open_gateway,
+    print_json,
+)
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.gateway.spec_store import load_symbol_spec
 from adaptive_scalper.history.resolutions import resolution_seconds
@@ -177,7 +183,11 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
 def cmd_order_check_probe(args: argparse.Namespace) -> int:
     """LOCAL_MT5_HANDOFF step L: one real DEMO order_check, never sent."""
-    from adaptive_scalper.execution.order_check_probe import CHECKED, result_dict, run_order_check_probe
+    from adaptive_scalper.execution.order_check_probe import (
+        CHECKED,
+        result_dict,
+        run_order_check_probe,
+    )
 
     cfg, conn = open_db(args.config)
     gw = open_gateway(cfg)
@@ -205,7 +215,10 @@ def cmd_news_status(args: argparse.Namespace) -> int:
 
 def cmd_news_refresh(args: argparse.Namespace) -> int:
     from adaptive_scalper.news.providers.cache import CacheProvider
-    from adaptive_scalper.runtime.news_monitor import NewsMonitor, default_live_providers
+    from adaptive_scalper.runtime.news_monitor import (
+        NewsMonitor,
+        default_live_providers,
+    )
 
     cfg, conn = open_db(args.config)
     monitor = NewsMonitor(

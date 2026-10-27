@@ -14,9 +14,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from typing import Callable
+from collections.abc import Callable
 
-from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, RETIRED_STRATEGY_KEYS
+from adaptive_scalper.config.constants import (
+    ALLOWED_CANONICAL_SYMBOLS,
+    RETIRED_STRATEGY_KEYS,
+)
 from adaptive_scalper.core.kill_switch import get_state as kill_switch_state
 from adaptive_scalper.dashboard.health import DASHBOARD_INTEGRITY, compute_health
 
@@ -829,7 +832,7 @@ def compute_panel(conn: sqlite3.Connection, name: str, now: int | None = None) -
     now = now if now is not None else int(time.time())
     try:
         return {"status": "OK", **PANELS[name](conn, now)}
-    except Exception as exc:  # one panel's failure is shown, never propagated
+    except Exception as exc:  # noqa: BLE001 - one panel's failure is shown, never propagated
         return {"status": "UNAVAILABLE", "detail": f"{type(exc).__name__}: {exc}"}
 
 

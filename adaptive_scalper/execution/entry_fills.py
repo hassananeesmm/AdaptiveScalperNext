@@ -120,9 +120,9 @@ def record_entry_fills(
                 "VALUES (?, 'RECONCILIATION_MISMATCH', ?, ?)",
                 (
                     order_id,
-                    f"additional entry deal(s) discovered for position {broker_position_id!r} after "
+                    (f"additional entry deal(s) discovered for position {broker_position_id!r} after "
                     f"position_management_state already exists — NOT applied to the position's aggregate "
-                    f"volume/entry_price/initial_monetary_risk; investigate before further R-based management",
+                    f"volume/entry_price/initial_monetary_risk; investigate before further R-based management"),
                     now,
                 ),
             )

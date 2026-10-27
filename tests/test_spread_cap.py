@@ -11,12 +11,16 @@ from __future__ import annotations
 import math
 
 import pytest
+import test_execution_service as svc
+from pydantic import ValidationError
 
 from adaptive_scalper.config.loader import AppConfig, load_config
-from adaptive_scalper.execution.service import BLOCK_SPREAD, BLOCKED_BROKER_STATE, spread_cap_violation
+from adaptive_scalper.execution.service import (
+    BLOCK_SPREAD,
+    BLOCKED_BROKER_STATE,
+    spread_cap_violation,
+)
 from adaptive_scalper.gateway.types import Tick
-
-import test_execution_service as svc
 
 db = svc.db  # the execution-service tests' migrated DB + bootstrapped kill switch fixture
 
@@ -50,7 +54,7 @@ def test_shipped_config_caps_both_executable_symbols():
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, math.inf])
 def test_config_rejects_a_non_positive_or_infinite_cap(bad):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         AppConfig(costs={"XAUUSD": {"max_spread_price": bad}})
 
 

@@ -60,8 +60,8 @@ import dataclasses
 import sqlite3
 import time
 import typing
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from adaptive_scalper.execution.close_requests import (
     RESOLVED_CLOSED,
@@ -72,13 +72,23 @@ from adaptive_scalper.execution.close_requests import (
     record_close_intent,
     settle_close_request,
 )
-from adaptive_scalper.execution.close_requests import UNRESOLVED as CLOSE_REQUEST_UNRESOLVED
+from adaptive_scalper.execution.close_requests import (
+    UNRESOLVED as CLOSE_REQUEST_UNRESOLVED,
+)
 from adaptive_scalper.gateway.broker_constraints import derive_filling_type
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.retcodes import RetcodeCategory, interpret_retcode
-from adaptive_scalper.gateway.symbol_validation import DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS, validate_execution_quote
-from adaptive_scalper.gateway.types import OrderAction, OrderCheckResult, OrderRequest, OrderSendResult
+from adaptive_scalper.gateway.symbol_validation import (
+    DEFAULT_MAX_EXECUTION_QUOTE_AGE_SECONDS,
+    validate_execution_quote,
+)
+from adaptive_scalper.gateway.types import (
+    OrderAction,
+    OrderCheckResult,
+    OrderRequest,
+    OrderSendResult,
+)
 
 if typing.TYPE_CHECKING:
     from adaptive_scalper.execution.reconciliation import ReconciliationReport
@@ -123,7 +133,7 @@ class CloseOutcome:
     status: str
     detail: str
     result: OrderSendResult | None = None
-    reconciliation: "ReconciliationReport | None" = None
+    reconciliation: ReconciliationReport | None = None
     # Set when the post-send reconciliation could not read broker truth:
     # the send outcome stands, the durable close request stays UNRESOLVED.
     broker_truth_error: str | None = None
@@ -286,11 +296,11 @@ def close_position_safely(
     if conn is not None and has_unresolved_close(conn, broker_position_id):
         return CloseOutcome(CLOSE_UNRESOLVED, f"position {broker_position_id!r} has an unresolved close request -- "
                                               f"its outcome must be proven from broker truth before any new close")
-    round_kwargs = dict(
-        broker_position_id=broker_position_id, expected_direction=expected_direction,
-        expected_volume=expected_volume, broker_symbol=broker_symbol,
-        max_quote_age_seconds=max_quote_age_seconds, clock=clock,
-    )
+    round_kwargs = {
+        "broker_position_id": broker_position_id, "expected_direction": expected_direction,
+        "expected_volume": expected_volume, "broker_symbol": broker_symbol,
+        "max_quote_age_seconds": max_quote_age_seconds, "clock": clock,
+    }
 
     round1 = _resolve_round(gateway, **round_kwargs)
     if round1.blocked is not None:
@@ -305,7 +315,7 @@ def close_position_safely(
 
     try:
         check: OrderCheckResult = gateway.order_check(request)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - order_check transport failure: nothing was sent
         return CloseOutcome(BROKER_CONSTRAINT, f"order_check raised {type(exc).__name__}: {exc} -- nothing was sent")
     if check.retcode not in order_check_success_retcodes:
         return CloseOutcome(BROKER_CONSTRAINT, f"order_check failed: retcode={check.retcode} comment={check.comment!r}")
@@ -329,7 +339,7 @@ def close_position_safely(
         # request that will be sent must itself pass order_check.
         try:
             recheck: OrderCheckResult = gateway.order_check(final_request)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - order_check transport failure: nothing was sent
             return CloseOutcome(
                 BROKER_CONSTRAINT, f"order_check of the rebuilt request raised {type(exc).__name__}: {exc} -- nothing was sent",
             )
@@ -358,7 +368,7 @@ def close_position_safely(
 
     try:
         result = gateway.order_send(final_request)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - order_send may have reached the broker: UNKNOWN, never resent
         # May or may not have reached the broker: UNKNOWN, never resent;
         # broker truth (reconciliation below / next cycle) decides.
         result = None
@@ -375,7 +385,7 @@ def close_position_safely(
         from adaptive_scalper.execution.reconciliation import run_reconciliation
         try:
             report = run_reconciliation(conn, gateway, reconciliation_chain_key)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - reconciliation failure must not mask the send outcome
             # Broker truth unavailable right after a send that may have
             # changed exposure: keep the send outcome, never raise it away.
             outcome = dataclasses.replace(outcome, broker_truth_error=f"{type(exc).__name__}: {exc}")

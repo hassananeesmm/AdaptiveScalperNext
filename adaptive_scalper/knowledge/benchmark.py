@@ -25,9 +25,9 @@ import re
 import sqlite3
 import statistics
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -161,7 +161,7 @@ def _evaluate(corpus: str, name: str, docs_count: int, build_ms: float, run: Cal
         recalls.append(len(hits) / min(len(relevant), K))
         rr.append(next((1.0 / (i + 1) for i, d in enumerate(got) if d in relevant), 0.0))
     latencies.sort()
-    p95 = latencies[min(len(latencies) - 1, int(round(0.95 * (len(latencies) - 1))))]
+    p95 = latencies[min(len(latencies) - 1, round(0.95 * (len(latencies) - 1)))]
     return RetrieverResult(corpus, name, docs_count, len(queries), round(statistics.fmean(precisions), 3),
                            round(statistics.fmean(recalls), 3), round(statistics.fmean(rr), 3),
                            round(statistics.median(latencies), 1), round(p95, 1), round(build_ms, 2))
@@ -183,12 +183,12 @@ def run_benchmark(bundle_root: str | Path, *, rag_documents: int = 2000) -> list
                              lambda q, k: [h.concept.id for h in okf_search(bundle, q, top_k=k, include_deprecated=True)],
                              OKF_QUERIES))
     for cls in (TfidfRetriever, Fts5Retriever):
-        retriever, build = _timed(lambda: cls(okf_docs))
+        retriever, build = _timed(lambda cls=cls: cls(okf_docs))
         results.append(_evaluate("okf", cls.name, len(okf_docs), build, retriever.query, OKF_QUERIES))
 
     docs, queries = rag_corpus(rag_documents)
     for cls in (TfidfRetriever, Fts5Retriever):
-        retriever, build = _timed(lambda: cls(docs))
+        retriever, build = _timed(lambda cls=cls: cls(docs))
         results.append(_evaluate("rag", cls.name, len(docs), build, retriever.query, queries))
     return results
 

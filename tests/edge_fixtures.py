@@ -42,7 +42,10 @@ from adaptive_scalper.costs.edge_evidence import (
 )
 from adaptive_scalper.features.bar_features import FEATURE_SCHEMA_VERSION
 from adaptive_scalper.shadow.lifecycle import lifecycle_for
-from adaptive_scalper.simulation.fill_model import COST_BROKER_DEMO_CONFIRMED, FILL_MODEL_VERSION
+from adaptive_scalper.simulation.fill_model import (
+    COST_BROKER_DEMO_CONFIRMED,
+    FILL_MODEL_VERSION,
+)
 from adaptive_scalper.validation import ed25519
 from adaptive_scalper.validation.certificate import (
     CALIBRATOR_ARTIFACT_SCHEMA,
@@ -114,23 +117,23 @@ def fixture_certificate(strategy_key="momentum_continuation", strategy_version=1
     _ensure_test_stub_lifecycle(strategy_key)
     lifecycle = lifecycle_for(strategy_key)
     model_bytes, calibrator_bytes = artifacts or fixture_artifacts(strategy_key, strategy_version, symbol)
-    fields = dict(
-        schema=CERTIFICATE_SCHEMA, signature_scheme=SIGNATURE_SCHEME, issuer_key_id="",
-        protocol_version=PROTOCOL_VERSION, strategy_key=strategy_key, strategy_version=strategy_version,
-        canonical_symbol=symbol, direction=direction, lifecycle_id=lifecycle.strategy_key,
-        lifecycle_version=lifecycle.lifecycle_version, horizon_seconds=lifecycle.horizon_seconds,
-        model_id=TEST_MODEL[0], model_version=TEST_MODEL[1], model_artifact_sha256=artifact_sha256(model_bytes),
-        calibrator_artifact_sha256=artifact_sha256(calibrator_bytes), calibration_method="platt",
-        feature_schema_version=FEATURE_SCHEMA_VERSION, feature_transform_version=FEATURE_TRANSFORM_VERSION,
-        training_start_utc=1_000, training_end_utc=2_000, calibration_start_utc=2_000, calibration_end_utc=3_000,
-        validation_start_utc=3_000, validation_end_utc=4_000, as_of_utc=4_000, expires_utc=4_000_000_000,
-        raw_observations=900, effective_observations=400, chronological_blocks=8, positive_blocks=7, brier=0.2,
-        log_loss=0.6, ece=0.02, calibration_passed=True, mean_gross_r=0.3, mean_net_r=0.2,
-        net_r_lower_bound_95=0.05, avg_realized_win_r=avg_win_r, avg_realized_loss_r=avg_loss_r,
-        max_single_trade_share=0.02, cost_model_version=FILL_MODEL_VERSION,
-        cost_provenance=COST_BROKER_DEMO_CONFIRMED, cost_stress_net_r=0.1, ledger_trial_count=300, psr=0.99,
-        dsr=0.97, pbo=0.1, safety_validation_passed=True, forbidden_data_access=False,
-    )
+    fields = {
+        "schema": CERTIFICATE_SCHEMA, "signature_scheme": SIGNATURE_SCHEME, "issuer_key_id": "",
+        "protocol_version": PROTOCOL_VERSION, "strategy_key": strategy_key, "strategy_version": strategy_version,
+        "canonical_symbol": symbol, "direction": direction, "lifecycle_id": lifecycle.strategy_key,
+        "lifecycle_version": lifecycle.lifecycle_version, "horizon_seconds": lifecycle.horizon_seconds,
+        "model_id": TEST_MODEL[0], "model_version": TEST_MODEL[1], "model_artifact_sha256": artifact_sha256(model_bytes),
+        "calibrator_artifact_sha256": artifact_sha256(calibrator_bytes), "calibration_method": "platt",
+        "feature_schema_version": FEATURE_SCHEMA_VERSION, "feature_transform_version": FEATURE_TRANSFORM_VERSION,
+        "training_start_utc": 1_000, "training_end_utc": 2_000, "calibration_start_utc": 2_000, "calibration_end_utc": 3_000,
+        "validation_start_utc": 3_000, "validation_end_utc": 4_000, "as_of_utc": 4_000, "expires_utc": 4_000_000_000,
+        "raw_observations": 900, "effective_observations": 400, "chronological_blocks": 8, "positive_blocks": 7, "brier": 0.2,
+        "log_loss": 0.6, "ece": 0.02, "calibration_passed": True, "mean_gross_r": 0.3, "mean_net_r": 0.2,
+        "net_r_lower_bound_95": 0.05, "avg_realized_win_r": avg_win_r, "avg_realized_loss_r": avg_loss_r,
+        "max_single_trade_share": 0.02, "cost_model_version": FILL_MODEL_VERSION,
+        "cost_provenance": COST_BROKER_DEMO_CONFIRMED, "cost_stress_net_r": 0.1, "ledger_trial_count": 300, "psr": 0.99,
+        "dsr": 0.97, "pbo": 0.1, "safety_validation_passed": True, "forbidden_data_access": False,
+    }
     fields.update(overrides)
     return issue_signature(ValidationCertificate(**fields), seed)
 

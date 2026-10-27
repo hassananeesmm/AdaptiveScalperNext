@@ -208,7 +208,7 @@ def test_movement_to_cost_computed_with_point_size():
 @pytest.mark.parametrize("hour,expected", [(2, "ASIAN"), (9, "LONDON"), (14, "LONDON_NEWYORK_OVERLAP"), (18, "NEWYORK"), (23, "ASIAN")])
 def test_session_bucketing(hour, expected):
     import datetime
-    dt = datetime.datetime(2026, 9, 15, hour, 0, tzinfo=datetime.timezone.utc)
+    dt = datetime.datetime(2026, 9, 15, hour, 0, tzinfo=datetime.UTC)
     ts = int(dt.timestamp())
     bars = [Bar(time=ts, open=1, high=1.1, low=0.9, close=1, tick_volume=1, spread=1, real_volume=0)]
     snap = compute_bar_features("XAUUSD", "M1", bars)

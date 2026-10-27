@@ -19,8 +19,8 @@ that count is never silently lost (feeds `DatasetSnapshot
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from adaptive_scalper.backtest.types import SimulatedTrade
 from adaptive_scalper.features.bar_features import NUMERIC_FEATURE_FIELDS

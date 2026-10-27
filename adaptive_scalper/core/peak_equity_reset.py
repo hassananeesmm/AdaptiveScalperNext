@@ -32,7 +32,12 @@ from pathlib import Path
 from adaptive_scalper.core.kill_switch import KillSwitchStatus
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.core.operator_authority import OperatorAuthority
-from adaptive_scalper.risk.peak_equity import EVENT_OPERATOR_RESET, append_row, current_peak, mask_login
+from adaptive_scalper.risk.peak_equity import (
+    EVENT_OPERATOR_RESET,
+    append_row,
+    current_peak,
+    mask_login,
+)
 from adaptive_scalper.runtime.state import record_event
 
 MIN_RESET_REASON_CHARS = 20

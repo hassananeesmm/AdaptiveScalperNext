@@ -7,6 +7,7 @@ only; disabled (the code default) it changes nothing.
 
 from __future__ import annotations
 
+import itertools
 import math
 import random
 from pathlib import Path
@@ -14,6 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+from test_final_permission import _full_allow_input
 
 import adaptive_scalper.runtime.demo as demo_runtime
 import adaptive_scalper.runtime.paper as paper_runtime
@@ -24,8 +27,6 @@ from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.features.adx import wilder_adx
 from adaptive_scalper.gateway.types import Bar
 from adaptive_scalper.risk.entry_regime import BLOCK_REGIME, adx_entry_block
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
-from test_final_permission import _full_allow_input
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -38,7 +39,7 @@ def _reference_adx(bars, p=14):
     """Independent formulation: Wilder RMA seeded with the simple MEAN (the
     module seeds with the SUM; the DI ratios are identical)."""
     tr, pdm, mdm = [], [], []
-    for a, b in zip(bars, bars[1:]):
+    for a, b in itertools.pairwise(bars):
         tr.append(max(b.high - b.low, abs(b.high - a.close), abs(b.low - a.close)))
         up, dn = b.high - a.high, a.low - b.low
         pdm.append(up if up > dn and up > 0 else 0.0)
@@ -219,13 +220,13 @@ def test_demo_records_regime_block_before_strategies_and_sends_nothing(tmp_path,
 
 
 def test_demo_without_threshold_records_no_regime_block(tmp_path):
-    clock, engine, conn, gateway = _started(tmp_path, "DEMO")
+    clock, engine, conn, _gateway = _started(tmp_path, "DEMO")
     step(engine, clock, seconds=STEP * 3, tick=4)
     assert _regime_rows(conn) == []
 
 
 def test_paper_passes_regime_block_as_the_entry_block(tmp_path, monkeypatch):
-    clock, engine, conn, gateway = _started(tmp_path, "PAPER")
+    _clock, engine, _conn, _gateway = _started(tmp_path, "PAPER")
     seen = []
 
     def fake_cycle(*args, **kwargs):

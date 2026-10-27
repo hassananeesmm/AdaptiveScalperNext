@@ -14,7 +14,10 @@ import adaptive_scalper.backtest.engine as engine_module
 from adaptive_scalper.backtest.types import BacktestConfig
 from adaptive_scalper.gateway.types import Bar, SymbolSpec, SymbolTradeMode
 from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParams
-from adaptive_scalper.simulation.fill_model import COST_EXPLICIT_TEST_FIXTURE, FillAssumptions
+from adaptive_scalper.simulation.fill_model import (
+    COST_EXPLICIT_TEST_FIXTURE,
+    FillAssumptions,
+)
 from adaptive_scalper.strategies.base import StrategySignal
 
 SYMBOL = "XAUUSD"
@@ -60,15 +63,15 @@ def bars(n: int = 40, overrides: dict | None = None, *, start: int = START, time
 
 
 def config(**overrides) -> BacktestConfig:
-    defaults = dict(
-        fill_assumptions=FillAssumptions(
+    defaults = {
+        "fill_assumptions": FillAssumptions(
             slippage_price=0.0, commission_monetary_per_lot=0.0, provenance=COST_EXPLICIT_TEST_FIXTURE,
         ),
-        adaptive_exit_params=QUIET_EXIT,
+        "adaptive_exit_params": QUIET_EXIT,
         # Scripted-strategy mechanics tests replay the frozen V1 edge formula
         # explicitly (issue #6: the production default is NONE = FLAT).
-        edge_model="LEGACY_V1_RAW_SCORE",
-    )
+        "edge_model": "LEGACY_V1_RAW_SCORE",
+    }
     defaults.update(overrides)
     return BacktestConfig(**defaults)
 

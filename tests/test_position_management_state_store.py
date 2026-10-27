@@ -28,11 +28,11 @@ def db(tmp_path):
 
 
 def _insert_position(conn, **overrides) -> int:
-    row = dict(
-        broker_position_id="pos-1", canonical_symbol="XAUUSD", direction="BUY", volume=0.05,
-        entry_price=2000.0, initial_monetary_risk=20.0, strategy_key="momentum_continuation",
-        status="OPEN", opened_at_utc=1000,
-    )
+    row = {
+        "broker_position_id": "pos-1", "canonical_symbol": "XAUUSD", "direction": "BUY", "volume": 0.05,
+        "entry_price": 2000.0, "initial_monetary_risk": 20.0, "strategy_key": "momentum_continuation",
+        "status": "OPEN", "opened_at_utc": 1000,
+    }
     row.update(overrides)
     cursor = conn.execute(
         """

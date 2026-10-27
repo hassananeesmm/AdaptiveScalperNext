@@ -124,9 +124,7 @@ def targets_sibling_project(path: str) -> bool:
             return False
     end = idx + len(marker)
     # Reject if what follows immediately continues the name, e.g. "...Next"
-    if end < len(p) and (p[end].isalnum()):
-        return False
-    return True
+    return not (end < len(p) and p[end].isalnum())
 
 
 def is_outside_project_root(path: str, project_root: str) -> bool:
@@ -199,10 +197,10 @@ def _staged_diff(cwd: str) -> str:
         r = subprocess.run(
             ["git", "diff", "--cached", "--", ".",
              ":(exclude)tests", ":(exclude).claude/hooks", ":(exclude).claude/hookify-templates"],
-            cwd=cwd, capture_output=True, timeout=10, text=True,
+            cwd=cwd, capture_output=True, timeout=10, text=True, check=False,
         )
         return r.stdout or ""
-    except Exception:
+    except Exception:  # noqa: BLE001 - git unavailable: no staged diff to scan
         return ""
 
 
@@ -246,8 +244,8 @@ def evaluate(input_data: dict) -> dict:
                                      f"trading-safety boundary ({file_path}). Confirm the change "
                                      f"preserves the safety guarantee rather than weakening it.")
 
-        if file_path and "/tests/" in file_path.replace("\\", "/").lower() or \
-           (file_path and file_path.replace("\\", "/").lower().startswith("tests/")):
+        if (file_path and "/tests/" in file_path.replace("\\", "/").lower()) or (  # noqa: SIM102
+           file_path and file_path.replace("\\", "/").lower().startswith("tests/")):
             # Heuristic: a Write that drastically shrinks an existing test file.
             if tool_name == "Write" and isinstance(tool_input.get("content"), str):
                 try:
@@ -331,7 +329,7 @@ def main() -> None:
         return
     try:
         result = evaluate(input_data)
-    except Exception as exc:  # never crash-block the session over a bug in this hook
+    except Exception as exc:  # noqa: BLE001 - never crash-block the session over a bug in this hook
         result = _decision("allow", f"guardrails.py internal error, failing open: {exc}")
     print(json.dumps(result))
 

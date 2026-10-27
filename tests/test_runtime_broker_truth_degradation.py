@@ -8,13 +8,22 @@ stayed RUNNING and the fresh CLEAN verdict kept admitting new entries.
 
 from __future__ import annotations
 
+from runtime_helpers import (
+    STEP,
+    T0,
+    FakeClock,
+    LiveMarketGateway,
+    build_engine,
+    default_market,
+    step,
+)
+
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
 from adaptive_scalper.runtime import demo as demo_module
 from adaptive_scalper.runtime.demo import BLOCK_RECONCILIATION, BLOCK_UNKNOWN_ORDER
 from adaptive_scalper.runtime.state import get_state
-from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, build_engine, default_market, step
 
 START_AT = T0 + 60 * STEP + 10
 
@@ -92,7 +101,7 @@ def test_a_non_query_cycle_failure_is_cycle_failed_and_still_blocks(tmp_path, mo
 
 
 def test_an_advisory_task_failure_degrades_only_itself(tmp_path):
-    clock, engine, conn, gateway = _started(tmp_path)
+    clock, engine, conn, _gateway = _started(tmp_path)
 
     def explode():
         raise RuntimeError("index rebuild exploded")
