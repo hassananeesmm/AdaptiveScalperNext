@@ -9,12 +9,16 @@ through `ChaosGateway`'s fault plan.
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import asdict
+
 from chaos_harness import ChaosGateway, demo_account, demo_terminal
 
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.gateway.types import Bar, SymbolSpec, SymbolTradeMode, Tick
 from adaptive_scalper.news.types import ProviderError
 from adaptive_scalper.persistence import connect, migrate
+from adaptive_scalper.risk.project_drawdown import AccountingPolicy, _append
 from adaptive_scalper.runtime.engine import RuntimeComponents, RuntimeEngine
 
 STEP = 300
@@ -123,7 +127,8 @@ def app_config(tmp_path, *, mode: str, costs: bool = True, **runtime) -> AppConf
 
 
 def build_engine(tmp_path, *, mode: str, clock: FakeClock, gateway=None, bars=None, news=None, costs=True,
-                 components: RuntimeComponents | None = None, edge_evidence=None, **runtime):
+                 components: RuntimeComponents | None = None, edge_evidence=None,
+                 approved_drawdown: bool = True, **runtime):
     """`edge_evidence`: None keeps the production default (no validated
     evidence -> every proposal FLAT). Pipeline tests that need a proposal
     to reach execution pass `edge_fixtures.FixtureValidatedProvider()`."""
@@ -131,6 +136,8 @@ def build_engine(tmp_path, *, mode: str, clock: FakeClock, gateway=None, bars=No
     conn = connect(config.database.path)
     migrate(conn)
     gateway = gateway or LiveMarketGateway(clock, bars or default_market())
+    if mode == 'DEMO' and approved_drawdown:
+        seed_test_drawdown(conn, gateway, config.runtime.magic, int(clock.now))
     components = components or RuntimeComponents()
     if edge_evidence is not None:
         components.edge_evidence = edge_evidence
@@ -140,6 +147,23 @@ def build_engine(tmp_path, *, mode: str, clock: FakeClock, gateway=None, bars=No
         components.news_providers = news if news is not None else [StaticNewsProvider()]
     engine = RuntimeEngine(config, conn, gateway, clock=clock, monotonic=clock, components=components)
     return engine, conn, gateway
+
+
+def seed_test_drawdown(conn, gateway, magic, now):
+    """Synthetic approval fixture for pipeline tests with known flat accounts.
+
+    This never runs in production. Drawdown tests opt out and exercise the
+    blocked migration and human recovery API with their own explicit ledger.
+    """
+    account = gateway.account_info()
+    if account is None or account.equity <= 0 or account.balance <= 0:
+        return
+    policy = AccountingPolicy(account.login, account.server, account.currency, magic, now - 1,
+                              account.balance, account.balance, account.balance, account.balance)
+    _append(conn, event='OPERATOR_RECOVERY', policy=policy,
+            state={'policy': asdict(policy), 'project_peak': account.balance, 'account_peak': account.balance},
+            latched=False, reason='Explicit synthetic flat-ledger policy for pipeline tests',
+            now=now, actor='test-fixture-only', digest=hashlib.sha256(b'synthetic approval fixture').hexdigest())
 
 
 def step(engine, clock: FakeClock, *, seconds: int, tick: int = 1) -> None:
