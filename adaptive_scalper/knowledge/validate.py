@@ -33,10 +33,13 @@ bad file degrades knowledge, never trading.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, RETIRED_STRATEGY_KEYS
+from adaptive_scalper.config.constants import (
+    ALLOWED_CANONICAL_SYMBOLS,
+    RETIRED_STRATEGY_KEYS,
+)
 from adaptive_scalper.knowledge.loader import load_bundle
 from adaptive_scalper.knowledge.model import (
     EVIDENCE_TYPES,
@@ -192,7 +195,7 @@ def scan_text(path: str, text: str) -> list[Issue]:
 
 def validate_bundle(root: str | Path, *, now: datetime | None = None) -> KnowledgeBundle:
     """Load + validate. Returns the bundle with every issue attached."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     bundle = load_bundle(root)
     if bundle.okf_version is None:
         bundle.issues.append(Issue("WARNING", "index.md", "OKF_VERSION_UNDECLARED",

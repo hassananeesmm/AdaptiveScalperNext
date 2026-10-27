@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import itertools
 import random
 from pathlib import Path
 
@@ -50,7 +51,7 @@ def test_overlapping_observations_are_not_independent():
     overlapping = _series([0.1] * 10, gap=60, hold=300)   # each trade still open when the next starts
     kept = fe.effective_sequence(overlapping)
     assert len(kept) == 2                                  # t=0 and t=300 (entry at/after previous exit)
-    assert all(b.entry_time_utc >= a.exit_time_utc for a, b in zip(kept, kept[1:]))
+    assert all(b.entry_time_utc >= a.exit_time_utc for a, b in itertools.pairwise(kept))
 
 
 def test_chronological_blocks_are_contiguous_and_cover_everything():

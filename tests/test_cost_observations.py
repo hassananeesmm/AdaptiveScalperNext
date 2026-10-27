@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from edge_fixtures import FixtureValidatedProvider
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
@@ -13,8 +15,6 @@ from adaptive_scalper.costs.observations import (
     summarize_observations,
     sweep_exit_costs,
 )
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
-from edge_fixtures import FixtureValidatedProvider
 
 START_AT = T0 + 60 * STEP + 10
 

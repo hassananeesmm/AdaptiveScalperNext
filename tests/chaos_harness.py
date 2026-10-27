@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections import Counter, defaultdict
-from typing import Callable
+from collections.abc import Callable
 
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
 from adaptive_scalper.gateway.types import (
@@ -53,7 +53,7 @@ def returns(value) -> Action:
     return action
 
 
-def mutate_then_default(fn: Callable[["ChaosGateway"], None]) -> Action:
+def mutate_then_default(fn: Callable[[ChaosGateway], None]) -> Action:
     def action(gw, default, *args):
         fn(gw)
         return default(*args)
@@ -82,7 +82,7 @@ class ChaosGateway(FakeGateway):
         self.calls: Counter = Counter()
         self._plan: dict[str, list[tuple[int | None, Action]]] = defaultdict(list)
 
-    def on(self, method: str, action: Action, *, call: int | None = None) -> "ChaosGateway":
+    def on(self, method: str, action: Action, *, call: int | None = None) -> ChaosGateway:
         self._plan[method].append((call, action))
         return self
 
@@ -142,41 +142,41 @@ class ChaosGateway(FakeGateway):
 
 
 def demo_account(**overrides) -> AccountSnapshot:
-    defaults = dict(
-        login=123, trade_mode=TradeMode.DEMO, balance=10000.0, equity=10000.0, margin_free=10000.0,
-        currency="USD", server="Broker-Demo", company="Broker", trade_allowed=True, trade_expert=True,
-    )
+    defaults = {
+        "login": 123, "trade_mode": TradeMode.DEMO, "balance": 10000.0, "equity": 10000.0, "margin_free": 10000.0,
+        "currency": "USD", "server": "Broker-Demo", "company": "Broker", "trade_allowed": True, "trade_expert": True,
+    }
     defaults.update(overrides)
     return AccountSnapshot(**defaults)
 
 
 def demo_terminal(**overrides) -> TerminalSnapshot:
-    defaults = dict(connected=True, trade_allowed=True, build=1000, name="MT5", company="MetaQuotes", path="")
+    defaults = {"connected": True, "trade_allowed": True, "build": 1000, "name": "MT5", "company": "MetaQuotes", "path": ""}
     defaults.update(overrides)
     return TerminalSnapshot(**defaults)
 
 
 def gold_spec(**overrides) -> SymbolSpec:
-    defaults = dict(
-        name=BROKER_SYMBOL, description="Gold", currency_base="XAU", currency_profit="USD", currency_margin="USD",
-        digits=2, point=0.01, trade_contract_size=100.0, volume_min=0.01, volume_max=50.0, volume_step=0.01,
-        trade_tick_size=0.01, trade_tick_value=1.0, spread=20, visible=True,
-        trade_mode=SymbolTradeMode.FULL, filling_mode=3,
-    )
+    defaults = {
+        "name": BROKER_SYMBOL, "description": "Gold", "currency_base": "XAU", "currency_profit": "USD", "currency_margin": "USD",
+        "digits": 2, "point": 0.01, "trade_contract_size": 100.0, "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01,
+        "trade_tick_size": 0.01, "trade_tick_value": 1.0, "spread": 20, "visible": True,
+        "trade_mode": SymbolTradeMode.FULL, "filling_mode": 3,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 
 
 def fresh_tick(**overrides) -> Tick:
-    defaults = dict(time=NOW, bid=1999.0, ask=2001.0, last=2000.0, volume=1.0)
+    defaults = {"time": NOW, "bid": 1999.0, "ask": 2001.0, "last": 2000.0, "volume": 1.0}
     defaults.update(overrides)
     return Tick(**defaults)
 
 
 def chaos_gateway(**overrides) -> ChaosGateway:
-    defaults = dict(
-        account=demo_account(), terminal=demo_terminal(), symbols=[gold_spec()],
-        ticks={BROKER_SYMBOL: fresh_tick()},
-    )
+    defaults = {
+        "account": demo_account(), "terminal": demo_terminal(), "symbols": [gold_spec()],
+        "ticks": {BROKER_SYMBOL: fresh_tick()},
+    }
     defaults.update(overrides)
     return ChaosGateway(**defaults)

@@ -24,23 +24,23 @@ def db(tmp_path):
 
 
 def _open_position(**overrides) -> OpenPositionState:
-    defaults = dict(
-        strategy_key="momentum_continuation", direction="BUY", entry_time_utc=1000, entry_price=2000.0,
-        volume=0.1, initial_monetary_risk=20.0, entry_regime="TRENDING_UP", stop_price=1995.0,
-        target_price=2010.0, initial_stop_distance_price=5.0, total_cost=0.5,
-        entry_features={"return_1": 0.5}, entry_raw_confidence=0.8,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "direction": "BUY", "entry_time_utc": 1000, "entry_price": 2000.0,
+        "volume": 0.1, "initial_monetary_risk": 20.0, "entry_regime": "TRENDING_UP", "stop_price": 1995.0,
+        "target_price": 2010.0, "initial_stop_distance_price": 5.0, "total_cost": 0.5,
+        "entry_features": {"return_1": 0.5}, "entry_raw_confidence": 0.8,
+    }
     defaults.update(overrides)
     return OpenPositionState(**defaults)
 
 
 def _closed_trade(**overrides) -> SimulatedTrade:
-    defaults = dict(
-        strategy_key="momentum_continuation", direction="BUY", entry_time_utc=1000, entry_price=2000.0,
-        volume=0.1, initial_monetary_risk=20.0, entry_regime="TRENDING_UP", exit_time_utc=1100,
-        exit_price=2010.0, exit_reason="TAKE_PROFIT_HIT", exit_regime="TRENDING_UP", realized_r=1.5,
-        realized_pnl=30.0, total_cost=0.5, entry_features={"return_1": 0.5}, entry_raw_confidence=0.8,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "direction": "BUY", "entry_time_utc": 1000, "entry_price": 2000.0,
+        "volume": 0.1, "initial_monetary_risk": 20.0, "entry_regime": "TRENDING_UP", "exit_time_utc": 1100,
+        "exit_price": 2010.0, "exit_reason": "TAKE_PROFIT_HIT", "exit_regime": "TRENDING_UP", "realized_r": 1.5,
+        "realized_pnl": 30.0, "total_cost": 0.5, "entry_features": {"return_1": 0.5}, "entry_raw_confidence": 0.8,
+    }
     defaults.update(overrides)
     return SimulatedTrade(**defaults)
 

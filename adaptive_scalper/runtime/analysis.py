@@ -11,7 +11,10 @@ several consecutive classifications) is read separately from
 
 from __future__ import annotations
 
-from adaptive_scalper.features.bar_features import compute_bar_features, numeric_feature_vector
+from adaptive_scalper.features.bar_features import (
+    compute_bar_features,
+    numeric_feature_vector,
+)
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
 from adaptive_scalper.regimes.classifier import classify_regime
 from adaptive_scalper.strategies import build_active_registry

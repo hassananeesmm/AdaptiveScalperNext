@@ -16,6 +16,7 @@ Needs at least 2 * p + 1 bars; fewer -> None (never a guess).
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Sequence
 
@@ -33,7 +34,7 @@ def wilder_adx(bars: Sequence[Bar], period: int = DEFAULT_ADX_PERIOD) -> float |
     tr: list[float] = []
     plus_dm: list[float] = []
     minus_dm: list[float] = []
-    for prev, bar in zip(bars, bars[1:]):
+    for prev, bar in itertools.pairwise(bars):
         tr.append(max(bar.high - bar.low, abs(bar.high - prev.close), abs(bar.low - prev.close)))
         up, down = bar.high - prev.high, prev.low - bar.low
         plus_dm.append(up if up > down and up > 0 else 0.0)

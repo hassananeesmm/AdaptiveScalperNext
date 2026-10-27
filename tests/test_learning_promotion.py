@@ -21,12 +21,12 @@ from adaptive_scalper.learning.promotion import (
 
 
 def _evidence(**overrides) -> PromotionEvidence:
-    defaults = dict(
-        strategy_key="momentum_continuation", training_sample_count=1000, min_required_samples=500,
-        uses_causal_features=True, temporal_purged_split_verified=True, walk_forward_verified=True,
-        oos_untouched=True, realistic_costs_applied=True, calibration_checked=True,
-        subgroup_stability_checked=True, artifact_checksum="abc123", rollback_target_available=True,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "training_sample_count": 1000, "min_required_samples": 500,
+        "uses_causal_features": True, "temporal_purged_split_verified": True, "walk_forward_verified": True,
+        "oos_untouched": True, "realistic_costs_applied": True, "calibration_checked": True,
+        "subgroup_stability_checked": True, "artifact_checksum": "abc123", "rollback_target_available": True,
+    }
     defaults.update(overrides)
     return PromotionEvidence(**defaults)
 

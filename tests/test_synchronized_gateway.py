@@ -50,7 +50,6 @@ class _ConcurrencyProbeGateway:
         time.sleep(0.01)
         with self._guard:
             self._active -= 1
-        return None
 
     def last_error(self):
         return (1, "Success")

@@ -76,11 +76,14 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from adaptive_scalper.core.final_permission import ALLOW as _PERMISSION_ALLOW
-from adaptive_scalper.core.final_permission import FinalPermissionInput, evaluate_and_journal_final_permission
+from adaptive_scalper.core.final_permission import (
+    FinalPermissionInput,
+    evaluate_and_journal_final_permission,
+)
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.core.permission import ActionKind, evaluate_kill_switch_permission
 from adaptive_scalper.execution.entry_fills import record_entry_fills
@@ -387,7 +390,7 @@ def submit_new_entry(
 
     try:
         check = gateway.order_check(request)
-    except Exception as exc:  # transport failure BEFORE anything was sent: blocked, never retried blindly
+    except Exception as exc:  # noqa: BLE001 - transport failure BEFORE anything was sent: blocked, never retried blindly
         check = None
         detail = f"order_check raised {type(exc).__name__}: {exc} -- nothing was sent"
     if check is None or check.retcode not in order_check_success_retcodes:
@@ -452,7 +455,7 @@ def submit_new_entry(
 
     try:
         recheck = gateway.order_check(request)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - pre-send recheck failure: nothing was sent, BLOCKED
         return SubmissionOutcome(
             BLOCKED_BROKER_CONSTRAINT, order,
             f"pre-send order_check recheck raised {type(exc).__name__}: {exc} -- nothing was sent",
@@ -477,7 +480,7 @@ def submit_new_entry(
 
     try:
         result = gateway.order_send(request)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - order_send may have reached the broker: UNKNOWN, never resent
         # The request may or may not have reached the broker. That is
         # exactly directive section 30's UNKNOWN: never resent, new
         # exposure blocked (UNKNOWN_OUTCOME incident) until broker truth
@@ -579,7 +582,7 @@ def submit_new_entry(
                 gateway, broker_deal_id=result.broker_deal_id, broker_order_id=result.broker_order_id,
                 window_from_utc=now - history_window_seconds, window_to_utc=now + history_window_seconds,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - post-send broker truth failed: order held UNKNOWN
             return _unknown_after_postsend_truth_failure(
                 conn, order, chain_key=chain_key, canonical_symbol=canonical_symbol, exc=exc,
                 context="partial-fill broker-truth resolution", now_utc=now,
@@ -656,7 +659,7 @@ def submit_new_entry(
             gateway, broker_deal_id=result.broker_deal_id, broker_order_id=result.broker_order_id,
             window_from_utc=now - history_window_seconds, window_to_utc=now + history_window_seconds,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - post-send broker truth failed: order held UNKNOWN
         return _unknown_after_postsend_truth_failure(
             conn, order, chain_key=chain_key, canonical_symbol=canonical_symbol, exc=exc,
             context="accepted-order broker-truth resolution", now_utc=now,

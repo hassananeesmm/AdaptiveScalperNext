@@ -118,7 +118,7 @@ class EdgeEvidence:
     def from_certificate(
         cls, certificate: ValidationCertificate, probability: CalibratedWinProbability, *, stop_distance_price: float,
         model_artifact: bytes, calibrator_artifact: bytes,
-    ) -> "EdgeEvidence":
+    ) -> EdgeEvidence:
         return cls(_ev_price(probability.value, certificate, stop_distance_price), EVIDENCE_VALIDATED,
                    certificate.model_id, probability, certificate, stop_distance_price, model_artifact,
                    calibrator_artifact)

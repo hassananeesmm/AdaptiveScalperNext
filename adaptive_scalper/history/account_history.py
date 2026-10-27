@@ -14,7 +14,11 @@ from __future__ import annotations
 import sqlite3
 
 from adaptive_scalper.gateway.protocol import Gateway
-from adaptive_scalper.gateway.types import AccountSnapshot, HistoricalDeal, HistoricalOrder
+from adaptive_scalper.gateway.types import (
+    AccountSnapshot,
+    HistoricalDeal,
+    HistoricalOrder,
+)
 
 ORIGIN = "BROKER_ACCOUNT_HISTORY"
 UNKNOWN_STRATEGY = "UNKNOWN"

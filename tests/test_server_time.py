@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from adaptive_scalper.gateway.server_time import (
     INCONCLUSIVE,
@@ -25,7 +26,7 @@ H = 3600
 
 
 def utc(*args) -> int:
-    return int(datetime(*args, tzinfo=timezone.utc).timestamp())
+    return int(datetime(*args, tzinfo=UTC).timestamp())
 
 
 def test_the_laptop_measurement_is_reproduced():
@@ -54,8 +55,8 @@ def test_fx_week_close_is_midnight_server_time_in_both_seasons():
     # 17:00 New York on a Friday = 00:00 server under the New-York-close clock.
     summer_close = utc(2026, 9, 18, 21)   # 17:00 EDT
     winter_close = utc(2026, 1, 16, 22)   # 17:00 EST
-    assert datetime.fromtimestamp(utc_to_server(RULE_UTC2_US_DST, summer_close), tz=timezone.utc).hour == 0
-    assert datetime.fromtimestamp(utc_to_server(RULE_UTC2_US_DST, winter_close), tz=timezone.utc).hour == 0
+    assert datetime.fromtimestamp(utc_to_server(RULE_UTC2_US_DST, summer_close), tz=UTC).hour == 0
+    assert datetime.fromtimestamp(utc_to_server(RULE_UTC2_US_DST, winter_close), tz=UTC).hour == 0
 
 
 def test_round_trip_is_exact_except_the_repeated_autumn_server_hour():
@@ -106,7 +107,7 @@ def test_config_validates_the_rule_and_default_toml_names_the_measured_broker_cl
     from adaptive_scalper.config.loader import AppConfig, load_config
 
     assert AppConfig().mt5.server_time_rule == RULE_UTC
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         AppConfig.model_validate({"mt5": {"server_time_rule": "UTC+3"}})
     assert load_config("config/default.toml").mt5.server_time_rule == RULE_UTC2_US_DST
 

@@ -15,6 +15,7 @@ import json
 import sqlite3
 
 import pytest
+from test_close_unknown_durability import MAGIC, NOW, _close, _done, _setup
 
 from adaptive_scalper.costs.observations import (
     EXIT_SETTLE_HORIZON_SECONDS,
@@ -27,7 +28,6 @@ from adaptive_scalper.execution.close import FULLY_CLOSED
 from adaptive_scalper.execution.reconciliation import run_reconciliation
 from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
 from adaptive_scalper.persistence import connect, migrate
-from test_close_unknown_durability import MAGIC, NOW, _close, _done, _setup
 
 T0 = 1_000_000
 

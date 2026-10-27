@@ -62,11 +62,17 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from adaptive_scalper.config.constants import ALLOWED_CANONICAL_SYMBOLS, ALLOWED_MODES, RETIRED_STRATEGY_KEYS
+from adaptive_scalper.config.constants import (
+    ALLOWED_CANONICAL_SYMBOLS,
+    ALLOWED_MODES,
+    RETIRED_STRATEGY_KEYS,
+)
 from adaptive_scalper.core.kill_switch import KillSwitchState
 from adaptive_scalper.core.permission import ActionKind, evaluate_kill_switch_permission
 from adaptive_scalper.costs.edge import ALLOW as _COST_ALLOW
-from adaptive_scalper.costs.edge import BLOCK_EDGE_UNVALIDATED as _COST_BLOCK_EDGE_UNVALIDATED
+from adaptive_scalper.costs.edge import (
+    BLOCK_EDGE_UNVALIDATED as _COST_BLOCK_EDGE_UNVALIDATED,
+)
 from adaptive_scalper.costs.edge import evaluate_cost_gate, executable_edge_check
 from adaptive_scalper.costs.edge_evidence import EdgeEvidence
 from adaptive_scalper.costs.model import CostEstimate
@@ -82,9 +88,16 @@ from adaptive_scalper.journal.events import append_event
 from adaptive_scalper.news.blocking import ALLOW as _NEWS_ALLOW
 from adaptive_scalper.news.blocking import NewsBlockResult
 from adaptive_scalper.portfolio.correlation import ALLOW as _CORRELATION_ALLOW
-from adaptive_scalper.portfolio.correlation import CorrelationResult, evaluate_correlation_gate
+from adaptive_scalper.portfolio.correlation import (
+    CorrelationResult,
+    evaluate_correlation_gate,
+)
 from adaptive_scalper.portfolio.exposure import ALLOW as _PORTFOLIO_RISK_ALLOW
-from adaptive_scalper.portfolio.exposure import PortfolioRiskLimits, PositionExposure, evaluate_portfolio_risk_gate
+from adaptive_scalper.portfolio.exposure import (
+    PortfolioRiskLimits,
+    PositionExposure,
+    evaluate_portfolio_risk_gate,
+)
 from adaptive_scalper.risk.entry_regime import adx_entry_block
 from adaptive_scalper.risk.entry_window import entry_window_block
 from adaptive_scalper.risk.governor import ALLOW as _RISK_ALLOW

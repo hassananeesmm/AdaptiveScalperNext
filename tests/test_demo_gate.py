@@ -18,20 +18,20 @@ from adaptive_scalper.gateway.types import AccountSnapshot, TerminalSnapshot, Tr
 
 
 def _account(**overrides) -> AccountSnapshot:
-    defaults = dict(
-        login=12345, trade_mode=TradeMode.DEMO, balance=10000.0, equity=10000.0,
-        margin_free=10000.0, currency="USD", server="Broker-Demo", company="Broker Ltd",
-        trade_allowed=True, trade_expert=True,
-    )
+    defaults = {
+        "login": 12345, "trade_mode": TradeMode.DEMO, "balance": 10000.0, "equity": 10000.0,
+        "margin_free": 10000.0, "currency": "USD", "server": "Broker-Demo", "company": "Broker Ltd",
+        "trade_allowed": True, "trade_expert": True,
+    }
     defaults.update(overrides)
     return AccountSnapshot(**defaults)
 
 
 def _terminal(**overrides) -> TerminalSnapshot:
-    defaults = dict(
-        connected=True, trade_allowed=True, build=4000, name="MetaTrader 5",
-        company="Broker Ltd", path=r"C:\MT5",
-    )
+    defaults = {
+        "connected": True, "trade_allowed": True, "build": 4000, "name": "MetaTrader 5",
+        "company": "Broker Ltd", "path": r"C:\MT5",
+    }
     defaults.update(overrides)
     return TerminalSnapshot(**defaults)
 

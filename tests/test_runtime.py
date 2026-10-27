@@ -10,6 +10,18 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from chaos_harness import demo_account
+from edge_fixtures import TEST_PUBLIC_KEY, FixtureValidatedProvider
+from runtime_helpers import (
+    STEP,
+    T0,
+    FakeClock,
+    LiveMarketGateway,
+    StaticNewsProvider,
+    build_engine,
+    default_market,
+    step,
+)
 
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
@@ -21,9 +33,6 @@ from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.runtime.engine import RuntimeComponents, RuntimeStartupError
 from adaptive_scalper.runtime.scheduler import Scheduler
 from adaptive_scalper.runtime.state import get_state
-from chaos_harness import demo_account
-from edge_fixtures import TEST_PUBLIC_KEY, FixtureValidatedProvider
-from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, StaticNewsProvider, build_engine, default_market, step
 
 START_AT = T0 + 60 * STEP + 10  # 60 closed bars already exist
 
@@ -83,7 +92,7 @@ def test_startup_refuses_quotes_in_the_future_under_the_server_time_rule(tmp_pat
 
 def test_startup_records_a_verified_server_clock(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock)
+    engine, _conn, _ = build_engine(tmp_path, mode="PAPER", clock=clock)
     assert engine.startup()["server_clock"] == "VERIFIED"
 
 
@@ -240,7 +249,7 @@ def test_demo_account_switching_to_real_mid_run_blocks_every_broker_mutation(tmp
 
 def test_demo_kill_switch_engaged_mid_run_blocks_entries_but_keeps_managing(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
+    engine, conn, _gateway = build_engine(tmp_path, mode="DEMO", clock=clock, edge_evidence=FixtureValidatedProvider())
     _operator_bootstrap(conn)
     engine.startup()
     step(engine, clock, seconds=STEP * 3, tick=4)
@@ -291,7 +300,7 @@ def _execution_outcomes(tmp_path, components):
 def test_rag_ml_and_okf_failures_degrade_advisory_context_but_never_change_decisions(tmp_path):
     healthy, _, _ = _execution_outcomes(tmp_path / "a", RuntimeComponents(edge_evidence=FixtureValidatedProvider(), certificate_public_key=TEST_PUBLIC_KEY))
     broken = _Broken()
-    degraded, conn, engine = _execution_outcomes(
+    degraded, conn, _engine = _execution_outcomes(
         tmp_path / "b", RuntimeComponents(rag=broken, observer=broken, okf=broken, edge_evidence=FixtureValidatedProvider(),
                           certificate_public_key=TEST_PUBLIC_KEY),
     )
@@ -360,7 +369,7 @@ def test_startup_clears_a_previous_runs_stale_global_block_diagnostics(tmp_path)
     from adaptive_scalper.runtime.state import record_event
 
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
+    engine, conn, _gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
     _operator_bootstrap(conn)
     record_event(conn, "BLOCKED", "entry", "GLOBAL_BLOCK", "BLOCK_KILL_SWITCH: kill switch ENGAGED",
                  dedup_key="paper:global_block", now_utc=START_AT - 86400)

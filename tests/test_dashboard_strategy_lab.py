@@ -81,7 +81,7 @@ def test_all_four_panels_are_ok_and_empty_on_a_fresh_database(tmp_path):
 def test_retired_strategies_are_never_shown_as_registered_even_with_evidence(tmp_path):
     conn = _database(tmp_path)
     now = 1_700_000_000
-    retired_key = sorted(RETIRED_STRATEGY_KEYS)[0]
+    retired_key = min(RETIRED_STRATEGY_KEYS)
     append_event(conn, "hist:1", "SIGNAL_CREATED", now - 100, "BTCUSD",
                  {"direction": "BUY"}, strategy_key=retired_key)
     conn.commit()

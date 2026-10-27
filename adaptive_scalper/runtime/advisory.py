@@ -35,7 +35,7 @@ def safe_rag_record(rag, conn: sqlite3.Connection, memory_type: str, text: str, 
         return None
     try:
         return rag.record(conn, memory_type, text, metadata, **kwargs)
-    except Exception:
+    except Exception:  # noqa: BLE001 - advisory memory write is best-effort; failure returns None
         return None
 
 
@@ -71,7 +71,7 @@ class AdvisoryPanel:
                     for m in result.matches
                 ],
             })
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - advisory source failure reported as DEGRADED
             return AdvisoryEvidence("RAG", DEGRADED, {"detail": f"{type(exc).__name__}: {exc}"})
 
     def _observer(self, conn, symbol, features) -> AdvisoryEvidence:
@@ -84,7 +84,7 @@ class AdvisoryPanel:
                 "lifecycle_state": score.lifecycle_state, "probability": score.probability,
                 "influence": score.influence, "detail": score.detail,
             })
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - advisory source failure reported as DEGRADED
             return AdvisoryEvidence("ML_OBSERVER", DEGRADED, {"detail": f"{type(exc).__name__}: {exc}"})
 
     def _okf(self, symbol, strategy_key) -> AdvisoryEvidence:
@@ -92,5 +92,5 @@ class AdvisoryPanel:
             return AdvisoryEvidence("OKF", NOT_CONFIGURED)
         try:
             return AdvisoryEvidence("OKF", OK, self.okf.advise(canonical_symbol=symbol, strategy_key=strategy_key))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - advisory source failure reported as DEGRADED
             return AdvisoryEvidence("OKF", DEGRADED, {"detail": f"{type(exc).__name__}: {exc}"})

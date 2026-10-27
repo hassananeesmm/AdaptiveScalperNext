@@ -29,11 +29,11 @@ def db(tmp_path):
 
 
 def _deal(**overrides) -> HistoricalDeal:
-    defaults = dict(
-        ticket=500, order=100, time=1000, type=0, entry=0, magic=7, position_id=900,
-        volume=0.05, price=2000.0, commission=-0.5, swap=0.0, profit=0.0, fee=-0.1,
-        symbol="XAUUSDm", comment="ASN:abc", external_id="",
-    )
+    defaults = {
+        "ticket": 500, "order": 100, "time": 1000, "type": 0, "entry": 0, "magic": 7, "position_id": 900,
+        "volume": 0.05, "price": 2000.0, "commission": -0.5, "swap": 0.0, "profit": 0.0, "fee": -0.1,
+        "symbol": "XAUUSDm", "comment": "ASN:abc", "external_id": "",
+    }
     defaults.update(overrides)
     return HistoricalDeal(**defaults)
 

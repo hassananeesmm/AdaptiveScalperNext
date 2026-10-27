@@ -15,8 +15,17 @@ import time
 from dataclasses import dataclass, field
 
 from adaptive_scalper.news.provider import EconomicCalendarProvider
-from adaptive_scalper.news.providers.cache import CacheProvider, persist_events, record_provider_attempt
-from adaptive_scalper.news.types import EconomicEvent, Impact, ProviderError, ProviderHealth
+from adaptive_scalper.news.providers.cache import (
+    CacheProvider,
+    persist_events,
+    record_provider_attempt,
+)
+from adaptive_scalper.news.types import (
+    EconomicEvent,
+    Impact,
+    ProviderError,
+    ProviderHealth,
+)
 
 DEFAULT_CONFLICT_THRESHOLD_SECONDS = 300
 

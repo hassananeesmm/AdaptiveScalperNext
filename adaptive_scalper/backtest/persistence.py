@@ -14,7 +14,11 @@ import json
 import sqlite3
 import time
 
-from adaptive_scalper.backtest.dataset import build_dataset_snapshot, record_dataset, record_dataset_usage
+from adaptive_scalper.backtest.dataset import (
+    build_dataset_snapshot,
+    record_dataset,
+    record_dataset_usage,
+)
 from adaptive_scalper.backtest.types import BacktestResult, SimulatedTrade
 from adaptive_scalper.gateway.types import Bar
 

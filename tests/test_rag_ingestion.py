@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 
 import pytest
+from edge_fixtures import FixtureValidatedProvider
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
@@ -25,8 +27,6 @@ from adaptive_scalper.rag.service import RagService
 from adaptive_scalper.rag.store import store_memory
 from adaptive_scalper.research.ledger import record_trial
 from adaptive_scalper.runtime.state import record_event, record_position_entry_context
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
-from edge_fixtures import FixtureValidatedProvider
 
 NOW = 1_800_000_000
 

@@ -11,8 +11,8 @@ runs, so a failing scanner can never starve position management.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 
 @dataclass
@@ -55,7 +55,7 @@ class Scheduler:
             try:
                 task.run()
                 task.last_error = None
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - task failure counted and surfaced via on_error
                 task.failures += 1
                 task.last_error = f"{type(exc).__name__}: {exc}"
                 if self.on_error is not None:

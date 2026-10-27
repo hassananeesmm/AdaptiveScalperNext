@@ -9,6 +9,9 @@ value's age.
 
 from __future__ import annotations
 
+from chaos_harness import raise_
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
@@ -18,8 +21,6 @@ from adaptive_scalper.runtime.demo import (
     RECONCILIATION_ERROR,
 )
 from adaptive_scalper.runtime.state import get_state, put_state
-from chaos_harness import raise_
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 START_AT = T0 + 60 * STEP + 10
 
@@ -80,6 +81,6 @@ def test_stale_clean_reconciliation_blocks_new_entries(tmp_path):
 
 
 def test_fresh_clean_reconciliation_does_not_block(tmp_path):
-    clock, engine, conn, gateway = _started(tmp_path)
+    clock, engine, conn, _gateway = _started(tmp_path)
     step(engine, clock, seconds=STEP * 4, tick=4)
     assert _reconciliation_blocks(conn) == []

@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from adaptive_scalper.costs.model import price_equivalent_of_monetary_cost
 from adaptive_scalper.gateway.types import Bar
 
-
 # Bumped whenever a fill/cost convention changes, so persisted simulated
 # trades always say which convention produced them. v2: next-bar-open
 # exits, entry-bar SL/TP, bid/ask triggers, gap-through stops, costs

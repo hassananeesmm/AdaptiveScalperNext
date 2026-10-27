@@ -26,7 +26,10 @@ from adaptive_scalper.position_management.manager import (
     _review_chain_key,
     review_position_once,
 )
-from adaptive_scalper.position_management.state_store import get_state, has_unresolved_risk_incident
+from adaptive_scalper.position_management.state_store import (
+    get_state,
+    has_unresolved_risk_incident,
+)
 
 
 @pytest.fixture()
@@ -38,27 +41,27 @@ def db(tmp_path):
 
 
 def _demo_account(**overrides) -> AccountSnapshot:
-    defaults = dict(
-        login=123, trade_mode=TradeMode.DEMO, balance=10000.0, equity=10000.0, margin_free=10000.0,
-        currency="USD", server="ICMarketsSC-Demo", company="IC Markets", trade_allowed=True, trade_expert=True,
-    )
+    defaults = {
+        "login": 123, "trade_mode": TradeMode.DEMO, "balance": 10000.0, "equity": 10000.0, "margin_free": 10000.0,
+        "currency": "USD", "server": "ICMarketsSC-Demo", "company": "IC Markets", "trade_allowed": True, "trade_expert": True,
+    }
     defaults.update(overrides)
     return AccountSnapshot(**defaults)
 
 
 def _demo_terminal(**overrides) -> TerminalSnapshot:
-    defaults = dict(connected=True, trade_allowed=True, build=1000, name="MT5", company="MetaQuotes", path="")
+    defaults = {"connected": True, "trade_allowed": True, "build": 1000, "name": "MT5", "company": "MetaQuotes", "path": ""}
     defaults.update(overrides)
     return TerminalSnapshot(**defaults)
 
 
 def _symbol_spec(**overrides) -> SymbolSpec:
-    defaults = dict(
-        name="XAUUSDm", description="Gold", currency_base="XAU", currency_profit="USD", currency_margin="USD",
-        digits=2, point=0.01, trade_contract_size=100.0, volume_min=0.01, volume_max=50.0, volume_step=0.01,
-        trade_tick_size=0.01, trade_tick_value=1.0, spread=20, visible=True,
-        trade_mode=SymbolTradeMode.FULL, filling_mode=3, trade_stops_level=0, trade_freeze_level=0,
-    )
+    defaults = {
+        "name": "XAUUSDm", "description": "Gold", "currency_base": "XAU", "currency_profit": "USD", "currency_margin": "USD",
+        "digits": 2, "point": 0.01, "trade_contract_size": 100.0, "volume_min": 0.01, "volume_max": 50.0, "volume_step": 0.01,
+        "trade_tick_size": 0.01, "trade_tick_value": 1.0, "spread": 20, "visible": True,
+        "trade_mode": SymbolTradeMode.FULL, "filling_mode": 3, "trade_stops_level": 0, "trade_freeze_level": 0,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 
@@ -67,10 +70,10 @@ def _demo_gateway(bid: float = 2000.0, ask: float = 2000.20, tick_time: int = 10
     # tick_time matches the now_utc most tests pass to review_position_once()
     # (1010) so the execution-quote-freshness check stop_modification.py
     # now performs (external review finding #3) sees a fresh quote.
-    defaults = dict(
-        account=_demo_account(), terminal=_demo_terminal(), symbols=[_symbol_spec()],
-        ticks={"XAUUSDm": Tick(time=tick_time, bid=bid, ask=ask, last=bid, volume=1.0)},
-    )
+    defaults = {
+        "account": _demo_account(), "terminal": _demo_terminal(), "symbols": [_symbol_spec()],
+        "ticks": {"XAUUSDm": Tick(time=tick_time, bid=bid, ask=ask, last=bid, volume=1.0)},
+    }
     defaults.update(gw_overrides)
     return FakeGateway(**defaults)
 
@@ -82,11 +85,11 @@ def _open_position(gw: FakeGateway, direction: str = "BUY", volume: float = 0.05
 
 
 def _insert_local_position(conn, broker_position_id: str, **overrides) -> int:
-    row = dict(
-        broker_position_id=broker_position_id, canonical_symbol="XAUUSD", direction="BUY", volume=0.05,
-        entry_price=2000.0, initial_monetary_risk=20.0, strategy_key="momentum_continuation",
-        status="OPEN", opened_at_utc=1000,
-    )
+    row = {
+        "broker_position_id": broker_position_id, "canonical_symbol": "XAUUSD", "direction": "BUY", "volume": 0.05,
+        "entry_price": 2000.0, "initial_monetary_risk": 20.0, "strategy_key": "momentum_continuation",
+        "status": "OPEN", "opened_at_utc": 1000,
+    }
     row.update(overrides)
     cursor = conn.execute(
         """
@@ -103,13 +106,13 @@ def _insert_local_position(conn, broker_position_id: str, **overrides) -> int:
 
 
 def _base_input(position_id, ticket, **overrides) -> PositionReviewInput:
-    defaults = dict(
-        position_id=position_id, broker_position_id=ticket, canonical_symbol="XAUUSD", broker_symbol="XAUUSDm",
-        direction="BUY", volume=0.05, entry_price=2000.0, initial_stop_distance_price=10.0,
-        initial_monetary_risk=20.0, unrealized_pnl=0.0, entry_regime="TRENDING_UP", current_regime="TRENDING_UP",
-        strategy_setup_still_valid=True, current_net_edge_price=0.5, min_required_edge_price=0.1,
-        holding_seconds=10,
-    )
+    defaults = {
+        "position_id": position_id, "broker_position_id": ticket, "canonical_symbol": "XAUUSD", "broker_symbol": "XAUUSDm",
+        "direction": "BUY", "volume": 0.05, "entry_price": 2000.0, "initial_stop_distance_price": 10.0,
+        "initial_monetary_risk": 20.0, "unrealized_pnl": 0.0, "entry_regime": "TRENDING_UP", "current_regime": "TRENDING_UP",
+        "strategy_setup_still_valid": True, "current_net_edge_price": 0.5, "min_required_edge_price": 0.1,
+        "holding_seconds": 10,
+    }
     defaults.update(overrides)
     return PositionReviewInput(**defaults)
 
@@ -452,15 +455,19 @@ def _reviewed(db, position_id):
 
 
 def test_an_unchanged_hold_is_journaled_at_most_once_per_heartbeat(db):
-    from adaptive_scalper.position_management.manager import REVIEW_JOURNAL_HEARTBEAT_SECONDS
-    from adaptive_scalper.position_management.state_store import get_state as get_pm_state
+    from adaptive_scalper.position_management.manager import (
+        REVIEW_JOURNAL_HEARTBEAT_SECONDS,
+    )
+    from adaptive_scalper.position_management.state_store import (
+        get_state as get_pm_state,
+    )
 
     gw = _demo_gateway()
     ticket = _open_position(gw)
     position_id = _insert_local_position(db, ticket)
     for now in range(1010, 1010 + 30):  # one review per second
         review_position_once(db, gw, _base_input(position_id, ticket, unrealized_pnl=2.0), now_utc=now,
-                             clock=lambda: float(now))
+                             clock=lambda now=now: float(now))
     assert len(_reviewed(db, position_id)) == 1
     assert get_pm_state(db, position_id).last_review_at_utc == 1039  # every review still recorded in state
     later = 1010 + REVIEW_JOURNAL_HEARTBEAT_SECONDS

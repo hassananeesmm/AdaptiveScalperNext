@@ -26,7 +26,11 @@ from adaptive_scalper.execution.reconciliation import (
 )
 from adaptive_scalper.gateway.fake_gateway import FakeGateway
 from adaptive_scalper.gateway.mt5_gateway import _pending_order_snapshot
-from adaptive_scalper.gateway.types import HistoricalDeal, PendingOrderSnapshot, PositionSnapshot
+from adaptive_scalper.gateway.types import (
+    HistoricalDeal,
+    PendingOrderSnapshot,
+    PositionSnapshot,
+)
 from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.persistence import connect, migrate
 
@@ -43,17 +47,17 @@ def db(tmp_path):
 
 
 def _position(**overrides) -> LocalPositionRecord:
-    base = dict(id=1, broker_position_id="1966991469", canonical_symbol="XAUUSD", direction="BUY", volume=0.05,
-                entry_price=4270.0, initial_monetary_risk=23.5, strategy_key="microstructure_acceleration",
-                opened_at_utc=NOW - 600)
+    base = {"id": 1, "broker_position_id": "1966991469", "canonical_symbol": "XAUUSD", "direction": "BUY", "volume": 0.05,
+                "entry_price": 4270.0, "initial_monetary_risk": 23.5, "strategy_key": "microstructure_acceleration",
+                "opened_at_utc": NOW - 600}
     base.update(overrides)
     return LocalPositionRecord(**base)
 
 
 def _sl_order(**overrides) -> PendingOrderSnapshot:
     """The live pattern: MARKET SELL closing our BUY, our magic, broker comment."""
-    base = dict(broker_order_id="1966998439", symbol="XAUUSD", direction="SELL", volume=0.05, price=4265.17,
-                magic=MAGIC, comment="[sl 4265.17]", order_type=1, position_id="1966991469", time_setup_utc=NOW)
+    base = {"broker_order_id": "1966998439", "symbol": "XAUUSD", "direction": "SELL", "volume": 0.05, "price": 4265.17,
+                "magic": MAGIC, "comment": "[sl 4265.17]", "order_type": 1, "position_id": "1966991469", "time_setup_utc": NOW}
     base.update(overrides)
     return PendingOrderSnapshot(**base)
 
@@ -80,21 +84,21 @@ def test_a_short_sell_position_closed_by_a_buy_is_also_recognised():
 
 
 @pytest.mark.parametrize("case,overrides", [
-    ("pending order type (BUY_LIMIT)", dict(order_type=2)),
-    ("pending order type (SELL_STOP)", dict(order_type=5)),
-    ("order type not reported", dict(order_type=None)),
-    ("not one of our open positions", dict(position_id="999")),
-    ("no position id", dict(position_id=None)),
-    ("same direction as the position (adds exposure)", dict(direction="BUY", order_type=0)),
-    ("volume larger than the position", dict(volume=0.06)),
-    ("another expert's magic", dict(magic=770115)),
-    ("manual close (magic 0)", dict(magic=0)),
-    ("no broker comment", dict(comment="")),
-    ("stop-out is not a protective SL/TP", dict(comment="[so 50.00%]")),
-    ("our own close request", dict(comment="ASN exit")),
-    ("creation time not reported", dict(time_setup_utc=None)),
-    ("older than the grace window", dict(time_setup_utc=NOW - PROTECTIVE_CLOSE_GRACE_SECONDS - 1)),
-    ("implausibly in the future", dict(time_setup_utc=NOW + 6)),
+    ("pending order type (BUY_LIMIT)", {"order_type": 2}),
+    ("pending order type (SELL_STOP)", {"order_type": 5}),
+    ("order type not reported", {"order_type": None}),
+    ("not one of our open positions", {"position_id": "999"}),
+    ("no position id", {"position_id": None}),
+    ("same direction as the position (adds exposure)", {"direction": "BUY", "order_type": 0}),
+    ("volume larger than the position", {"volume": 0.06}),
+    ("another expert's magic", {"magic": 770115}),
+    ("manual close (magic 0)", {"magic": 0}),
+    ("no broker comment", {"comment": ""}),
+    ("stop-out is not a protective SL/TP", {"comment": "[so 50.00%]"}),
+    ("our own close request", {"comment": "ASN exit"}),
+    ("creation time not reported", {"time_setup_utc": None}),
+    ("older than the grace window", {"time_setup_utc": NOW - PROTECTIVE_CLOSE_GRACE_SECONDS - 1}),
+    ("implausibly in the future", {"time_setup_utc": NOW + 6}),
 ])
 def test_every_condition_is_required_otherwise_it_stays_a_blocking_orphan(case, overrides):
     assert _classify(_sl_order(**overrides)) == ORPHAN_BROKER_ORDER, case
@@ -210,8 +214,8 @@ def test_the_live_race_position_already_gone_is_recovered_not_blocked(db):
 # ---------------------------------------------------------------------------
 
 def _raw_order(**overrides):
-    base = dict(ticket=1966998439, symbol="XAUUSD", type=1, volume_current=0.05, price_open=4265.17, magic=MAGIC,
-                comment="[sl 4265.17]", position_id=1966991469, time_setup=NOW)
+    base = {"ticket": 1966998439, "symbol": "XAUUSD", "type": 1, "volume_current": 0.05, "price_open": 4265.17, "magic": MAGIC,
+                "comment": "[sl 4265.17]", "position_id": 1966991469, "time_setup": NOW}
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -235,7 +239,7 @@ def test_the_demo_pre_send_check_treats_the_protective_close_as_clean(tmp_path):
     from runtime_helpers import STEP, step
     from test_multi_position import _start
 
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, _conn, gateway, clock, stub = _start(tmp_path)
     stub.fire = {"XAUUSD": "BUY"}
     step(engine, clock, seconds=STEP, tick=4)
     broker = next(p for p in gateway.positions_get() if p.symbol == "XAUUSD")

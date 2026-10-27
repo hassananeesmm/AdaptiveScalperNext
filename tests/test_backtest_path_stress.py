@@ -5,17 +5,16 @@ from __future__ import annotations
 import pytest
 
 from adaptive_scalper.backtest.path_stress import run_trade_order_path_stress
-from adaptive_scalper.backtest.types import TRADE_ORDER_PATH_STRESS
-from adaptive_scalper.backtest.types import SimulatedTrade
+from adaptive_scalper.backtest.types import TRADE_ORDER_PATH_STRESS, SimulatedTrade
 
 
 def _trade(pnl: float, **overrides) -> SimulatedTrade:
-    defaults = dict(
-        strategy_key="momentum_continuation", direction="BUY", entry_time_utc=1000, entry_price=2000.0,
-        volume=0.1, initial_monetary_risk=20.0, entry_regime="TRENDING_UP", exit_time_utc=1100,
-        exit_price=2005.0, exit_reason="TAKE_PROFIT_HIT", exit_regime="TRENDING_UP", realized_r=pnl / 20.0,
-        realized_pnl=pnl, total_cost=0.5,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "direction": "BUY", "entry_time_utc": 1000, "entry_price": 2000.0,
+        "volume": 0.1, "initial_monetary_risk": 20.0, "entry_regime": "TRENDING_UP", "exit_time_utc": 1100,
+        "exit_price": 2005.0, "exit_reason": "TAKE_PROFIT_HIT", "exit_regime": "TRENDING_UP", "realized_r": pnl / 20.0,
+        "realized_pnl": pnl, "total_cost": 0.5,
+    }
     defaults.update(overrides)
     return SimulatedTrade(**defaults)
 

@@ -105,7 +105,7 @@ class RiskConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _per_trade_cannot_exceed_total(self) -> "RiskConfig":
+    def _per_trade_cannot_exceed_total(self) -> RiskConfig:
         if self.risk_per_trade_pct > self.max_total_open_risk_pct:
             raise ValueError(
                 "risk_per_trade_pct cannot exceed max_total_open_risk_pct "
@@ -153,7 +153,7 @@ class EntryWindowConfig(BaseModel):
     end_hour_utc: int = 24
 
     @model_validator(mode="after")
-    def _valid_window(self) -> "EntryWindowConfig":
+    def _valid_window(self) -> EntryWindowConfig:
         if not (0 <= self.start_hour_utc < self.end_hour_utc <= 24):
             raise ValueError(
                 f"entry_window needs 0 <= start_hour_utc < end_hour_utc <= 24, got "
@@ -247,7 +247,7 @@ class MicrostructureConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _window_and_bands(self) -> "MicrostructureConfig":
+    def _window_and_bands(self) -> MicrostructureConfig:
         from adaptive_scalper.history.resolutions import resolution_seconds
         if self.vwap_window_minutes * 60 < resolution_seconds(self.vwap_resolution):
             raise ValueError("microstructure.vwap_window_minutes is shorter than one vwap_resolution bar")
@@ -366,7 +366,7 @@ class RuntimeConfig(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _sane_cadences(self) -> "RuntimeConfig":
+    def _sane_cadences(self) -> RuntimeConfig:
         if not (0.2 <= self.position_cycle_seconds <= 10):
             raise ValueError("position_cycle_seconds must be in [0.2, 10]")
         if not (1 <= self.entry_cycle_seconds <= 60):

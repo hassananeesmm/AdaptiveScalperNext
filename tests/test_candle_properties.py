@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 from adaptive_scalper.config.loader import MicrostructureConfig, load_config
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
@@ -23,7 +24,6 @@ from adaptive_scalper.features.ema import ema_last
 from adaptive_scalper.gateway.types import Bar
 from adaptive_scalper.runtime import microstructure as micro
 from adaptive_scalper.runtime.state import get_state
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

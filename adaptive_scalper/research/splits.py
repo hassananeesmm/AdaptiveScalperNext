@@ -20,7 +20,7 @@ groups are contiguous blocks, never a shuffle.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import combinations
+from itertools import combinations, pairwise
 from math import comb
 
 
@@ -44,7 +44,7 @@ class Split:
 
 
 def _check_sorted(intervals: list[LabelInterval]) -> None:
-    for a, b in zip(intervals, intervals[1:]):
+    for a, b in pairwise(intervals):
         if b.start_utc < a.start_utc:
             raise ValueError("label intervals must be sorted by start_utc (time order, never shuffled)")
 

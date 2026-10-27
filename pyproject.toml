@@ -12,3 +12,23 @@ requires-python = ">=3.13,<3.14"
 # location) — a [tool.pytest.ini_options] section here would be silently
 # ignored in favor of it (pytest warns about the conflict), so it's
 # deliberately not duplicated.
+
+[tool.ruff.lint.flake8-bugbear]
+# Frozen dataclasses with immutable fields only: safe to construct once as
+# argument defaults.
+extend-immutable-calls = [
+    "adaptive_scalper.backtest.types.BacktestConfig",
+    "adaptive_scalper.position_management.adaptive_exit.AdaptiveExitParams",
+    "adaptive_scalper.position_management.re_entry.ReentryParams",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# V1 decision sources are byte-frozen: tests/test_v1_strategy_freeze.py pins
+# their SHA-256, so import re-sorting must never touch them. Only I001 is
+# waived; every other rule still applies.
+"adaptive_scalper/selector/selector.py" = ["I001"]
+"adaptive_scalper/strategies/__init__.py" = ["I001"]
+"adaptive_scalper/strategies/microstructure_acceleration.py" = ["I001"]
+"adaptive_scalper/strategies/momentum_continuation.py" = ["I001"]
+"adaptive_scalper/strategies/pullback_continuation.py" = ["I001"]
+"adaptive_scalper/strategies/volatility_expansion.py" = ["I001"]

@@ -28,13 +28,13 @@ def _event(
     title="Some Event", currency="USD", impact=Impact.HIGH, scheduled_at_utc=BASE_TIME,
     normalized_event_type=None, **overrides,
 ) -> EconomicEvent:
-    defaults = dict(
-        event_id="evt-1", provider="test", provider_event_id=None,
-        scheduled_at_utc=scheduled_at_utc, country=currency or "", currency=currency,
-        title=title, normalized_event_type=normalized_event_type, impact=impact,
-        actual=None, forecast=None, previous=None, retrieved_at_utc=BASE_TIME,
-        source_reliability="TEST", revision=0, source_identifier="test",
-    )
+    defaults = {
+        "event_id": "evt-1", "provider": "test", "provider_event_id": None,
+        "scheduled_at_utc": scheduled_at_utc, "country": currency or "", "currency": currency,
+        "title": title, "normalized_event_type": normalized_event_type, "impact": impact,
+        "actual": None, "forecast": None, "previous": None, "retrieved_at_utc": BASE_TIME,
+        "source_reliability": "TEST", "revision": 0, "source_identifier": "test",
+    }
     defaults.update(overrides)
     return EconomicEvent(**defaults)
 
@@ -193,8 +193,8 @@ def test_configured_thirty_minute_pre_and_post_window_blocks_across_the_whole_sp
     assert (news.pre_high_impact_minutes, news.post_high_impact_minutes) == (30, 30)
 
     event = _event(currency="USD", normalized_event_type=FOMC, scheduled_at_utc=BASE_TIME)
-    kwargs = dict(pre_high_impact_minutes=news.pre_high_impact_minutes,
-                  post_high_impact_minutes=news.post_high_impact_minutes)
+    kwargs = {"pre_high_impact_minutes": news.pre_high_impact_minutes,
+                  "post_high_impact_minutes": news.post_high_impact_minutes}
     for offset, expected in [
         (-30 * 60 - 1, ALLOW),       # 30:01 before: clear
         (-30 * 60, BLOCK_NEWS),      # 30:00 before: blocked (start inclusive)

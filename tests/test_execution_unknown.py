@@ -9,37 +9,45 @@ import pytest
 from adaptive_scalper.execution.request_token import request_token
 from adaptive_scalper.execution.state_machine import OrderState
 from adaptive_scalper.execution.store import OrderRecord
-from adaptive_scalper.execution.unknown import resolve_unknown_order, resolve_unknown_order_without_broker_id
-from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder, PendingOrderSnapshot, PositionSnapshot
+from adaptive_scalper.execution.unknown import (
+    resolve_unknown_order,
+    resolve_unknown_order_without_broker_id,
+)
+from adaptive_scalper.gateway.types import (
+    HistoricalDeal,
+    HistoricalOrder,
+    PendingOrderSnapshot,
+    PositionSnapshot,
+)
 
 
 def _order(**overrides) -> OrderRecord:
-    defaults = dict(
-        id=1, client_request_id="req-1", chain_key=None, canonical_symbol="XAUUSD",
-        broker_symbol="XAUUSDm", direction="BUY", requested_volume=0.05, stop_loss=None,
-        take_profit=None, state=OrderState.UNKNOWN, broker_order_id=None, broker_position_id=None,
-        last_broker_retcode=None, last_broker_comment=None, created_at_utc=1000, updated_at_utc=1000,
-    )
+    defaults = {
+        "id": 1, "client_request_id": "req-1", "chain_key": None, "canonical_symbol": "XAUUSD",
+        "broker_symbol": "XAUUSDm", "direction": "BUY", "requested_volume": 0.05, "stop_loss": None,
+        "take_profit": None, "state": OrderState.UNKNOWN, "broker_order_id": None, "broker_position_id": None,
+        "last_broker_retcode": None, "last_broker_comment": None, "created_at_utc": 1000, "updated_at_utc": 1000,
+    }
     defaults.update(overrides)
     return OrderRecord(**defaults)
 
 
 def _history_order(ticket: int, state: int, position_id: int = 0, **overrides) -> HistoricalOrder:
-    defaults = dict(
-        ticket=ticket, time_setup=1000, time_done=1001, type=0, state=state, magic=0,
-        position_id=position_id, volume_initial=0.05, volume_current=0.0, price_open=2000.0,
-        sl=0.0, tp=0.0, price_current=2000.0, symbol="XAUUSDm", comment="", external_id="",
-    )
+    defaults = {
+        "ticket": ticket, "time_setup": 1000, "time_done": 1001, "type": 0, "state": state, "magic": 0,
+        "position_id": position_id, "volume_initial": 0.05, "volume_current": 0.0, "price_open": 2000.0,
+        "sl": 0.0, "tp": 0.0, "price_current": 2000.0, "symbol": "XAUUSDm", "comment": "", "external_id": "",
+    }
     defaults.update(overrides)
     return HistoricalOrder(**defaults)
 
 
 def _history_deal(order: int, position_id: int = 0, **overrides) -> HistoricalDeal:
-    defaults = dict(
-        ticket=500, order=order, time=1000, type=0, entry=0, magic=0, position_id=position_id,
-        volume=0.05, price=2000.0, commission=0.0, swap=0.0, profit=0.0, fee=0.0,
-        symbol="XAUUSDm", comment="", external_id="",
-    )
+    defaults = {
+        "ticket": 500, "order": order, "time": 1000, "type": 0, "entry": 0, "magic": 0, "position_id": position_id,
+        "volume": 0.05, "price": 2000.0, "commission": 0.0, "swap": 0.0, "profit": 0.0, "fee": 0.0,
+        "symbol": "XAUUSDm", "comment": "", "external_id": "",
+    }
     defaults.update(overrides)
     return HistoricalDeal(**defaults)
 

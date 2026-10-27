@@ -8,13 +8,13 @@ from adaptive_scalper.learning.dataset import build_training_rows
 
 
 def _closed_trade(**overrides) -> SimulatedTrade:
-    defaults = dict(
-        strategy_key="momentum_continuation", direction="BUY", entry_time_utc=1000, entry_price=2000.0,
-        volume=0.1, initial_monetary_risk=20.0, entry_regime="TRENDING_UP", exit_time_utc=1100,
-        exit_price=2005.0, exit_reason="TAKE_PROFIT_HIT", exit_regime="TRENDING_UP", realized_r=1.5,
-        realized_pnl=30.0, total_cost=0.5,
-        entry_features={name: 0.5 for name in NUMERIC_FEATURE_FIELDS}, entry_raw_confidence=0.7,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "direction": "BUY", "entry_time_utc": 1000, "entry_price": 2000.0,
+        "volume": 0.1, "initial_monetary_risk": 20.0, "entry_regime": "TRENDING_UP", "exit_time_utc": 1100,
+        "exit_price": 2005.0, "exit_reason": "TAKE_PROFIT_HIT", "exit_regime": "TRENDING_UP", "realized_r": 1.5,
+        "realized_pnl": 30.0, "total_cost": 0.5,
+        "entry_features": {name: 0.5 for name in NUMERIC_FEATURE_FIELDS}, "entry_raw_confidence": 0.7,
+    }
     defaults.update(overrides)
     return SimulatedTrade(**defaults)
 
@@ -28,7 +28,7 @@ def test_build_training_rows_includes_a_fully_evidenced_closed_trade():
 
 
 def test_build_training_rows_labels_a_loss_as_zero():
-    rows, excluded = build_training_rows([_closed_trade(realized_pnl=-15.0)])
+    rows, _excluded = build_training_rows([_closed_trade(realized_pnl=-15.0)])
     assert rows[0].label == 0
 
 

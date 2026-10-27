@@ -43,7 +43,12 @@ from dataclasses import dataclass, replace
 
 from adaptive_scalper.backtest import engine as _engine
 from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint
-from adaptive_scalper.backtest.types import BacktestConfig, EntryRejection, OpenPositionState, SimulatedTrade
+from adaptive_scalper.backtest.types import (
+    BacktestConfig,
+    EntryRejection,
+    OpenPositionState,
+    SimulatedTrade,
+)
 from adaptive_scalper.gateway.types import Bar, SymbolSpec
 from adaptive_scalper.paper.state import (
     PaperStateError,

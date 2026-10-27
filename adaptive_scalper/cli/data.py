@@ -55,7 +55,7 @@ def cmd_history_bootstrap(args: argparse.Namespace) -> int:
             try:
                 job = history_bootstrap.bootstrap_ticks(conn, gw, canonical, result.broker_symbol, tick_start, now_utc)
                 symbol_report["TICK"] = {"status": job.status, "cursor_utc": job.cursor_utc}
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - one symbol's ticks must not abort the rest; reported as ERROR
                 symbol_report["TICK"] = {"status": "ERROR", "error": str(exc)}
                 ok = False
         report[canonical] = symbol_report
@@ -125,7 +125,10 @@ def cmd_history_convert_server_time(args: argparse.Namespace) -> int:
     from pathlib import Path
 
     from adaptive_scalper.cli.common import CliError
-    from adaptive_scalper.history.time_basis import TimeBasisError, convert_server_time_to_utc
+    from adaptive_scalper.history.time_basis import (
+        TimeBasisError,
+        convert_server_time_to_utc,
+    )
 
     cfg, conn = open_db(args.config)
     rule = args.rule or cfg.mt5.server_time_rule

@@ -10,8 +10,16 @@ import time
 from pathlib import Path
 
 from adaptive_scalper.cli.common import add_symbol_arg, open_db, print_json
-from adaptive_scalper.learning.jobs import SOURCE_BACKTEST, SOURCE_PAPER, load_training_rows, run_training_job
-from adaptive_scalper.learning.model_walk_forward import result_to_dict, run_model_walk_forward
+from adaptive_scalper.learning.jobs import (
+    SOURCE_BACKTEST,
+    SOURCE_PAPER,
+    load_training_rows,
+    run_training_job,
+)
+from adaptive_scalper.learning.model_walk_forward import (
+    result_to_dict,
+    run_model_walk_forward,
+)
 from adaptive_scalper.research.ledger import new_trial_id, record_trial
 
 

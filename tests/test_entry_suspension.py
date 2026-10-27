@@ -8,20 +8,27 @@ import dataclasses
 from pathlib import Path
 
 import pytest
+from edge_fixtures import FixtureValidatedProvider, v1_replay_config
+from pydantic import ValidationError
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
-from adaptive_scalper.backtest.fingerprint import compute_config_fingerprint, describe_config
+from adaptive_scalper.backtest.fingerprint import (
+    compute_config_fingerprint,
+    describe_config,
+)
 from adaptive_scalper.backtest.types import BacktestConfig
 from adaptive_scalper.config.loader import AppConfig, ConfigError, load_config
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
+from adaptive_scalper.costs.edge_evidence import LEGACY_V1_RAW_SCORE_EVIDENCE
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.selector.selector import select_proposal
-from adaptive_scalper.selector.suspension import REJECTED_ENTRY_SUSPENDED, partition_suspended
+from adaptive_scalper.selector.suspension import (
+    REJECTED_ENTRY_SUSPENDED,
+    partition_suspended,
+)
 from adaptive_scalper.strategies import build_active_registry
 from adaptive_scalper.strategies.base import StrategySignal
-from adaptive_scalper.costs.edge_evidence import LEGACY_V1_RAW_SCORE_EVIDENCE
-from edge_fixtures import FixtureValidatedProvider, v1_replay_config
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIVE = sorted(build_active_registry().active_keys())
@@ -53,7 +60,7 @@ def test_default_is_no_suspension():
 
 @pytest.mark.parametrize("keys", [["no_such_strategy"], ["failed_breakout_fade"], [SUSPENDED, SUSPENDED]])
 def test_only_distinct_active_keys_are_accepted(keys, tmp_path):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         AppConfig.model_validate({"strategies": {"entry_suspended": keys}})
     path = tmp_path / "c.toml"
     path.write_text("[strategies]\nentry_suspended = [" + ", ".join(f'"{k}"' for k in keys) + "]\n", encoding="utf-8")
@@ -87,7 +94,7 @@ def test_the_best_edge_suspended_signal_never_reaches_the_frozen_selector():
 
 def test_fingerprint_unchanged_without_suspension_and_changed_with_it():
     base = BacktestConfig()
-    kw = dict(canonical_symbol="XAUUSD", resolutions=("M5",), strategies=(("x", 1),))
+    kw = {"canonical_symbol": "XAUUSD", "resolutions": ("M5",), "strategies": (("x", 1),)}
     assert "suspended_strategy_keys" not in describe_config(base, **kw)
     suspended = dataclasses.replace(base, suspended_strategy_keys=(SUSPENDED,))
     assert describe_config(suspended, **kw)["suspended_strategy_keys"] == [SUSPENDED]
@@ -101,8 +108,9 @@ def test_paper_config_carries_the_suspension():
 
 
 def test_backtest_never_trades_a_suspended_strategy():
-    from adaptive_scalper.backtest.engine import run_backtest
     from runtime_helpers import default_market, spec_for
+
+    from adaptive_scalper.backtest.engine import run_backtest
     bars = default_market(400)["XAUUSD"]
     spec = spec_for("XAUUSD")
     base = run_backtest(bars, "XAUUSD", "M5", spec, config=v1_replay_config(), now_utc=T0)
@@ -142,6 +150,6 @@ def test_demo_never_opens_a_position_for_the_suspended_strategy(tmp_path):
     conn, _ = _demo(tmp_path / "a", [])
     traded = {r["strategy_key"] for r in conn.execute("SELECT strategy_key FROM positions")}
     assert traded, "the natural DEMO pipeline must open a position"
-    key = sorted(traded)[0]
+    key = min(traded)
     conn2, _ = _demo(tmp_path / "b", [key])
     assert key not in {r["strategy_key"] for r in conn2.execute("SELECT strategy_key FROM positions")}

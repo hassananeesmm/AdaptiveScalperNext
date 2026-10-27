@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from adaptive_scalper.gateway.server_time import (
     RULE_UTC,
@@ -393,7 +393,7 @@ class Mt5Gateway:
         return kept
 
     def _server_dt(self, utc_ts: int) -> datetime:
-        return datetime.fromtimestamp(utc_to_server(self.server_time_rule, utc_ts), tz=timezone.utc)
+        return datetime.fromtimestamp(utc_to_server(self.server_time_rule, utc_ts), tz=UTC)
 
     def _require_query_result(self, operation: str, raw):
         if raw is not None:

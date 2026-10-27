@@ -52,11 +52,20 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from adaptive_scalper.execution.close import FULLY_CLOSED, POST_SEND_STATUSES, CloseOutcome, close_position_safely
-from adaptive_scalper.execution.stop_modification import SENT as STOP_SENT, StopModificationOutcome, modify_protective_stop_safely
+from adaptive_scalper.execution.close import (
+    FULLY_CLOSED,
+    POST_SEND_STATUSES,
+    CloseOutcome,
+    close_position_safely,
+)
+from adaptive_scalper.execution.stop_modification import SENT as STOP_SENT
+from adaptive_scalper.execution.stop_modification import (
+    StopModificationOutcome,
+    modify_protective_stop_safely,
+)
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.journal.events import append_event
 from adaptive_scalper.position_management import state_store
@@ -68,7 +77,10 @@ from adaptive_scalper.position_management.adaptive_exit import (
     compute_current_r,
     evaluate_adaptive_exit,
 )
-from adaptive_scalper.position_management.expectancy import ExpectancyEvidence, evaluate_position_expectancy
+from adaptive_scalper.position_management.expectancy import (
+    ExpectancyEvidence,
+    evaluate_position_expectancy,
+)
 
 
 @dataclass(frozen=True)
@@ -300,8 +312,8 @@ def review_position_once(
         existing = state_store.get_state(conn, inp.position_id)
         peak_r = existing.peak_r if existing is not None else 0.0
         reasons = (
-            "initial_monetary_risk is non-positive/invalid — R quarantined, degraded-health incident "
-            "recorded, holding without R-based action",
+            ("initial_monetary_risk is non-positive/invalid — R quarantined, degraded-health incident "
+            "recorded, holding without R-based action"),
         )
         _journal_position_reviewed(
             conn, inp, now, current_r=None, peak_r=peak_r, action=HOLD, reasons=reasons, quarantined=True,

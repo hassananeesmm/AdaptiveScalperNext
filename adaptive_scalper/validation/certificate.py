@@ -40,7 +40,10 @@ from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 from adaptive_scalper.shadow.lifecycle import lifecycle_for
-from adaptive_scalper.simulation.fill_model import COST_BROKER_DEMO_CONFIRMED, FILL_MODEL_VERSION
+from adaptive_scalper.simulation.fill_model import (
+    COST_BROKER_DEMO_CONFIRMED,
+    FILL_MODEL_VERSION,
+)
 from adaptive_scalper.validation import ed25519
 
 CERTIFICATE_SCHEMA = "edge_certificate/v2"

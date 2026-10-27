@@ -16,7 +16,11 @@ from adaptive_scalper.journal.events import (
     append_event,
     get_or_create_chain,
 )
-from adaptive_scalper.journal.queries import get_chain_events, get_events_by_type, get_events_for_broker_order
+from adaptive_scalper.journal.queries import (
+    get_chain_events,
+    get_events_by_type,
+    get_events_for_broker_order,
+)
 from adaptive_scalper.persistence import connect, migrate
 
 

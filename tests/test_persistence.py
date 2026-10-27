@@ -40,7 +40,7 @@ def test_migrate_is_idempotent(db):
 
 
 def test_migrate_records_applied_versions(db):
-    all_versions = set(v for v, _, _ in _discover_migrations())
+    all_versions = {v for v, _, _ in _discover_migrations()}
     migrate(db)
     assert applied_versions(db) == all_versions
 

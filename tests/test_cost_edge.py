@@ -9,6 +9,11 @@ the labelled LEGACY_V1_RAW_SCORE research-replay provider.
 from __future__ import annotations
 
 import pytest
+from edge_fixtures import (
+    TEST_PUBLIC_KEY,
+    fixture_certificate,
+    fixture_validated_evidence,
+)
 
 from adaptive_scalper.costs.edge import (
     ALLOW,
@@ -33,16 +38,15 @@ from adaptive_scalper.costs.edge_evidence import (
 )
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.strategies.base import StrategySignal
-from edge_fixtures import TEST_PUBLIC_KEY, fixture_certificate, fixture_validated_evidence
 
 
 def _signal(**overrides) -> StrategySignal:
-    defaults = dict(
-        strategy_key="momentum_continuation", strategy_version=1, canonical_symbol="XAUUSD",
-        direction="BUY", raw_confidence=0.6, stop_distance=1.0, target_distance=2.0,
-        expected_duration_seconds=300, entry_method="MARKET", regime="TRENDING_UP",
-        rationale="test", feature_schema_version=1, data_timestamp=1000,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "strategy_version": 1, "canonical_symbol": "XAUUSD",
+        "direction": "BUY", "raw_confidence": 0.6, "stop_distance": 1.0, "target_distance": 2.0,
+        "expected_duration_seconds": 300, "entry_method": "MARKET", "regime": "TRENDING_UP",
+        "rationale": "test", "feature_schema_version": 1, "data_timestamp": 1000,
+    }
     defaults.update(overrides)
     return StrategySignal(**defaults)
 

@@ -3,14 +3,17 @@ round 2 finding #8)."""
 
 from __future__ import annotations
 
-from adaptive_scalper.position_management.expectancy import ExpectancyEvidence, evaluate_position_expectancy
+from adaptive_scalper.position_management.expectancy import (
+    ExpectancyEvidence,
+    evaluate_position_expectancy,
+)
 
 
 def _evidence(**overrides) -> ExpectancyEvidence:
-    defaults = dict(
-        entry_regime="TRENDING_UP", current_regime="TRENDING_UP", strategy_setup_still_valid=True,
-        current_net_edge_price=0.5, min_required_edge_price=0.1,
-    )
+    defaults = {
+        "entry_regime": "TRENDING_UP", "current_regime": "TRENDING_UP", "strategy_setup_still_valid": True,
+        "current_net_edge_price": 0.5, "min_required_edge_price": 0.1,
+    }
     defaults.update(overrides)
     return ExpectancyEvidence(**defaults)
 

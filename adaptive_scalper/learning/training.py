@@ -35,9 +35,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from adaptive_scalper.backtest.types import SimulatedTrade
-from adaptive_scalper.learning.dataset import FEATURE_COLUMNS, TrainingRow, build_training_rows
+from adaptive_scalper.learning.dataset import (
+    FEATURE_COLUMNS,
+    TrainingRow,
+    build_training_rows,
+)
 from adaptive_scalper.learning.lifecycle import ModelLifecycleState
-from adaptive_scalper.learning.registry import ModelRecord, get_latest_version, register_model
+from adaptive_scalper.learning.registry import (
+    ModelRecord,
+    get_latest_version,
+    register_model,
+)
 
 # Directive section 62: "Do not hard-code an unrealistically tiny
 # 'learning complete' sample" — 200 REAL closed trades is a conservative

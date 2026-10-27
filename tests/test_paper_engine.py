@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from edge_fixtures import v1_replay_config
 
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.types import BacktestConfig
@@ -11,19 +12,18 @@ from adaptive_scalper.paper.engine import run_paper_cycle
 from adaptive_scalper.paper.state import get_paper_trades, get_session
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.simulation.fill_model import FillAssumptions
-from edge_fixtures import v1_replay_config
 
 CANONICAL_SYMBOL = "XAUUSD"
 RESOLUTION = "M5"
 
 
 def _symbol_spec(**overrides) -> SymbolSpec:
-    defaults = dict(
-        name="XAUUSDm", description="Gold vs US Dollar", currency_base="XAU", currency_profit="USD",
-        currency_margin="XAU", digits=2, point=0.01, trade_contract_size=100.0,
-        volume_min=0.01, volume_max=100.0, volume_step=0.01, trade_tick_size=0.01,
-        trade_tick_value=1.0, spread=10, visible=True, trade_mode=SymbolTradeMode.FULL,
-    )
+    defaults = {
+        "name": "XAUUSDm", "description": "Gold vs US Dollar", "currency_base": "XAU", "currency_profit": "USD",
+        "currency_margin": "XAU", "digits": 2, "point": 0.01, "trade_contract_size": 100.0,
+        "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01, "trade_tick_size": 0.01,
+        "trade_tick_value": 1.0, "spread": 10, "visible": True, "trade_mode": SymbolTradeMode.FULL,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 
@@ -43,7 +43,7 @@ def _trending_bars(n: int, *, start_price: float = 2000.0, step: float = 0.5, st
 
 
 def _config(**overrides) -> BacktestConfig:
-    defaults = dict(fill_assumptions=FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0))
+    defaults = {"fill_assumptions": FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0)}
     defaults.update(overrides)
     return v1_replay_config(**defaults)
 

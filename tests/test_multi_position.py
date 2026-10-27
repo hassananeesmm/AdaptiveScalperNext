@@ -15,6 +15,8 @@ import dataclasses
 import random
 
 import pytest
+from edge_fixtures import FixtureValidatedProvider
+from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, build_engine, step
 
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
@@ -23,8 +25,6 @@ from adaptive_scalper.gateway.retcodes import REJECT
 from adaptive_scalper.gateway.types import Bar, OrderSendResult
 from adaptive_scalper.runtime.state import get_state
 from adaptive_scalper.strategies.base import StrategySignal
-from runtime_helpers import STEP, T0, FakeClock, LiveMarketGateway, build_engine, step
-from edge_fixtures import FixtureValidatedProvider
 
 START_AT = T0 + 150 * STEP + 10
 
@@ -136,7 +136,7 @@ def test_two_eligible_symbols_hold_simultaneous_positions(tmp_path):
 
 
 def test_an_existing_btcusd_position_does_not_block_a_later_xauusd_entry(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     stub.fire = {"BTCUSD": "SELL"}
     step(engine, clock, seconds=STEP, tick=4)
     assert _open_symbols(conn) == ["BTCUSD"]
@@ -157,7 +157,7 @@ def test_a_position_on_the_same_symbol_blocks_a_second_entry(tmp_path):
 
 
 def test_a_third_position_is_rejected_by_max_open_positions(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "SELL", "GBPJPY": "BUY"}
     step(engine, clock, seconds=STEP, tick=4)
     assert len(_open_symbols(conn)) == 2
@@ -195,7 +195,7 @@ def test_risk_and_margin_are_recomputed_from_fresh_truth_before_the_second_submi
 # ---------------------------------------------------------------------------
 
 def test_genuinely_high_correlation_blocks_the_second_position(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path, bars=correlated_market())
+    engine, conn, _gateway, clock, stub = _start(tmp_path, bars=correlated_market())
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "BUY"}
     step(engine, clock, seconds=STEP, tick=4)
     opened = _open_symbols(conn)
@@ -206,7 +206,7 @@ def test_genuinely_high_correlation_blocks_the_second_position(tmp_path):
 
 
 def test_missing_correlation_evidence_blocks_conservatively(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path, correlation_min_samples=10_000)
+    engine, conn, _gateway, clock, stub = _start(tmp_path, correlation_min_samples=10_000)
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "SELL"}
     step(engine, clock, seconds=STEP, tick=4)
     opened = _open_symbols(conn)
@@ -216,7 +216,7 @@ def test_missing_correlation_evidence_blocks_conservatively(tmp_path):
 
 
 def test_a_valid_low_correlation_allows_the_second_position(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "SELL"}
     step(engine, clock, seconds=STEP, tick=4)
     result = engine.demo.correlation[("XAUUSD", "BTCUSD")]
@@ -230,7 +230,7 @@ def test_a_valid_low_correlation_allows_the_second_position(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_unknown_execution_costs_block_only_the_affected_instrument(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     engine.config.costs["BTCUSD"].slippage_price = None  # BTCUSD slippage evidence now UNKNOWN
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "SELL"}
     step(engine, clock, seconds=STEP, tick=4)
@@ -295,7 +295,7 @@ def test_an_unresolved_unknown_order_on_one_symbol_blocks_new_entries_everywhere
 # ---------------------------------------------------------------------------
 
 def test_interleaved_positions_keep_their_own_strategy_chain_and_broker_ids(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     other = StubStrategy("multi_position_stub_b")
     engine.demo.registry = StubRegistry(stub, other)
     stub.fire = {"XAUUSD": "BUY"}
@@ -402,7 +402,7 @@ def _start_with_gold_closed(tmp_path, mode="DEMO"):
 
 
 def test_a_symbol_closed_at_startup_is_readmitted_when_its_market_reopens(tmp_path):
-    engine, conn, gateway, clock, summary, stub = _start_with_gold_closed(tmp_path)
+    engine, conn, _gateway, clock, summary, stub = _start_with_gold_closed(tmp_path)
     assert "XAUUSD" not in summary["symbols"]
     assert summary["excluded_symbols"]["XAUUSD"].startswith("stale_quote")
     step(engine, clock, seconds=2 * STEP, tick=4)
@@ -426,7 +426,7 @@ def test_a_symbol_closed_at_startup_is_readmitted_when_its_market_reopens(tmp_pa
 
 
 def test_paper_also_readmits_a_symbol_whose_market_reopens(tmp_path):
-    engine, conn, gateway, clock, summary, stub = _start_with_gold_closed(tmp_path, mode="PAPER")
+    engine, conn, _gateway, clock, summary, _stub = _start_with_gold_closed(tmp_path, mode="PAPER")
     assert "XAUUSD" not in summary["symbols"]
     step(engine, clock, seconds=4 * STEP, tick=4)
     assert "XAUUSD" in engine.paper.symbols
@@ -453,7 +453,11 @@ def test_identity_failures_are_never_readmitted(tmp_path):
 
 def _resting_order(conn, symbol, *, risk, now):
     from adaptive_scalper.execution.state_machine import OrderState
-    from adaptive_scalper.execution.store import create_order, record_order_risk_accounting, transition_order_state
+    from adaptive_scalper.execution.store import (
+        create_order,
+        record_order_risk_accounting,
+        transition_order_state,
+    )
     order = create_order(conn, f"{symbol}:resting", symbol, symbol, "BUY", 0.01, now_utc=now)
     transition_order_state(conn, order.id, OrderState.SUBMITTED, now_utc=now)
     transition_order_state(conn, order.id, OrderState.RESTING, broker_order_id=f"99{order.id}", now_utc=now)
@@ -468,7 +472,7 @@ def _btc_signal(engine):
 
 
 def test_a_resting_order_on_another_symbol_counts_toward_max_open_positions(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     stub.fire = {"XAUUSD": "BUY"}
     step(engine, clock, seconds=STEP, tick=4)
     assert _open_symbols(conn) == ["XAUUSD"]
@@ -487,7 +491,7 @@ def test_a_resting_order_on_another_symbol_counts_toward_max_open_positions(tmp_
 
 
 def test_a_partial_order_and_its_own_position_count_once(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     stub.fire = {"XAUUSD": "BUY"}
     step(engine, clock, seconds=STEP, tick=4)
     gold_order = conn.execute("SELECT id FROM orders WHERE canonical_symbol = 'XAUUSD'").fetchone()["id"]
@@ -518,20 +522,20 @@ def _default_limits():
 
 @pytest.mark.parametrize("case, overrides, expected", [
     ("second position, other symbol: 0.50 % total", {}, "ALLOW"),
-    ("third position", dict(current_positions_count=2, current_total_open_risk=2 * PER_TRADE), "max_open_positions"),
-    ("second position on XAUUSD", dict(proposed_symbol="XAUUSD", current_positions_for_symbol=1), "max_positions_per_symbol"),
-    ("aggregate above 0.75 %", dict(current_total_open_risk=PER_TRADE, current_total_pending_risk=PER_TRADE + 0.01),
+    ("third position", {"current_positions_count": 2, "current_total_open_risk": 2 * PER_TRADE}, "max_open_positions"),
+    ("second position on XAUUSD", {"proposed_symbol": "XAUUSD", "current_positions_for_symbol": 1}, "max_positions_per_symbol"),
+    ("aggregate above 0.75 %", {"current_total_open_risk": PER_TRADE, "current_total_pending_risk": PER_TRADE + 0.01},
      "max_total_open_risk_pct"),
-    ("pending exposure counted", dict(current_total_open_risk=0.0, current_positions_count=0,
-                                      current_total_pending_risk=2 * PER_TRADE + 0.01), "max_total_open_risk_pct"),
-    ("daily loss limit", dict(daily_realized_pnl=-0.02 * EQUITY), "daily loss"),
-    ("drawdown limit", dict(peak_equity=EQUITY / 0.95), "drawdown"),
+    ("pending exposure counted", {"current_total_open_risk": 0.0, "current_positions_count": 0,
+                                      "current_total_pending_risk": 2 * PER_TRADE + 0.01}, "max_total_open_risk_pct"),
+    ("daily loss limit", {"daily_realized_pnl": -0.02 * EQUITY}, "daily loss"),
+    ("drawdown limit", {"peak_equity": EQUITY / 0.95}, "drawdown"),
 ])
 def test_risk_governor_multi_position_scenarios(case, overrides, expected):
     from adaptive_scalper.risk.governor import RiskGateInput, evaluate_risk_gate
-    base = dict(proposed_symbol="BTCUSD", proposed_monetary_risk=PER_TRADE, equity=EQUITY,
-                current_total_open_risk=PER_TRADE, current_total_pending_risk=0.0, current_positions_count=1,
-                current_positions_for_symbol=0, daily_realized_pnl=0.0, peak_equity=EQUITY)
+    base = {"proposed_symbol": "BTCUSD", "proposed_monetary_risk": PER_TRADE, "equity": EQUITY,
+                "current_total_open_risk": PER_TRADE, "current_total_pending_risk": 0.0, "current_positions_count": 1,
+                "current_positions_for_symbol": 0, "daily_realized_pnl": 0.0, "peak_equity": EQUITY}
     decision, reason = evaluate_risk_gate(RiskGateInput(**{**base, **overrides}), _default_limits())
     if expected == "ALLOW":
         assert decision == "ALLOW", (case, reason)
@@ -567,7 +571,7 @@ def _panel(conn, clock):
 
 
 def test_readiness_panel_reports_capacity_correlation_and_per_symbol_reasons(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    engine, conn, _gateway, clock, stub = _start(tmp_path)
     stub.fire = {"BTCUSD": "SELL"}
     step(engine, clock, seconds=STEP, tick=4)
     engine._publish_telemetry()
@@ -604,7 +608,7 @@ def test_readiness_panel_lists_each_open_position_with_its_strategy_and_floating
 
 
 def test_readiness_panel_names_the_correlation_gate_from_the_journal(tmp_path):
-    engine, conn, gateway, clock, stub = _start(tmp_path, bars=correlated_market())
+    engine, conn, _gateway, clock, stub = _start(tmp_path, bars=correlated_market())
     stub.fire = {"XAUUSD": "BUY", "BTCUSD": "BUY"}
     step(engine, clock, seconds=STEP, tick=4)
     engine._publish_telemetry()
@@ -616,7 +620,7 @@ def test_readiness_panel_names_the_correlation_gate_from_the_journal(tmp_path):
 
 
 def test_readiness_panel_shows_market_closed_then_admission(tmp_path):
-    engine, conn, gateway, clock, summary, stub = _start_with_gold_closed(tmp_path)
+    engine, conn, _gateway, clock, _summary, _stub = _start_with_gold_closed(tmp_path)
     step(engine, clock, seconds=8, tick=4)
     assert _panel(conn, clock)["symbols"]["XAUUSD"]["status"] == "MARKET CLOSED"
     step(engine, clock, seconds=4 * STEP, tick=4)
@@ -627,7 +631,7 @@ def test_readiness_panel_shows_market_closed_then_admission(tmp_path):
 
 def test_readiness_panel_labels_a_pre_fix_runtime_exclusion_as_market_closed(tmp_path):
     from adaptive_scalper.runtime.state import put_state
-    engine, conn, gateway, clock, stub = _start(tmp_path)
+    _engine, conn, _gateway, clock, _stub = _start(tmp_path)
     conn.execute("DELETE FROM runtime_state WHERE key = 'symbol_admission'")
     put_state(conn, "startup", {"symbols": {"BTCUSD": "BTCUSD"},
                                 "excluded_symbols": {"XAUUSD": "stale_quote: quote age 70440.9s exceeds max 30.0s"}},

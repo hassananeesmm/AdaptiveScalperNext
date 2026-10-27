@@ -13,8 +13,12 @@ import threading
 import time
 
 import adaptive_scalper.dashboard.health as health_module
-import adaptive_scalper.dashboard.panels as panels
-from adaptive_scalper.dashboard.health import INTEGRITY_PENDING, IntegrityMonitor, compute_health
+from adaptive_scalper.dashboard import panels
+from adaptive_scalper.dashboard.health import (
+    INTEGRITY_PENDING,
+    IntegrityMonitor,
+    compute_health,
+)
 from adaptive_scalper.persistence.database import connect, connect_readonly, migrate
 from adaptive_scalper.runtime.state import put_state
 

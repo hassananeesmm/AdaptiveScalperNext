@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from adaptive_scalper.position_management.re_entry import ALLOW, BLOCK_REENTRY_CHURN, ReentryParams, evaluate_reentry
+from adaptive_scalper.position_management.re_entry import (
+    ALLOW,
+    BLOCK_REENTRY_CHURN,
+    ReentryParams,
+    evaluate_reentry,
+)
 
 
 def _check(**overrides):
-    defaults = dict(
-        proposed_direction="BUY", proposed_raw_confidence=0.75, original_raw_confidence=0.60,
-        last_exit_utc=1000, last_exit_direction="BUY", now_utc=1100,
-    )
+    defaults = {
+        "proposed_direction": "BUY", "proposed_raw_confidence": 0.75, "original_raw_confidence": 0.60,
+        "last_exit_utc": 1000, "last_exit_direction": "BUY", "now_utc": 1100,
+    }
     defaults.update(overrides)
     return evaluate_reentry(**defaults)
 

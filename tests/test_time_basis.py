@@ -113,11 +113,11 @@ def test_commands_that_use_stored_mt5_rows_refuse_an_unconverted_database(tmp_pa
 def test_rows_in_the_skipped_spring_hour_are_quarantined_not_guessed(tmp_path, monkeypatch):
     # The laptop's real history: stray BTCUSD M15 bars at server 09:00 on the
     # spring-forward Sunday collide with the real 10:00 bar after conversion.
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
     db = tmp_path / "db.sqlite3"
     conn = _legacy_db(db, monkeypatch)
-    spring = int(datetime(2026, 3, 8, 9, 0, tzinfo=timezone.utc).timestamp())  # server clock
+    spring = int(datetime(2026, 3, 8, 9, 0, tzinfo=UTC).timestamp())  # server clock
     for ts in (spring - 900, spring, spring + 3600):
         conn.execute("INSERT INTO bars (canonical_symbol, resolution, ts_utc, open, high, low, close, "
                      "tick_volume, spread, real_volume) VALUES ('BTCUSD', 'M15', ?, 2, 2, 2, 2, 1, 1, 0)", (ts,))

@@ -13,6 +13,7 @@ still forming.
 
 from __future__ import annotations
 
+import itertools
 import math
 
 from adaptive_scalper.gateway.protocol import Gateway
@@ -37,7 +38,7 @@ def closed_bars(
 
 def log_returns(bars: list[Bar]) -> dict[int, float]:
     out = {}
-    for prev, cur in zip(bars, bars[1:]):
+    for prev, cur in itertools.pairwise(bars):
         if prev.close > 0 and cur.close > 0:
             out[cur.time] = math.log(cur.close / prev.close)
     return out

@@ -25,21 +25,21 @@ from adaptive_scalper.risk.governor import (
 
 
 def _symbol_spec(**overrides) -> SymbolSpec:
-    defaults = dict(
-        name="XAUUSD", description="Gold vs US Dollar", currency_base="XAU", currency_profit="USD",
-        currency_margin="XAU", digits=2, point=0.01, trade_contract_size=100.0,
-        volume_min=0.01, volume_max=100.0, volume_step=0.01, trade_tick_size=0.01,
-        trade_tick_value=1.0, spread=10, visible=True, trade_mode=SymbolTradeMode.FULL,
-    )
+    defaults = {
+        "name": "XAUUSD", "description": "Gold vs US Dollar", "currency_base": "XAU", "currency_profit": "USD",
+        "currency_margin": "XAU", "digits": 2, "point": 0.01, "trade_contract_size": 100.0,
+        "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01, "trade_tick_size": 0.01,
+        "trade_tick_value": 1.0, "spread": 10, "visible": True, "trade_mode": SymbolTradeMode.FULL,
+    }
     defaults.update(overrides)
     return SymbolSpec(**defaults)
 
 
 def _limits(**overrides) -> RiskLimits:
-    defaults = dict(
-        risk_per_trade_pct=0.25, max_total_open_risk_pct=0.75, max_daily_loss_pct=2.0,
-        max_drawdown_pct=5.0, max_open_positions=2, max_positions_per_symbol=1,
-    )
+    defaults = {
+        "risk_per_trade_pct": 0.25, "max_total_open_risk_pct": 0.75, "max_daily_loss_pct": 2.0,
+        "max_drawdown_pct": 5.0, "max_open_positions": 2, "max_positions_per_symbol": 1,
+    }
     defaults.update(overrides)
     return RiskLimits(**defaults)
 
@@ -147,7 +147,7 @@ def test_risk_gate_allows_within_all_limits():
         current_positions_count=0, current_positions_for_symbol=0,
         daily_realized_pnl=0.0, peak_equity=10000,
     )
-    decision, reason = evaluate_risk_gate(inp, _limits())
+    decision, _reason = evaluate_risk_gate(inp, _limits())
     assert decision == ALLOW
 
 
@@ -294,7 +294,7 @@ def test_risk_gate_blocks_non_finite_proposed_risk():
         current_positions_count=0, current_positions_for_symbol=0,
         daily_realized_pnl=0.0, peak_equity=10000,
     )
-    decision, reason = evaluate_risk_gate(inp, _limits())
+    decision, _reason = evaluate_risk_gate(inp, _limits())
     assert decision == BLOCK_RISK
 
 
@@ -420,10 +420,10 @@ def test_denominator_is_never_more_lenient_than_current_equity():
 
 
 @pytest.mark.parametrize("kwargs", [
-    dict(realized_pnl=math.nan, floating_pnl=0.0, day_start_equity=10000.0, equity=10000.0),
-    dict(realized_pnl=0.0, floating_pnl=math.inf, day_start_equity=10000.0, equity=10000.0),
-    dict(realized_pnl=0.0, floating_pnl=0.0, day_start_equity=-1.0, equity=10000.0),
-    dict(realized_pnl=0.0, floating_pnl=0.0, day_start_equity=math.nan, equity=10000.0),
+    {"realized_pnl": math.nan, "floating_pnl": 0.0, "day_start_equity": 10000.0, "equity": 10000.0},
+    {"realized_pnl": 0.0, "floating_pnl": math.inf, "day_start_equity": 10000.0, "equity": 10000.0},
+    {"realized_pnl": 0.0, "floating_pnl": 0.0, "day_start_equity": -1.0, "equity": 10000.0},
+    {"realized_pnl": 0.0, "floating_pnl": 0.0, "day_start_equity": math.nan, "equity": 10000.0},
 ])
 def test_unknowable_daily_loss_is_treated_as_breached(kwargs):
     assert effective_daily_loss_pct(**kwargs) == math.inf

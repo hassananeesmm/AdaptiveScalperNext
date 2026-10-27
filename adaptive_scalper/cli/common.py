@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from datetime import UTC
 
 from adaptive_scalper.config.loader import AppConfig, load_config
 from adaptive_scalper.gateway.factory import create_live_gateway
@@ -70,11 +71,11 @@ def add_symbol_arg(parser: argparse.ArgumentParser, *, required: bool = True) ->
 
 def parse_utc(value: str) -> int:
     """Epoch seconds or an ISO-8601 date/datetime (UTC assumed if naive)."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     if value.isdigit():
         return int(value)
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return int(parsed.timestamp())

@@ -70,7 +70,12 @@ from dataclasses import dataclass
 from adaptive_scalper.execution.request_token import request_token
 from adaptive_scalper.execution.state_machine import OrderState
 from adaptive_scalper.execution.store import OrderRecord
-from adaptive_scalper.gateway.types import HistoricalDeal, HistoricalOrder, PendingOrderSnapshot, PositionSnapshot
+from adaptive_scalper.gateway.types import (
+    HistoricalDeal,
+    HistoricalOrder,
+    PendingOrderSnapshot,
+    PositionSnapshot,
+)
 
 _MT5_ORDER_STATE_TO_ORDER_STATE: dict[int, OrderState] = {
     1: OrderState.RESTING,   # PLACED — resting on the broker, unresolved-but-alive

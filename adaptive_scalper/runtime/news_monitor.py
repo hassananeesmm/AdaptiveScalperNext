@@ -29,7 +29,11 @@ from adaptive_scalper.news.blocking import (
     _event_window,
     evaluate_news_block,
 )
-from adaptive_scalper.news.calendar_service import fetch_live, fetch_with_fallback, resolve_fetched
+from adaptive_scalper.news.calendar_service import (
+    fetch_live,
+    fetch_with_fallback,
+    resolve_fetched,
+)
 from adaptive_scalper.news.provider import EconomicCalendarProvider
 from adaptive_scalper.news.types import EconomicEvent, ProviderHealth
 
@@ -61,7 +65,7 @@ class NewsMonitor:
         self.last_attempt_utc = now_utc
         try:
             result = fetch_with_fallback(self._conn, self._live, self._cache, now_utc=now_utc)
-        except Exception as exc:  # a broken provider must degrade news, never crash the runtime
+        except Exception as exc:  # noqa: BLE001 - a broken provider must degrade news, never crash the runtime
             self.errors = {"calendar_service": f"{type(exc).__name__}: {exc}"}
             return self.health(now_utc)
         self.errors = dict(result.errors)
@@ -116,7 +120,7 @@ class NewsMonitor:
             return True
         try:
             result = resolve_fetched(self._conn, outcome, self._cache, fetched_at)
-        except Exception as exc:  # a broken provider must degrade news, never crash the runtime
+        except Exception as exc:  # noqa: BLE001 - a broken provider must degrade news, never crash the runtime
             self.errors = {"calendar_service": f"{type(exc).__name__}: {exc}"}
             return True
         self.errors = dict(result.errors)
@@ -190,4 +194,4 @@ def default_live_providers() -> list[EconomicCalendarProvider]:
     return [FinanceCalendarProvider(), ForexFactoryProvider()]
 
 
-__all__ = ["NewsMonitor", "default_live_providers", "ALLOW"]
+__all__ = ["ALLOW", "NewsMonitor", "default_live_providers"]

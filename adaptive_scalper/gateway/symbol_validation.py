@@ -92,10 +92,7 @@ def _identity_matches(spec: SymbolSpec, identity: _IdentitySpec) -> bool:
             return False
 
     description = (spec.description or "").lower()
-    if not any(keyword in description for keyword in identity.description_keywords):
-        return False
-
-    return True
+    return any(keyword in description for keyword in identity.description_keywords)
 
 
 def identity_matches_canonical(spec: SymbolSpec, canonical: str) -> bool:

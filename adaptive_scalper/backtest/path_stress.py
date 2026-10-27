@@ -22,7 +22,12 @@ from __future__ import annotations
 
 import random
 
-from adaptive_scalper.backtest.types import TRADE_ORDER_PATH_STRESS, DistributionStats, PathStressResult, SimulatedTrade
+from adaptive_scalper.backtest.types import (
+    TRADE_ORDER_PATH_STRESS,
+    DistributionStats,
+    PathStressResult,
+    SimulatedTrade,
+)
 
 
 def _percentile(sorted_values: list[float], pct: float) -> float:

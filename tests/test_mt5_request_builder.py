@@ -11,7 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway, Mt5QueryError, _build_mt5_request, _order_send_result
+from adaptive_scalper.gateway.mt5_gateway import (
+    Mt5Gateway,
+    Mt5QueryError,
+    _build_mt5_request,
+    _order_send_result,
+)
 from adaptive_scalper.gateway.types import OrderAction, OrderRequest
 
 
@@ -150,7 +155,7 @@ def test_deal_request_honors_explicit_fok_filling_type():
 # --------------------------------------------------------------------------
 
 def _raw_result(**overrides):
-    defaults = dict(retcode=10009, comment="Request executed", deal=555, order=777, volume=0.05, price=2001.5)
+    defaults = {"retcode": 10009, "comment": "Request executed", "deal": 555, "order": 777, "volume": 0.05, "price": 2001.5}
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
 

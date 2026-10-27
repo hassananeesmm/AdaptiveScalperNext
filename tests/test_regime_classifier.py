@@ -22,16 +22,16 @@ from adaptive_scalper.regimes.classifier import (
 
 
 def _snap(**overrides) -> FeatureSnapshot:
-    defaults = dict(
-        canonical_symbol="XAUUSD", resolution="M1", feature_schema_version=1,
-        data_timestamp=1_700_000_000, feature_timestamp=1_700_000_000, bar_count_used=25, lookback=20,
-        close=2000.0, return_1=1.0, log_return_1=0.0005, realized_volatility=0.001, atr=1.0,
-        normalized_range=0.0005, momentum=5.0, velocity=0.5, acceleration=0.1,
-        efficiency_ratio=0.6, directional_persistence=0.7, range_expansion_ratio=1.0,
-        body_ratio=0.5, upper_wick_ratio=0.25, lower_wick_ratio=0.25,
-        recent_high=2005.0, recent_low=1995.0, spread_current=10.0, spread_percentile=0.5,
-        movement_to_cost=2.0, session="LONDON", hour_of_day_utc=9, weekday_utc=2,
-    )
+    defaults = {
+        "canonical_symbol": "XAUUSD", "resolution": "M1", "feature_schema_version": 1,
+        "data_timestamp": 1_700_000_000, "feature_timestamp": 1_700_000_000, "bar_count_used": 25, "lookback": 20,
+        "close": 2000.0, "return_1": 1.0, "log_return_1": 0.0005, "realized_volatility": 0.001, "atr": 1.0,
+        "normalized_range": 0.0005, "momentum": 5.0, "velocity": 0.5, "acceleration": 0.1,
+        "efficiency_ratio": 0.6, "directional_persistence": 0.7, "range_expansion_ratio": 1.0,
+        "body_ratio": 0.5, "upper_wick_ratio": 0.25, "lower_wick_ratio": 0.25,
+        "recent_high": 2005.0, "recent_low": 1995.0, "spread_current": 10.0, "spread_percentile": 0.5,
+        "movement_to_cost": 2.0, "session": "LONDON", "hour_of_day_utc": 9, "weekday_utc": 2,
+    }
     defaults.update(overrides)
     return FeatureSnapshot(**defaults)
 

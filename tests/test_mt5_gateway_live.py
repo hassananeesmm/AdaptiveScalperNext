@@ -27,7 +27,6 @@ from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway, Mt5NotAvailableErro
 from adaptive_scalper.gateway.symbol_resolver import resolve_all
 from adaptive_scalper.gateway.types import AccountSnapshot, TerminalSnapshot, TradeMode
 
-
 # The configured broker server clock (BUG_BACKLOG #14), as the runtime uses it.
 _RULE = load_config("config/default.toml").mt5.server_time_rule
 
@@ -127,7 +126,11 @@ def test_configured_server_time_rule_matches_live_quotes(gateway):
     converted time is within the tolerance of the real UTC clock."""
     import time
 
-    from adaptive_scalper.gateway.server_time import INCONCLUSIVE, VERIFIED, classify_quote_clock
+    from adaptive_scalper.gateway.server_time import (
+        INCONCLUSIVE,
+        VERIFIED,
+        classify_quote_clock,
+    )
 
     results = resolve_all(gateway.symbols_get())
     verdicts = {}

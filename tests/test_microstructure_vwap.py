@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 import adaptive_scalper.runtime.microstructure as micro
 from adaptive_scalper.config.loader import MicrostructureConfig, load_config
@@ -20,7 +21,6 @@ from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.features.vwap import rolling_vwap_bands
 from adaptive_scalper.gateway.types import Bar
 from adaptive_scalper.runtime.state import get_state
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 M1 = 60
@@ -126,7 +126,7 @@ def _m1_bars(now):
 
 @pytest.mark.parametrize("mode", ["DEMO", "PAPER"])
 def test_runtime_publishes_btcusd_bands(tmp_path, monkeypatch, mode):
-    clock, engine, conn, gateway = _started(tmp_path, mode)
+    clock, engine, conn, _gateway = _started(tmp_path, mode)
     monkeypatch.setattr(micro, "closed_bars", lambda gw, name, res, *, now_utc, count, tick: _m1_bars(now_utc))
 
     step(engine, clock, seconds=STEP, tick=4)
@@ -156,7 +156,7 @@ def test_observer_failure_never_interrupts_the_cycle(tmp_path, monkeypatch, mode
 
 def test_untracked_by_default(tmp_path):
     clock = FakeClock(START_AT)
-    engine, conn, gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
+    engine, conn, _gateway = build_engine(tmp_path, mode="DEMO", clock=clock)
     bootstrap_kill_switch(conn, OperatorAuthority("test-operator"), reason="test setup")
     engine.startup()
     step(engine, clock, seconds=STEP, tick=4)

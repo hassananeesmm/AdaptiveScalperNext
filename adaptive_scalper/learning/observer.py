@@ -82,5 +82,5 @@ class EntryObserver:
             probability = float(model.predict_proba([values])[0][1])
             return ObserverScore(SCORED, key, "observer score (no influence)", record.version,
                                  record.lifecycle_state.value, probability)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - advisory ML observer: failure is DEGRADED, never blocks
             return ObserverScore(DEGRADED, key, f"{type(exc).__name__}: {exc}")

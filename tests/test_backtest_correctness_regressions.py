@@ -19,9 +19,14 @@ import random
 from dataclasses import replace
 
 import pytest
+from edge_fixtures import v1_replay_config
 
 import adaptive_scalper.backtest.engine as engine_module
-from adaptive_scalper.backtest.dataset import build_dataset_snapshot, record_dataset, record_dataset_usage
+from adaptive_scalper.backtest.dataset import (
+    build_dataset_snapshot,
+    record_dataset,
+    record_dataset_usage,
+)
 from adaptive_scalper.backtest.engine import STOP_LOSS_HIT, run_backtest
 from adaptive_scalper.backtest.oos import DatasetContaminatedError, run_untouched_oos
 from adaptive_scalper.backtest.types import BacktestConfig
@@ -33,7 +38,6 @@ from adaptive_scalper.position_management.adaptive_exit import AdaptiveExitParam
 from adaptive_scalper.simulation.fill_model import FillAssumptions
 from adaptive_scalper.simulation.types import EvidenceOrigin
 from adaptive_scalper.strategies.base import StrategySignal
-from edge_fixtures import v1_replay_config
 
 SYMBOL = "XAUUSD"
 RES = "M5"
@@ -73,10 +77,10 @@ _QUIET_EXIT = AdaptiveExitParams(
 
 
 def _config(**overrides) -> BacktestConfig:
-    defaults = dict(
-        fill_assumptions=FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0),
-        adaptive_exit_params=_QUIET_EXIT,
-    )
+    defaults = {
+        "fill_assumptions": FillAssumptions(slippage_price=0.0, commission_monetary_per_lot=0.0),
+        "adaptive_exit_params": _QUIET_EXIT,
+    }
     defaults.update(overrides)
     return v1_replay_config(**defaults)
 

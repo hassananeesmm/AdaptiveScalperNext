@@ -22,7 +22,7 @@ March 02:00 EST to first Sunday of November 02:00 EDT) has applied since
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 RULE_UTC = "UTC"
 RULE_UTC2_US_DST = "UTC+2/US_DST"
@@ -38,14 +38,14 @@ DEFAULT_OFFSET_TOLERANCE_SECONDS = 120
 
 
 def _nth_sunday_utc(year: int, month: int, n: int, hour_utc: int) -> int:
-    first = datetime(year, month, 1, tzinfo=timezone.utc)
+    first = datetime(year, month, 1, tzinfo=UTC)
     days_to_sunday = (6 - first.weekday()) % 7
     day = first + timedelta(days=days_to_sunday + 7 * (n - 1), hours=hour_utc)
     return int(day.timestamp())
 
 
 def us_dst_in_effect(utc_ts: int) -> bool:
-    year = datetime.fromtimestamp(utc_ts, tz=timezone.utc).year
+    year = datetime.fromtimestamp(utc_ts, tz=UTC).year
     start = _nth_sunday_utc(year, 3, 2, 7)   # 02:00 EST = 07:00 UTC
     end = _nth_sunday_utc(year, 11, 1, 6)    # 02:00 EDT = 06:00 UTC
     return start <= utc_ts < end

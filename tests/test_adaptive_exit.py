@@ -16,9 +16,9 @@ from adaptive_scalper.position_management.adaptive_exit import (
 
 
 def _decide(**overrides):
-    defaults = dict(
-        current_r=0.1, peak_r=0.1, holding_seconds=10, thesis_valid=True, regime_reversed=False,
-    )
+    defaults = {
+        "current_r": 0.1, "peak_r": 0.1, "holding_seconds": 10, "thesis_valid": True, "regime_reversed": False,
+    }
     defaults.update(overrides)
     return evaluate_adaptive_exit(**defaults)
 

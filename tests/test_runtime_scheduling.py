@@ -12,9 +12,10 @@ from __future__ import annotations
 import threading
 import time
 
+from runtime_helpers import STEP, T0, FakeClock, StaticNewsProvider, build_engine, step
+
 import adaptive_scalper.runtime.engine as engine_module
 from adaptive_scalper.runtime.scheduler import Scheduler
-from runtime_helpers import STEP, T0, FakeClock, StaticNewsProvider, build_engine, step
 
 START_AT = T0 + 60 * STEP + 10
 
@@ -56,7 +57,7 @@ def test_a_hanging_calendar_fetch_never_starves_demo_position_management(tmp_pat
     monkeypatch.setattr(engine_module, "NEWS_FETCH_BUDGET_SECONDS", 0.2)
     provider = HangingProvider()
     clock = FakeClock(START_AT)
-    engine, conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock, news=[provider], news_refresh_seconds=60)
+    engine, _conn, _ = build_engine(tmp_path, mode="DEMO", clock=clock, news=[provider], news_refresh_seconds=60)
     engine.startup()
     tasks = {t.name: t for t in engine.scheduler.tasks}
     try:

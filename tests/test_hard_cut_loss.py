@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
+from runtime_helpers import STEP, T0, FakeClock, build_engine
 
 from adaptive_scalper.config.loader import HardStopConfig, load_config
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
@@ -22,7 +23,6 @@ from adaptive_scalper.gateway.mt5_gateway import Mt5QueryError
 from adaptive_scalper.gateway.types import PositionSnapshot, Tick
 from adaptive_scalper.risk.hard_stop import adverse_move_pct, breaches_hard_stop
 from adaptive_scalper.runtime import demo as demo_module
-from runtime_helpers import STEP, T0, FakeClock, build_engine
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 START_AT = T0 + 60 * STEP + 10
@@ -127,7 +127,7 @@ def test_buy_beyond_half_a_percent_is_closed_through_the_safe_close_service(tmp_
 
 
 def test_sell_beyond_half_a_percent_is_closed(tmp_path, monkeypatch):
-    clock, demo, conn, gateway, closes = _started(tmp_path, monkeypatch)
+    clock, demo, _conn, gateway, closes = _started(tmp_path, monkeypatch)
     _quote(monkeypatch, gateway, clock, bid=60_295.0, ask=60_301.0)
     local, live = _position("SELL")
     assert demo._hard_cut_loss(local, live, int(clock.now)) is True
@@ -135,7 +135,7 @@ def test_sell_beyond_half_a_percent_is_closed(tmp_path, monkeypatch):
 
 
 def test_exactly_half_a_percent_is_not_closed(tmp_path, monkeypatch):
-    clock, demo, conn, gateway, closes = _started(tmp_path, monkeypatch)
+    clock, demo, _conn, gateway, closes = _started(tmp_path, monkeypatch)
     _quote(monkeypatch, gateway, clock, bid=59_700.0, ask=59_706.0)
     local, live = _position("BUY")
     assert demo._hard_cut_loss(local, live, int(clock.now)) is False
@@ -143,7 +143,7 @@ def test_exactly_half_a_percent_is_not_closed(tmp_path, monkeypatch):
 
 
 def test_unconfigured_symbol_is_never_cut(tmp_path, monkeypatch):
-    clock, demo, conn, gateway, closes = _started(tmp_path, monkeypatch)
+    clock, demo, _conn, gateway, closes = _started(tmp_path, monkeypatch)
     _quote(monkeypatch, gateway, clock, bid=1.0, ask=1.0)  # absurd loss, but XAUUSD has no backstop
     local, live = _position("BUY", symbol="XAUUSD")
     assert demo._hard_cut_loss(local, live, int(clock.now)) is False
@@ -160,7 +160,7 @@ def test_stale_quote_is_journaled_never_read_as_no_loss(tmp_path, monkeypatch):
 
 
 def test_unreadable_broker_truth_after_the_close_degrades_the_cycle(tmp_path, monkeypatch):
-    clock, demo, conn, gateway, closes = _started(tmp_path, monkeypatch)
+    clock, demo, _conn, gateway, _closes = _started(tmp_path, monkeypatch)
     monkeypatch.setattr(demo_module, "close_position_safely",
                         lambda gw, **kw: CloseOutcome("SENT", "sent", broker_truth_error="positions_get None"))
     _quote(monkeypatch, gateway, clock, bid=59_000.0, ask=59_010.0)
@@ -170,7 +170,7 @@ def test_unreadable_broker_truth_after_the_close_degrades_the_cycle(tmp_path, mo
 
 
 def test_position_cycle_cuts_before_and_instead_of_the_normal_review(tmp_path, monkeypatch):
-    clock, demo, conn, gateway, closes = _started(tmp_path, monkeypatch)
+    clock, demo, _conn, gateway, closes = _started(tmp_path, monkeypatch)
     local, live = _position("BUY")
     reviewed = []
     clean = SimpleNamespace(status="CLEAN", unrepaired_position_ids=[], unrepaired_order_ids=[])

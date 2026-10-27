@@ -8,16 +8,24 @@ import pytest
 
 from adaptive_scalper.config.constants import RETIRED_STRATEGY_KEYS
 from adaptive_scalper.strategies import build_active_registry
-from adaptive_scalper.strategies.microstructure_acceleration import MicrostructureAccelerationStrategy
-from adaptive_scalper.strategies.momentum_continuation import MomentumContinuationStrategy
-from adaptive_scalper.strategies.pullback_continuation import PullbackContinuationStrategy
+from adaptive_scalper.strategies.microstructure_acceleration import (
+    MicrostructureAccelerationStrategy,
+)
+from adaptive_scalper.strategies.momentum_continuation import (
+    MomentumContinuationStrategy,
+)
+from adaptive_scalper.strategies.pullback_continuation import (
+    PullbackContinuationStrategy,
+)
 from adaptive_scalper.strategies.range_breakout import RangeBreakoutStrategy
 from adaptive_scalper.strategies.registry import (
     DuplicateStrategyError,
     RetiredStrategyError,
     StrategyRegistry,
 )
-from adaptive_scalper.strategies.statistical_reversion import StatisticalReversionStrategy
+from adaptive_scalper.strategies.statistical_reversion import (
+    StatisticalReversionStrategy,
+)
 from adaptive_scalper.strategies.volatility_expansion import VolatilityExpansionStrategy
 
 EXPECTED_ACTIVE_KEYS = frozenset({

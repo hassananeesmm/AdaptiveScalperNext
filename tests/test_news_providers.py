@@ -8,7 +8,11 @@ import json
 
 import pytest
 
-from adaptive_scalper.news.providers.cache import CacheProvider, persist_events, record_provider_attempt
+from adaptive_scalper.news.providers.cache import (
+    CacheProvider,
+    persist_events,
+    record_provider_attempt,
+)
 from adaptive_scalper.news.providers.financecalendar import FinanceCalendarProvider
 from adaptive_scalper.news.providers.forexfactory import ForexFactoryProvider
 from adaptive_scalper.news.providers.manual import ManualJSONProvider
@@ -27,12 +31,12 @@ def db(tmp_path):
 
 
 def _event(**overrides) -> EconomicEvent:
-    defaults = dict(
-        event_id="evt-1", provider="test", provider_event_id=None, scheduled_at_utc=BASE_TIME,
-        country="USD", currency="USD", title="Test Event", normalized_event_type=None,
-        impact=Impact.HIGH, actual=None, forecast=None, previous=None, retrieved_at_utc=BASE_TIME,
-        source_reliability="TEST", revision=0, source_identifier="test",
-    )
+    defaults = {
+        "event_id": "evt-1", "provider": "test", "provider_event_id": None, "scheduled_at_utc": BASE_TIME,
+        "country": "USD", "currency": "USD", "title": "Test Event", "normalized_event_type": None,
+        "impact": Impact.HIGH, "actual": None, "forecast": None, "previous": None, "retrieved_at_utc": BASE_TIME,
+        "source_reliability": "TEST", "revision": 0, "source_identifier": "test",
+    }
     defaults.update(overrides)
     return EconomicEvent(**defaults)
 

@@ -112,7 +112,7 @@ def test_gate_blocks_on_genuinely_high_correlation():
 
 def test_gate_allows_low_correlation():
     matrix = {("BTCUSD", "XAUUSD"): CorrelationResult(0.2, 100)}
-    decision, reason = evaluate_correlation_gate("BTCUSD", ["XAUUSD"], matrix)
+    decision, _reason = evaluate_correlation_gate("BTCUSD", ["XAUUSD"], matrix)
     assert decision == ALLOW
 
 
@@ -128,24 +128,24 @@ def test_gate_blocks_conservatively_on_missing_correlation_data_by_default():
 
 def test_gate_missing_correlation_data_is_informational_only_when_opted_out():
     matrix = {("BTCUSD", "XAUUSD"): CorrelationResult(None, 5)}
-    decision, reason = evaluate_correlation_gate(
+    decision, _reason = evaluate_correlation_gate(
         "BTCUSD", ["XAUUSD"], matrix, treat_missing_as_blocking=False
     )
     assert decision == ALLOW
 
 
 def test_gate_allows_when_no_open_or_pending_symbols():
-    decision, reason = evaluate_correlation_gate("BTCUSD", [], {})
+    decision, _reason = evaluate_correlation_gate("BTCUSD", [], {})
     assert decision == ALLOW
 
 
 def test_gate_ignores_self_comparison():
     matrix = {}
-    decision, reason = evaluate_correlation_gate("BTCUSD", ["BTCUSD"], matrix)
+    decision, _reason = evaluate_correlation_gate("BTCUSD", ["BTCUSD"], matrix)
     assert decision == ALLOW
 
 
 def test_gate_blocks_on_strong_negative_correlation_too():
     matrix = {("GBPJPY", "XAUUSD"): CorrelationResult(-0.9, 50)}
-    decision, reason = evaluate_correlation_gate("GBPJPY", ["XAUUSD"], matrix)
+    decision, _reason = evaluate_correlation_gate("GBPJPY", ["XAUUSD"], matrix)
     assert decision == BLOCK_CORRELATION

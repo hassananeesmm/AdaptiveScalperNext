@@ -5,31 +5,31 @@ cost-adjusted expected net edge, not raw confidence alone.
 from __future__ import annotations
 
 import pytest
+from edge_fixtures import FixtureValidatedProvider
 
 from adaptive_scalper.costs.edge_evidence import LEGACY_V1_RAW_SCORE_EVIDENCE
 from adaptive_scalper.costs.model import estimate_cost
 from adaptive_scalper.journal.queries import get_chain_events
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.selector.selector import (
+    REJECTED_EDGE_UNVALIDATED,
     REJECTED_INSUFFICIENT_EDGE,
     REJECTED_LOW_CONFIDENCE,
     REJECTED_RETIRED,
-    REJECTED_EDGE_UNVALIDATED,
     REJECTED_UNKNOWN_COST,
     select_and_journal_proposal,
     select_proposal,
 )
 from adaptive_scalper.strategies.base import StrategySignal
-from edge_fixtures import FixtureValidatedProvider
 
 
 def _signal(**overrides) -> StrategySignal:
-    defaults = dict(
-        strategy_key="momentum_continuation", strategy_version=1, canonical_symbol="XAUUSD",
-        direction="BUY", raw_confidence=0.6, stop_distance=1.0, target_distance=2.0,
-        expected_duration_seconds=300, entry_method="MARKET", regime="TRENDING_UP",
-        rationale="test", feature_schema_version=1, data_timestamp=1000,
-    )
+    defaults = {
+        "strategy_key": "momentum_continuation", "strategy_version": 1, "canonical_symbol": "XAUUSD",
+        "direction": "BUY", "raw_confidence": 0.6, "stop_distance": 1.0, "target_distance": 2.0,
+        "expected_duration_seconds": 300, "entry_method": "MARKET", "regime": "TRENDING_UP",
+        "rationale": "test", "feature_schema_version": 1, "data_timestamp": 1000,
+    }
     defaults.update(overrides)
     return StrategySignal(**defaults)
 

@@ -22,15 +22,23 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from adaptive_scalper.backtest.types import BacktestConfig
 from adaptive_scalper.config.loader import AppConfig
 from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
+from adaptive_scalper.costs.edge_evidence import (
+    NO_VALIDATED_EDGE_EVIDENCE,
+    EdgeEvidenceProvider,
+    require_executable_provider,
+)
 from adaptive_scalper.features.adx import wilder_adx
 from adaptive_scalper.gateway.protocol import Gateway
-from adaptive_scalper.paper.engine import PaperSessionConfigMismatchError, run_paper_cycle
+from adaptive_scalper.paper.engine import (
+    PaperSessionConfigMismatchError,
+    run_paper_cycle,
+)
 from adaptive_scalper.paper.state import get_session
 from adaptive_scalper.portfolio.correlation import compute_correlation_matrix
 from adaptive_scalper.portfolio.exposure import PositionExposure
@@ -40,13 +48,15 @@ from adaptive_scalper.risk.governor import risk_limits_from_config
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.microstructure import publish_vwap_bands
 from adaptive_scalper.runtime.news_monitor import NewsMonitor
-from adaptive_scalper.runtime.state import put_state, record_entry_decision, record_event
-from adaptive_scalper.costs.edge_evidence import (
-    NO_VALIDATED_EDGE_EVIDENCE,
-    EdgeEvidenceProvider,
-    require_executable_provider,
+from adaptive_scalper.runtime.state import (
+    put_state,
+    record_entry_decision,
+    record_event,
 )
-from adaptive_scalper.simulation.fill_model import COST_UNVERIFIED_ASSUMPTION, FillAssumptions
+from adaptive_scalper.simulation.fill_model import (
+    COST_UNVERIFIED_ASSUMPTION,
+    FillAssumptions,
+)
 
 logger = logging.getLogger(__name__)
 

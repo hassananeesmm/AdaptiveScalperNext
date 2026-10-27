@@ -14,7 +14,12 @@ from pathlib import Path
 
 import yaml
 
-from adaptive_scalper.knowledge.model import RESERVED_FILES, Concept, Issue, KnowledgeBundle
+from adaptive_scalper.knowledge.model import (
+    RESERVED_FILES,
+    Concept,
+    Issue,
+    KnowledgeBundle,
+)
 
 MAX_FILE_BYTES = 256 * 1024
 MAX_FILES = 2000
@@ -27,8 +32,7 @@ class BundleNotFoundError(FileNotFoundError):
 def split_frontmatter(text: str) -> tuple[str | None, str]:
     """(frontmatter_yaml, body). OKF frontmatter is a leading block
     delimited by `---` lines; None when the file has none."""
-    if text.startswith("﻿"):
-        text = text[1:]
+    text = text.removeprefix("﻿")
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return None, text

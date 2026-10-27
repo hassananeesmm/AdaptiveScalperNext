@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Callable
 
 from adaptive_scalper.gateway.broker_constraints import derive_filling_type
 from adaptive_scalper.gateway.demo_gate import verify_demo_before_order
@@ -129,7 +129,7 @@ def run_order_check_probe(
     )
     try:
         check = gateway.order_check(request)  # checked, never sent
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - probe only (never sends): failure reported as ERROR
         return stop("ORDER_CHECK", f"order_check raised {type(exc).__name__}: {exc}", status=ERROR)
     if check is None:
         return stop("ORDER_CHECK", "order_check returned None", status=ERROR)

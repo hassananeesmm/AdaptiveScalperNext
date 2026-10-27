@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from runtime_helpers import STEP, T0, FakeClock, build_engine, step
+from test_final_permission import _full_allow_input
 
 from adaptive_scalper.config.loader import EntryWindowConfig, load_config
 from adaptive_scalper.core.final_permission import ALLOW, evaluate_final_permission
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.risk.entry_window import BLOCK_SESSION, entry_window_block
-from runtime_helpers import STEP, T0, FakeClock, build_engine, step
-from test_final_permission import _full_allow_input
 
 DAY = 1_750_032_000  # 2025-06-16 00:00:00 UTC (a Monday)
 LONDON_NY = (12, 20)
@@ -145,13 +145,13 @@ def test_demo_global_block_outside_the_window_and_no_order_sent(tmp_path):
 
 
 def test_demo_global_block_lifts_inside_the_window(tmp_path):
-    clock, engine, conn, gateway = _started(tmp_path, "DEMO")
+    clock, engine, _conn, _gateway = _started(tmp_path, "DEMO")
     _with_window(engine.demo, 20, 21)
     assert engine.demo.global_entry_block(int(clock.now)) is None
 
 
 def test_paper_global_block_outside_the_window(tmp_path):
-    clock, engine, conn, gateway = _started(tmp_path, "PAPER")
+    clock, engine, _conn, _gateway = _started(tmp_path, "PAPER")
     _with_window(engine.paper, *LONDON_NY)
     decision, _ = engine.paper.global_entry_block(int(clock.now))
     assert decision == BLOCK_SESSION

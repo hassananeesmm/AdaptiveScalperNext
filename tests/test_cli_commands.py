@@ -12,13 +12,13 @@ import json
 import sys
 
 import pytest
+from sim_helpers import random_walk_bars, spec
 
 from adaptive_scalper.cli import build_parser, main
 from adaptive_scalper.gateway.spec_store import load_symbol_spec, save_symbol_spec
 from adaptive_scalper.history.store import insert_bars
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.runtime.state import put_state
-from sim_helpers import random_walk_bars, spec
 
 START = 1_700_000_000
 N_BARS = 3000
@@ -85,7 +85,7 @@ def test_the_module_entry_point_works(env):
 
     cfg, _ = env
     result = subprocess.run([sys.executable, "-m", "adaptive_scalper.cli", "--config", cfg, "strategies"],
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True, timeout=60, check=False)
     assert result.returncode == 0 and "momentum_continuation" in result.stdout
 
 

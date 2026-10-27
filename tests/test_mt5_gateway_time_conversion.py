@@ -5,14 +5,14 @@ a fake MetaTrader5 module shaped like the real SDK's return values."""
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from adaptive_scalper.gateway.factory import create_live_gateway
 from adaptive_scalper.gateway.mt5_gateway import Mt5Gateway
 from adaptive_scalper.gateway.server_time import RULE_UTC, RULE_UTC2_US_DST
 
-UTC_NOW = int(datetime(2026, 9, 24, 20, 0, tzinfo=timezone.utc).timestamp())
+UTC_NOW = int(datetime(2026, 9, 24, 20, 0, tzinfo=UTC).timestamp())
 SERVER_NOW = UTC_NOW + 3 * 3600  # measured on the laptop: server = UTC+3 in US DST
 
 
@@ -106,7 +106,7 @@ def test_the_factory_requires_an_explicit_rule():
 def test_bars_inside_the_skipped_spring_server_hour_are_dropped():
     # Observed: stray BTCUSD bars at server 09:00 on spring-forward Sundays,
     # an hour the server clock skips; converted, they would duplicate 10:00.
-    spring = int(datetime(2026, 3, 8, 9, 0, tzinfo=timezone.utc).timestamp())  # server clock
+    spring = int(datetime(2026, 3, 8, 9, 0, tzinfo=UTC).timestamp())  # server clock
     gw = gateway()
     rows = [{"time": spring + dt, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "tick_volume": 1,
              "spread": 1, "real_volume": 0} for dt in (-900, 0, 3600)]

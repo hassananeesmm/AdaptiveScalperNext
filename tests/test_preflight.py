@@ -78,8 +78,7 @@ def test_preflight_passes_spread_caps_when_every_symbol_is_capped(tmp_path, monk
     _no_mt5(monkeypatch)
     cfg, _ = _config(tmp_path)
     with open(cfg, "a", encoding="utf-8") as f:
-        for symbol in ("XAUUSD", "GBPJPY", "BTCUSD"):
-            f.write(f"[costs.{symbol}]\nmax_spread_price = 1.0\n")
+        f.writelines(f"[costs.{symbol}]\nmax_spread_price = 1.0\n" for symbol in ("XAUUSD", "GBPJPY", "BTCUSD"))
     report = run_preflight(cfg, dashboard_url="http://127.0.0.1:1", now_utc=1_800_000_000)
     check = next(c for c in report["checks"] if c["name"] == "spread_caps")
     assert check["status"] == "PASS"

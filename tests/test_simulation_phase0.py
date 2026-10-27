@@ -12,8 +12,24 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from edge_fixtures import v1_replay_config
+from sim_helpers import (
+    RES,
+    START,
+    STEP,
+    SYMBOL,
+    bars,
+    config,
+    install,
+    random_walk_bars,
+    spec,
+)
 
-from adaptive_scalper.backtest.dataset import build_dataset_snapshot, record_dataset, record_dataset_usage
+from adaptive_scalper.backtest.dataset import (
+    build_dataset_snapshot,
+    record_dataset,
+    record_dataset_usage,
+)
 from adaptive_scalper.backtest.engine import STOP_LOSS_HIT, run_backtest
 from adaptive_scalper.backtest.oos import DatasetContaminatedError, run_untouched_oos
 from adaptive_scalper.backtest.persistence import record_backtest_run
@@ -29,26 +45,21 @@ from adaptive_scalper.backtest.types import (
     REJECT_RISK,
     REJECT_STALE_SIGNAL,
 )
-from adaptive_scalper.paper.engine import PaperSessionConfigMismatchError, run_paper_cycle
+from adaptive_scalper.paper.engine import (
+    PaperSessionConfigMismatchError,
+    run_paper_cycle,
+)
 from adaptive_scalper.paper.state import get_paper_trades, get_session
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.portfolio.correlation import CorrelationResult
 from adaptive_scalper.portfolio.exposure import PositionExposure
 from adaptive_scalper.risk.governor import RiskLimits
-from adaptive_scalper.simulation.fill_model import COST_UNVERIFIED_ASSUMPTION, FILL_MODEL_VERSION, FillAssumptions
-from adaptive_scalper.simulation.types import EvidenceOrigin
-from edge_fixtures import v1_replay_config
-from sim_helpers import (
-    RES,
-    START,
-    STEP,
-    SYMBOL,
-    bars,
-    config,
-    install,
-    random_walk_bars,
-    spec,
+from adaptive_scalper.simulation.fill_model import (
+    COST_UNVERIFIED_ASSUMPTION,
+    FILL_MODEL_VERSION,
+    FillAssumptions,
 )
+from adaptive_scalper.simulation.types import EvidenceOrigin
 
 FIRE = 30
 

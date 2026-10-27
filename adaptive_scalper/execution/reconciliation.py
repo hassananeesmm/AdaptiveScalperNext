@@ -48,7 +48,11 @@ import time
 from dataclasses import dataclass, field
 
 from adaptive_scalper.execution.state_machine import OrderState
-from adaptive_scalper.execution.store import OrderRecord, get_active_orders, transition_order_state
+from adaptive_scalper.execution.store import (
+    OrderRecord,
+    get_active_orders,
+    transition_order_state,
+)
 from adaptive_scalper.gateway.protocol import Gateway
 from adaptive_scalper.gateway.types import HistoricalDeal, PendingOrderSnapshot
 from adaptive_scalper.journal.events import _append_event_locked, append_event
@@ -359,7 +363,9 @@ def _recover_missing_local_order(
         # Deferred imports to avoid a module-load-time cycle (entry_fills
         # imports from this module).
         from adaptive_scalper.execution.entry_fills import record_entry_fills
-        from adaptive_scalper.execution.position_resolution import resolve_entry_fill_evidence
+        from adaptive_scalper.execution.position_resolution import (
+            resolve_entry_fill_evidence,
+        )
 
         evidence = resolve_entry_fill_evidence(
             gateway, broker_deal_id=None, broker_order_id=local_order.broker_order_id,

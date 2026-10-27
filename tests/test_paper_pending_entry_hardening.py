@@ -22,7 +22,10 @@ import pytest
 
 from adaptive_scalper.backtest.engine import run_backtest
 from adaptive_scalper.backtest.types import REJECT_SIZING
-from adaptive_scalper.paper.engine import PaperSessionConfigMismatchError, run_paper_cycle
+from adaptive_scalper.paper.engine import (
+    PaperSessionConfigMismatchError,
+    run_paper_cycle,
+)
 from adaptive_scalper.paper.state import (
     PENDING_ENTRY_STATE_VERSION,
     PaperStateError,
@@ -32,7 +35,7 @@ from adaptive_scalper.paper.state import (
     save_session_state,
 )
 from adaptive_scalper.persistence import connect, migrate
-from tests.test_backtest_correctness_regressions import (  # noqa: F401  (pytest fixtures)
+from tests.test_backtest_correctness_regressions import (
     FIRE_INDEX,
     RES,
     START,
@@ -41,14 +44,14 @@ from tests.test_backtest_correctness_regressions import (  # noqa: F401  (pytest
     _config,
     _seed,
     _spec,
-    db,
-    script,
+    db,  # noqa: F401 - pytest fixture
+    script,  # noqa: F401 - pytest fixture
 )
 from tests.test_paper_pending_entry_validation import CURSOR, KEY, _pending, _write_raw
 
 
 @pytest.fixture()
-def session_db(db):
+def session_db(db):  # noqa: F811 - pytest fixture parameter
     get_or_create_session(db, KEY, "XAUUSD", "M5", initial_equity=10_000.0, now_utc=1000)
     return db
 
@@ -116,7 +119,7 @@ def test_save_refuses_a_non_finite_entry_feature_and_writes_nothing(session_db):
 
 # --- session identity --------------------------------------------------------
 
-def test_a_session_key_cannot_be_reused_for_another_resolution(script, db):
+def test_a_session_key_cannot_be_reused_for_another_resolution(script, db):  # noqa: F811 - pytest fixture parameter
     script()
     bars = _bars()
     run_paper_cycle(db, bars, SYMBOL, RES, _spec(), config=_config(), session_key="shared", now_utc=START)
@@ -126,7 +129,7 @@ def test_a_session_key_cannot_be_reused_for_another_resolution(script, db):
 
 # --- one-shot consumption ----------------------------------------------------
 
-def test_a_pending_entry_rejected_by_risk_sizing_is_consumed_exactly_once(script):
+def test_a_pending_entry_rejected_by_risk_sizing_is_consumed_exactly_once(script):  # noqa: F811 - pytest fixture parameter
     script()
     bars = _bars()
     lookback = _config().feature_lookback
@@ -144,7 +147,7 @@ def test_a_pending_entry_rejected_by_risk_sizing_is_consumed_exactly_once(script
 
 # --- restart -----------------------------------------------------------------
 
-def test_a_pending_entry_survives_a_reconnect_and_fills_exactly_once(script, tmp_path):
+def test_a_pending_entry_survives_a_reconnect_and_fills_exactly_once(script, tmp_path):  # noqa: F811 - pytest fixture parameter
     script()
     bars = _bars()
     config = _config()
@@ -177,7 +180,7 @@ def test_a_pending_entry_survives_a_reconnect_and_fills_exactly_once(script, tmp
         conn.close()
 
 
-def test_restart_after_every_bar_matches_continuous_processing(script, tmp_path):
+def test_restart_after_every_bar_matches_continuous_processing(script, tmp_path):  # noqa: F811 - pytest fixture parameter
     """Same bars, same config: one bar per cycle with a reconnect after every
     cycle == one continuous PAPER session."""
     script()
