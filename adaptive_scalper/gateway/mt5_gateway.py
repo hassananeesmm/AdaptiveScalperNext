@@ -249,6 +249,7 @@ def _position_snapshot(raw) -> PositionSnapshot:
         profit=raw.profit,
         magic=raw.magic,
         comment=raw.comment,
+        swap=getattr(raw, "swap", None),
     )
 
 

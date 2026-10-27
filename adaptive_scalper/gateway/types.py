@@ -277,6 +277,7 @@ class PositionSnapshot:
     profit: float
     magic: int
     comment: str
+    swap: float | None = None
 
 
 @dataclass(frozen=True)

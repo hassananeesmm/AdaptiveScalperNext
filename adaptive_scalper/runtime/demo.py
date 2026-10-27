@@ -120,6 +120,13 @@ from adaptive_scalper.regimes.classifier import (
     RegimeTracker,
     classify_regime,
 )
+from adaptive_scalper.risk.daily_loss import (
+    BASELINE_STATE_KEY as DAILY_LOSS_BASELINE_KEY,
+)
+from adaptive_scalper.risk.daily_loss import DailyLoss, DailyLossEvidenceError
+from adaptive_scalper.risk.daily_loss import check_baseline as check_daily_baseline
+from adaptive_scalper.risk.daily_loss import collect as collect_daily_evidence
+from adaptive_scalper.risk.daily_loss import compute as compute_daily_loss
 from adaptive_scalper.risk.entry_regime import adx_entry_block
 from adaptive_scalper.risk.entry_window import entry_window_block
 from adaptive_scalper.risk.governor import (
@@ -134,6 +141,7 @@ from adaptive_scalper.risk.peak_equity import (
     drawdown_pct,
     observe_equity,
 )
+from adaptive_scalper.risk.project_drawdown import observe_gateway
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
 from adaptive_scalper.runtime.market_data import closed_bars, log_returns
 from adaptive_scalper.runtime.microstructure import publish_vwap_bands
@@ -325,23 +333,30 @@ class DemoRuntime:
     # shared broker/DB truth
     # ------------------------------------------------------------------
 
-    def _daily_realized_pnl(self, now: int) -> float:
-        day_start = now - now % 86400
-        deals = self.gateway.history_deals_get(day_start, now + 60)
-        return sum(d.profit + d.commission + d.swap + d.fee for d in deals)
+    def _daily_loss_evidence(self, now: int) -> tuple[DailyLoss, object]:
+        """Today's conservative loss (risk.daily_loss: deposits never offset,
+        foreign profits never mask) from one settled broker snapshot, with the
+        day-start balance pinned the first time it is seen each UTC day.
+        Raises DailyLossEvidenceError when it cannot be established."""
+        account, deals, positions = collect_daily_evidence(self.gateway, now)
+        own_ids = [row[0] for row in self.conn.execute(
+            "SELECT broker_position_id FROM positions WHERE broker_position_id IS NOT NULL")]
+        loss = compute_daily_loss(account, deals, positions, own_magic=self.config.runtime.magic,
+                                  own_position_ids=own_ids, now=now)
+        baseline = check_daily_baseline(get_state(self.conn, DAILY_LOSS_BASELINE_KEY), loss)
+        put_state(self.conn, DAILY_LOSS_BASELINE_KEY, baseline, now_utc=now)
+        return loss, account
+
+    @staticmethod
+    def _daily_loss_pct(loss: DailyLoss, account) -> float:
+        return effective_daily_loss_pct(realized_pnl=loss.realized, floating_pnl=loss.floating,
+                                        day_start_equity=loss.day_start_balance, equity=account.equity)
 
     def _daily_loss(self, now: int, account) -> tuple[float, float, float, float]:
         """(effective daily loss %, realized today, floating now, day-start
-        equity). Floating = broker equity - balance (every open position,
-        swap included); day-start equity = balance - today's realized P&L
-        (deposits/withdrawals today are not modelled; the denominator is
-        still capped at current equity, risk.governor.effective_daily_loss_pct)."""
-        realized = self._daily_realized_pnl(now)
-        floating = account.equity - account.balance
-        day_start = account.balance - realized
-        pct = effective_daily_loss_pct(realized_pnl=realized, floating_pnl=floating,
-                                       day_start_equity=day_start, equity=account.equity)
-        return pct, realized, floating, day_start
+        balance) from the conservative accounting above."""
+        loss, settled = self._daily_loss_evidence(now)
+        return self._daily_loss_pct(loss, settled), loss.realized, loss.floating, loss.day_start_balance
 
     def _daily_loss_circuit_breaker(self, now: int, broker_positions: dict) -> bool:
         """Hard daily circuit breaker. When realized + floating loss reaches
@@ -356,7 +371,16 @@ class DemoRuntime:
         account = self.gateway.account_info()
         if account is None:
             raise Mt5QueryError("account_info unavailable for the daily loss circuit breaker")
-        pct, realized, floating, day_start = self._daily_loss(now, account)
+        try:
+            pct, realized, floating, day_start = self._daily_loss(now, account)
+        except DailyLossEvidenceError as exc:
+            # Entries are blocked by the global block and final permission; the breaker still
+            # trips on the broker's own equity drop so a real loss always flattens.
+            record_event(self.conn, "WARNING", "risk", "DAILY_LOSS_EVIDENCE_UNAVAILABLE", str(exc),
+                         dedup_key=f"daily_loss_evidence:{now // 300}", now_utc=now)
+            realized, floating, day_start = 0.0, account.equity - account.balance, account.balance
+            pct = effective_daily_loss_pct(realized_pnl=realized, floating_pnl=floating,
+                                           day_start_equity=day_start, equity=account.equity)
         if pct < self.risk_limits.max_daily_loss_pct:
             return False
         reason = (f"daily loss circuit breaker: {pct:.2f}% >= max_daily_loss_pct "
@@ -450,8 +474,14 @@ class DemoRuntime:
     def _risk_gate_peak(self, account, now: int) -> float:
         """Peak for the final-permission risk gate: NaN when the baseline is
         unavailable, which `evaluate_risk_gate` blocks (fail closed)."""
+        if self._project_drawdown().blocked:
+            return math.nan
         peak = self._observe_peak(account, now)
         return math.nan if peak.blocked else peak.peak_equity
+
+    def _project_drawdown(self):
+        return observe_gateway(self.conn, self.gateway, magic=self.config.runtime.magic,
+                               clock=self.clock, limit=self.risk_limits.max_drawdown_pct)
 
     def _exposures(self) -> tuple[list[PositionExposure], list[PositionExposure]]:
         open_positions = [
@@ -526,7 +556,17 @@ class DemoRuntime:
             return session_block
         account = self.gateway.account_info()
         equity = account.equity
-        daily_pct, realized, floating, _ = self._daily_loss(now, account)
+        project = self._project_drawdown()
+        if project.blocked:
+            return BLOCK_RISK, project.reason
+        try:
+            daily, settled = self._daily_loss_evidence(now)
+        except DailyLossEvidenceError as exc:
+            return BLOCK_RISK, f"daily loss evidence unavailable: {exc}"
+        if not daily.reconciled:
+            return BLOCK_RISK, ("daily loss evidence does not reconcile: broker equity differs from balance + "
+                                "marked open positions")
+        daily_pct, realized, floating = self._daily_loss_pct(daily, settled), daily.realized, daily.floating
         if daily_pct >= self.risk_limits.max_daily_loss_pct:
             return BLOCK_RISK, (f"daily loss {daily_pct:.2f}% (realized {realized:.2f}, floating {floating:.2f}) "
                                 f"reached the limit")
@@ -674,6 +714,7 @@ class DemoRuntime:
         if account is None:
             raise Mt5QueryError("account_info unavailable for the drawdown baseline")
         try:
+            self._project_drawdown()
             self._observe_peak(account, now)
         except Exception as exc:  # bookkeeping must never stop exit management; entries re-observe and fail closed
             logger.exception("drawdown baseline observation failed")
@@ -1096,7 +1137,13 @@ class DemoRuntime:
         pending_only = [o for o in get_active_orders(self.conn)
                         if o.state.value in _OPEN_EXPOSURE_ORDER_STATES and o.canonical_symbol not in open_symbols]
         reentry = self._reentry_check(canonical, signal, now)
-        realized_today = self._daily_realized_pnl(now)
+        try:
+            daily, _settled = self._daily_loss_evidence(now)
+            # an unreconciled snapshot is an unknown loss: NaN makes the risk gate block
+            realized_today = daily.realized if daily.reconciled else math.nan
+            floating_today, day_start_balance = daily.floating, daily.day_start_balance
+        except DailyLossEvidenceError:
+            realized_today = floating_today = day_start_balance = math.nan
         permission = FinalPermissionInput(
             mode=MODE, signal=signal, kill_switch_state=get_kill_switch_state(self.conn),
             demo_verification=verify_demo_before_order(self.gateway),
@@ -1123,8 +1170,8 @@ class DemoRuntime:
                 current_positions_count=len(open_positions) + len(pending_only),
                 current_positions_for_symbol=len(same_symbol),
                 daily_realized_pnl=realized_today, peak_equity=self._risk_gate_peak(account, now),
-                daily_floating_pnl=account.equity - account.balance,
-                day_start_equity=account.balance - realized_today,
+                daily_floating_pnl=floating_today,
+                day_start_equity=day_start_balance,
             ),
             risk_limits=self.risk_limits, open_positions=open_positions, pending_positions=pending,
             portfolio_risk_limits=self.portfolio_limits, reentry_check=reentry,
