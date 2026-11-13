@@ -18,7 +18,8 @@ from adaptive_scalper.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHERS = ["SETUP.bat", "START PAPER.bat", "START DEMO.bat", "START DASHBOARD.bat", "RUN BACKTEST.bat",
-             "STOP TRADING.bat", "START PAPER + DASHBOARD.bat", "START DEMO + DASHBOARD.bat"]
+             "STOP TRADING.bat", "START PAPER + DASHBOARD.bat", "START DEMO + DASHBOARD.bat",
+             "START AI DESK.bat"]   # 2026-11-14: advisory-only research service
 SCRIPTS = ["scripts/windows_verify.ps1", "scripts/build_release.ps1", "scripts/release_smoke_test.ps1"]
 CLI_CALL = re.compile(r"-m adaptive_scalper\.cli (?:--config \$Cfg )?(.+)$")
 
