@@ -10,6 +10,7 @@ stands.
 | Runtime (PAPER or DEMO) | `paper` / `demo` | yes: the **only** MT5 client, one `SynchronizedGateway` | yes |
 | Dashboard | `dashboard` | **never** | **never** (read-only connection) |
 | Operator CLI | one-shot commands | only broker-facing commands, DEMO-verified first | yes |
+| AI Trading Desk (optional) | `ai-desk serve` / `START AI DESK.bat` | **never** | trading DB **never** (read-only); only its own `data/ai_desk.sqlite3` |
 
 A second runtime against the same database is refused while the first one's heartbeat is
 fresh.
@@ -38,6 +39,7 @@ fresh.
 | `knowledge/` | OKF v0.2 loader, validator, search, advisor and benchmark over the Git-tracked `knowledge/` bundle. |
 | `runtime/` | `RuntimeEngine`, scheduler, DEMO and PAPER cycles, market data, news monitor, advisory panel, runtime state, logging, side-effect-free analysis. |
 | `dashboard/` | Read-only panels, FastAPI app, WebSocket feed, static page. |
+| `ai_desk/` | Advisory-only seven-agent research desk in its own process: read-only snapshots of the trading DB, deterministic agents, optional untrusted model narratives, its own journal `data/ai_desk.sqlite3`, evaluation against the unchanged baseline. Not in the decision path (`docs/AI_DESK.md`). |
 | `cli/` | Operator commands, split by area. |
 
 ## Runtime

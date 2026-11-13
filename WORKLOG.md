@@ -3365,3 +3365,33 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   broker-side closes, simultaneous positions, unexplained drop, unusable evidence, midnight rollover, vanished
   history, unsettled snapshot, runtime breaker, restart). Helper scripts take explicit `--source/--out-dir` and
   `--source/--target` paths (no hardcoded worktree).
+
+## 2026-11-14 -- AI Trading Desk (branch `feature/ai-trading-desk`, base `f892c5f`, advisory only, not deployed)
+
+- Audit: deployed 0.2.9 (`2dfb171`, schema 32); dev stack readiness <= ruff-cleanup (PR #11) <= drawdown-safety
+  (PR #12, f892c5f). Main checkout has 182 uncommitted lint-style edits (operator's work) and was not touched; the desk
+  was built in a new worktree `.worktrees/ai-desk`. Constraints found: single-threaded runtime scheduler (desk must
+  run out of process), trading-config fingerprint (desk uses its own `config/ai_desk.toml`), stored bars end
+  2026-09-18 and the last months are the reserved OOS (fresh market state only in `runtime_state`).
+- Built `adaptive_scalper/ai_desk/` (contracts, security, read-only snapshot builder, metrics, seven agents,
+  provider router + Anthropic / Grok / OpenAI-compatible adapters, orchestration, event bus, scheduler service,
+  journal with own migrations, evaluator, health, dashboard panels), CLI `ai-desk`
+  (doctor/status/agents/run-once/serve/report/evaluate/health), dashboard view GET `/api/ai-desk`,
+  `START AI DESK.bat`, `config/ai_desk.example.toml` (local `config/ai_desk.toml` git-ignored), docs/AI_DESK.md,
+  SAFETY.md rows 29-30.
+- Existing audit `test_there_is_no_live_or_real_execution_mode` caught the desk's snapshot-mode literal "LIVE" and a
+  payload key "live": renamed to CURRENT / runtime_fresh (test unchanged).
+- Tests: `tests/test_ai_desk.py`, `tests/test_ai_desk_safety.py` (+ `tests/ai_desk_fixtures.py`); `test_cli_commands`
+  EXPECTED and `test_launchers` LAUNCHERS extended (nothing removed). Full suite on the laptop:
+  2379 passed, 9 skipped (live-MT5 module), 0 failed. Ruff 0.16.9 clean on all new/changed files.
+- Real run against the production trading DB (read-only; journal in a scratch directory): cycle COMPLETED, 9
+  validated results, retry idempotent (0 inserted / 9 duplicates); runtime not live (heartbeat ~16 days old) so
+  market = STALE, risk/coordinator = INCOMPLETE ASSESSMENT -- reported honestly. Latency ~1.8 s uncontended
+  (strategy/learning ~1 s each from bootstrap CIs), Python peak memory 46 MB.
+- Evaluation (pre-registered protocol ai-desk-eval/1, trial #1): DEMO n=506 baseline -0.038 R (CI -0.087..+0.015);
+  +Market+Risk / full desk kept 157, improvement CI -0.054..+0.100 -> NOT DEMONSTRATED; other configs INSUFFICIENT
+  SAMPLE; SHADOW n=180 all INSUFFICIENT SAMPLE. Market volatility statements (as-of replay, 60 days before OOS) hit
+  0.51-0.57 vs majority baseline ~0.35 (descriptive, not an edge). A replay overlapping the reserved OOS is refused.
+  Conclusion: the AI desk has not demonstrated an improvement over the baseline.
+- Not done / blocked: no real external model call (no key or budget configured); launcher and dashboard view not
+  exercised interactively on the laptop; nothing merged, pushed or deployed.

@@ -136,3 +136,13 @@ actually runs on the Windows machine.
 
 No dashboard endpoint may modify orders, positions, the kill switch,
 broker credentials, trading configuration or runtime schedules.
+
+## AI Trading Desk view
+
+The **AI Trading Desk** view fetches GET `/api/ai-desk` on demand (every 10 s while visible).
+It reads the desk's separate journal `data/ai_desk.sqlite3` with `connect_readonly` and shows
+five panels: agent overview, market intelligence, trade research (AI ADVICE next to the ACTUAL
+TRADING-ENGINE DECISION, skeptic objections, preserved disagreements), learning & performance
+(labelled DEMO / HISTORICAL SIMULATION / UNVERIFIED RESEARCH) and operational health (provider
+errors, tokens, cost, cache, stale agents, configuration). Without a journal the panels show
+NO_DATA. The view has no controls. See `docs/AI_DESK.md`.
