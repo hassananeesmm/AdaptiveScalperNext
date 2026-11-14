@@ -3441,3 +3441,45 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   sha256 identical to the session baseline; no diff from `f892c5f` under config/, risk, execution, core, gateway or
   runtime. Explorer double-click of `START AI DESK.bat` BLOCKED until the branch is in the main checkout (no .venv or
   trading DB in the worktree).
+
+## 2026-11-14 - Runtime bar persistence (branch feature/runtime-bar-persistence, operator-approved direction)
+
+- Operator approved the direction (not deployment). Branch created from `feature/ai-trading-desk` (a7710e9) after
+  the stack was verified (origin/main -> readiness 488d575 -> #11 d46fb15 -> #12 f892c5f -> AI desk, linear).
+- New `adaptive_scalper/runtime/bar_persistence.py` (`LiveBarSink`). Engine registers task `bar_persistence`
+  (priority 3, 60 s) only when `[runtime] persist_closed_bars` is true. The default is false, and
+  `config/default.toml` is untouched. Sources: DEMO `DemoRuntime.shadow_bars` (already refreshed every entry cycle,
+  also under a global block) and PAPER `PaperRuntime.closed_bars_cache` (new field, assigned from the bars the cycle
+  already fetched; no decision reads it). No gateway call.
+- Write rules:
+  - Closed on the local UTC clock (a bar ahead of the clock stops that symbol and raises BAR_NOT_PERSISTED).
+  - Aligned to the resolution; finite positive prices; high/low bound open/close; non-negative volumes. Otherwise
+    BAR_REJECTED.
+  - Never within one hour of a server-clock DST change (repeated / skipped server hour), via BAR_DST_WINDOW_SKIPPED.
+  - `require_utc` must pass, or the sink disables itself.
+  - Watermark seeded from MAX(ts_utc), plus INSERT OR IGNORE; the first write wins.
+  - One `BEGIN IMMEDIATE` transaction per run with work, 50 ms busy timeout (previous timeout restored). Nothing new
+    means no transaction.
+  - It never raises. Failure means in-memory advisory health only; the failure path writes nothing.
+  - BAR_GAP when the cache no longer reaches the stored data.
+  - Coverage is refreshed at most every 10 min per symbol. The `bar_persistence` state records rows, durations,
+    lock skips and DB bytes.
+- Tests: `tests/test_bar_persistence.py`, 25 passed. They cover:
+  - Off by default, in code and in the shipped config; no task when off.
+  - PAPER fingerprint and session key identical on/off.
+  - DEMO and PAPER persist closed, aligned bars.
+  - Gateway call counts, entry decisions and other tasks' priorities/lag identical on/off.
+  - A failing sink: no TASK_FAILED, nothing safety-critical degraded, identical decisions.
+  - The AI desk reports FRESH_BARS with persistence on and not with it off.
+  - Forming bar, stale tick, invalid bar, non-UTC DB.
+  - DST start and end windows.
+  - Idempotent rerun and restart watermark; overlap with bootstrapped rows keeps the first write.
+  - Gap within the cache filled; beyond it, one BAR_GAP.
+  - Locked DB skipped in < 1 s with the busy timeout restored; write failure rolled back; no nested transaction.
+  - Cost: 900-row cold start < 2 s, idle < 100 ms, 3-row increment < 250 ms.
+  - AST audit: no MT5, execution, core or risk imports and no broker calls.
+- Ruff 0.16.9: all checks passed. Neighbouring tests (entry window, AI desk providers, broker-truth degradation)
+  pass (83 passed together with the new module). Full suite: NOT COMPLETED. The sequential run was stopped by
+  the host at ~2% for low system memory (not a test failure; 0 failures up to then; no pytest process left). It must
+  be re-run, and must pass, before this branch is pushed or reviewed for merge.
+- Not done: merge, push, deploy, enabling the flag. M1 persistence remains phase 2.

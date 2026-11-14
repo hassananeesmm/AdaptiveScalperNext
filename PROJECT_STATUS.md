@@ -40,6 +40,14 @@ gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md gu
   Retry-After, 1 MB body cap, transport/adapter errors cannot fail a cycle, rejected answers count toward the breaker,
   per-cycle `narrative_budget_seconds`). Stale root cause: runtime down ~16.7 days AND the runtime never persists bars
   (newest stored M5 ~56 days old); runtime-side bar persistence is a PROPOSAL needing operator approval (AI_DESK.md).
+- Runtime bar persistence (branch `feature/runtime-bar-persistence`, stacked on the AI desk branch; 2026-11-14):
+  IMPLEMENTED, TESTED-FAKE, OFF by default (`[runtime] persist_closed_bars = false`; `config/default.toml` unchanged).
+  Approved direction, NOT merged, NOT deployed. It stores the closed M5 bars the cycles already fetched, with zero extra
+  MT5 calls (gateway call counts identical on/off), identical entry decisions on/off, and the PAPER fingerprint and
+  session key unchanged. Closed + UTC-aligned + sane-price bars only; bars within 1 h of a DST change are skipped. It is
+  idempotent with a watermark, a locked DB is skipped (50 ms busy timeout), it never raises, health is advisory, and
+  BAR_GAP is reported beyond the ~25 h cache. 25 new tests in `tests/test_bar_persistence.py`. Full suite NOT yet
+  completed on this branch (host stopped it at ~2% for low memory); it must pass before push/review.
   Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
   Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
   0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.

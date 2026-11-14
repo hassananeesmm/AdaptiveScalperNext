@@ -29,6 +29,9 @@ Scheduled tasks (priority, cadence from `[runtime]`):
                             market once its quote is live again (full re-validation)
     3 cost_evidence_sweep ~60s  DEMO: complete execution cost observations
                             for closed positions (evidence only)
+    3 bar_persistence ~60s  OPTIONAL (`[runtime] persist_closed_bars`, off by default):
+                            copy the closed bars the cycles already fetched into
+                            `bars` -- no MT5 call, advisory, never raises
     4 heartbeat       ~1s   engine state for the observer-only dashboard
 
 The dashboard never runs inside this process: it reads the database, so
@@ -78,6 +81,8 @@ from adaptive_scalper.persistence.database import integrity_check
 from adaptive_scalper.rag.ingestion import ingest as ingest_rag_memories
 from adaptive_scalper.rag.service import RagService
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
+from adaptive_scalper.runtime.bar_persistence import FAILED as BAR_SINK_FAILED
+from adaptive_scalper.runtime.bar_persistence import LiveBarSink
 from adaptive_scalper.runtime.demo import BROKER_TRUTH_AVAILABLE, DemoRuntime
 from adaptive_scalper.runtime.news_monitor import NewsMonitor, default_live_providers
 from adaptive_scalper.runtime.paper import PaperRuntime
@@ -103,6 +108,7 @@ NEWS_FETCH_OVERDUE_SECONDS = 60
 ENGINE_STOPPED = "STOPPED"
 RAG_INGEST_SECONDS = 60.0
 SYMBOL_ADMISSION_SECONDS = 60.0
+BAR_PERSISTENCE_SECONDS = 60.0
 # Startup validation failures that only mean "no live quote right now"
 # (market closed): identity and contract checks already passed.
 MARKET_CLOSED_REASONS = frozenset({NO_QUOTE, INVALID_QUOTE, STALE_QUOTE})
@@ -159,6 +165,7 @@ class RuntimeEngine:
         self.excluded: dict[str, str] = {}
         self.demo: DemoRuntime | None = None
         self.paper: PaperRuntime | None = None
+        self.bar_sink: LiveBarSink | None = None
         self.started_at: int | None = None
         self.component_health: dict[str, dict] = {}
         self._stop = False
@@ -337,6 +344,13 @@ class RuntimeEngine:
         self._add_task("rag_ingest", RAG_INGEST_SECONDS, 3, self._ingest_rag)
         self._add_task("rag_rebuild", 600, 3, self._rebuild_rag)
         self._add_task("symbol_admission", SYMBOL_ADMISSION_SECONDS, 3, self.admit_reopened_symbols)
+        if self.config.runtime.persist_closed_bars:
+            # Reads only what the cycles above already fetched: zero MT5 calls.
+            source = (lambda: self.demo.shadow_bars) if self.demo is not None else (lambda: self.paper.closed_bars_cache)
+            self.bar_sink = LiveBarSink(self.conn, resolution=self.config.runtime.entry_resolution,
+                                        server_time_rule=self.config.mt5.server_time_rule, source=source,
+                                        clock=self.clock, monotonic=self.scheduler.monotonic)
+            self._add_task("bar_persistence", BAR_PERSISTENCE_SECONDS, 3, self._persist_bars)
         self._add_task("heartbeat", self.config.runtime.heartbeat_seconds, 4, self.heartbeat)
         # news/rag already ran during startup: don't repeat them on the first tick
         for task in self.scheduler.tasks:
@@ -358,6 +372,17 @@ class RuntimeEngine:
         record_event(self.conn, "INFO", "engine", "ENGINE_STARTED", f"{self.mode} runtime started", now_utc=now)
         self.heartbeat()
         return summary
+
+    def _persist_bars(self) -> None:
+        """Advisory: health is kept in memory only (published by the heartbeat);
+        nothing here writes on failure, raises, or feeds a trading decision."""
+        result = self.bar_sink.run()
+        status = result["status"]
+        healthy = status not in (BAR_SINK_FAILED, "DISABLED")
+        self._health("bar_persistence", "OK" if healthy else "DEGRADED",
+                     f"{status}: {result.get('error') or result.get('reason') or ''} "
+                     f"rows_total={self.bar_sink.stats.rows_written} "
+                     f"last_ms={result['duration_ms']} max_ms={round(self.bar_sink.stats.max_duration_ms, 3)}")
 
     def admit_reopened_symbols(self) -> list[str]:
         """Re-validate symbols excluded at startup only for a closed market.
