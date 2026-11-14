@@ -112,6 +112,7 @@ class AiDeskConfig(BaseModel):
     market_resolution: str = "M5"
     poll_seconds: float = 15.0
     agent_timeout_seconds: float = 60.0
+    narrative_budget_seconds: float = 120.0  # wall-clock cap on ALL model calls in one cycle
     stale_after_seconds: int = 1800          # market evidence older than this at as-of is STALE
     runtime_state_stale_seconds: int = 120   # a runtime heartbeat older than this = runtime not live
     retention_days: int = 90

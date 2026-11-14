@@ -104,7 +104,16 @@ for priced providers, the USD budget) has room for the pre-flight estimate, and 
 circuit is closed. Each call has a timeout, bounded retries with exponential backoff, a
 per-provider minimum interval and concurrency limit, a response cache (`cache_ttl_seconds`),
 and falls through `fallback_providers` to `deterministic` (no narrative). Every attempt is
-journaled in `provider_calls` (status, latency, tokens, cost). A consumer chat subscription
+journaled in `provider_calls` (status, latency, tokens, cost).
+
+Hardening (verified 2026-11-14 against a local stub HTTP server, `tests/test_ai_desk_providers.py`):
+HTTP 429/5xx are retried and a numeric `Retry-After` is honoured (capped at 60 s); 4xx is not
+retried; a half-open circuit re-opens on its first failure; a rejected (invalid / instruction-like)
+model answer counts as a breaker failure; response bodies over 1 MB, malformed or wrongly shaped
+bodies, dropped connections and adapter bugs end as a FAILED narrative, never a failed cycle;
+`narrative_budget_seconds` (default 120) caps the wall-clock time of all model calls in one cycle,
+and no retry starts if it would cross that deadline. The key is sent only as a header and never
+appears in the journal or the prompt. A consumer chat subscription
 does not provide API credits; API keys are separate and billed by the provider.
 
 | kind | endpoint | key |
@@ -128,6 +137,48 @@ cycle. Forward checks are scored hourly; retention pruning runs daily. Crashed r
 marked ABANDONED at the next start; committed results survive. If the desk stalls or dies,
 nothing in the trading runtime depends on it.
 
+### Market-data freshness
+
+Root cause of STALE market analysis (measured 2026-11-14 on the laptop's trading DB):
+1. The trading runtime has not run since 2026-10-28 (heartbeat ~16.7 days old), so
+   `runtime_state` (microstructure observer, regime, quotes) is last-known.
+2. Independently of (1), the runtime never writes the `bars` table: it keeps the bars it fetches
+   in memory. `bars` is filled only by the operator command `history bootstrap`; the newest stored
+   M5 bars are ~56 days old. So bar-based statistics (volatility percentile, VWAP band, forward
+   checks) stay stale even while the runtime runs.
+
+What the desk does (never opens MT5, never starts the runtime, never touches the kill switch):
+each Market Analyst result carries `data_freshness.state` = `FRESH_BARS`,
+`RUNTIME_OBSERVER_ONLY` (runtime live; bars stale -> condition from the runtime observer, no
+bar statistics), `RUNTIME_LIVE_NO_OBSERVER` or `RUNTIME_DOWN`, the bar / observer / quote ages
+and a remediation line. When everything is stale it describes the NEWEST source and cites only
+that source (fixed 2026-11-14: it previously preferred 56-day-old bars over the 16-day-old
+observer). `ai-desk doctor` prints the heartbeat and bar ages (informational).
+
+Safe ways to restore freshness (operator decisions, in order of preference):
+- Run the trading runtime through the normal procedure; the desk then reads the fresh observer
+  and quotes (`RUNTIME_OBSERVER_ONLY`).
+- PROPOSAL, not implemented (it changes the trading runtime, so it needs its own branch, review
+  and operator approval): a low-priority runtime task that stores the closed bars the runtime
+  already fetched through the existing idempotent `history.store.insert_bars`. One MT5 client
+  stays the only MT5 client; no new broker call; entries and gates unchanged.
+- Interim, only while the runtime is STOPPED: the existing `history bootstrap` command refreshes
+  `bars` (it is a broker-facing CLI command and must not run concurrently with the runtime).
+  Bars after 2026-07-01 fall in the reserved OOS for research purposes; the desk's
+  CURRENT-mode description may read them, its evaluator replay refuses them.
+
+### Performance (measured 2026-11-14, laptop, 16 logical CPUs, production DB read-only)
+
+Reproduce with `.venv\Scripts\python scripts\ai_desk_benchmark.py --cycles 5` (read-only on the
+trading DB, throw-away journal). Two runs of 5 cycles while nothing else
+was running: cycle median 2.4-2.5 s (min 1.8 s, max 2.9 s); snapshot build 0.1-0.2 s; Strategy and
+Learning Analyst ~1.0-1.1 s each (bootstrap CIs); all other agents < 40 ms; process peak working set
+~108 MB; Python-traced allocation per cycle ~1.6 MB. CLI wall time `ai-desk run-once` 8-9.5 s, of
+which ~3.8 s is importing the full CLI surface. The earlier "16 s" figure was the same cycle
+measured under `tracemalloc` (which slows these pure-Python bootstraps ~4x: 7.6-13.8 s reproduced)
+while the full test suite was running; it is not the production latency. `ai-desk evaluate`:
+34-39 s.
+
 ## 7. Operator runbook
 
 1. `copy config\ai_desk.example.toml config\ai_desk.toml` (optional; defaults are safe).
@@ -136,7 +187,7 @@ nothing in the trading runtime depends on it.
    `.venv\Scripts\python -m adaptive_scalper.cli ai-desk run-once` then `ai-desk report`.
 4. Evaluation: `ai-desk evaluate` (default replay = the 60 days before the reserved OOS).
 5. Autonomous service: set `enabled = true`, then double-click `START AI DESK.bat`
-   (runs `doctor`, then `serve`; Ctrl+C stops it; trading is unaffected).
+   (runs `doctor`; stops if it fails; then `serve`; Ctrl+C stops it; trading is unaffected).
 6. Dashboard: `START DASHBOARD.bat` -> view **AI Trading Desk** (GET `/api/ai-desk`, read-only).
 7. Health: `ai-desk status`, `ai-desk agents`, `ai-desk health`.
 8. To use a model: add a `[[providers]]` block, set `provider`/`fallback_providers`,
@@ -191,14 +242,16 @@ the preregistered forward-evidence protocol and the signed certificate (ASN-031)
 ## 9. Limitations and blocked items
 
 - Live market analysis needs the runtime to be running (fresh `runtime_state`); stored bars are
-  stale (end 2026-09-18). With the runtime stopped the desk correctly reports STALE /
-  INCOMPLETE.
+  stale (end 2026-09-18) because the runtime does not persist bars (see "Market-data
+  freshness"). With the runtime stopped the desk correctly reports STALE / INCOMPLETE.
 - Forward checks need later bars in the trading DB; the runtime does not persist live bars, so
   live forecasts end UNSCORABLE after two days unless bars are imported (`history` commands).
 - External providers are implemented and tested with fakes; **no real API call was made**
   (no key configured). BLOCKED ON OPERATOR CREDENTIALS + BUDGET DECISION.
-- `START AI DESK.bat` is verified statically (CRLF, parsed CLI calls, no forbidden command);
-  running it on the laptop is a manual step. Dashboard view verified via the API test client,
-  not in a browser on the laptop.
+- `START AI DESK.bat`: its two commands were run on the laptop (doctor ok, serve refuses while
+  disabled) and it now stops if doctor fails; double-clicking it in Explorer remains a manual
+  step. Dashboard view: verified 2026-11-14 in Chromium (Playwright) against the production DB
+  (read-only) and a real desk journal at 1366x768 and 911x512: five panels render, no page-level
+  horizontal scroll, POST/PUT/DELETE on `/api/ai-desk` return 405.
 - Statistical power is low: few trades per strategy x regime; most claims are WEAK_EVIDENCE by
   design.

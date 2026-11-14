@@ -13,6 +13,7 @@ broker identifiers), has a hard socket timeout, and turns every failure into
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -27,6 +28,16 @@ from adaptive_scalper.ai_desk.security import redact
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
+MAX_RESPONSE_BYTES = 1_000_000      # a narrative is a few KB; anything larger is refused unread
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float | None:
+    """Seconds from a numeric Retry-After header (HTTP-date forms are ignored)."""
+    try:
+        value = float((exc.headers or {}).get("retry-after", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
 
 
 def _post_json(url: str, body: dict, headers: dict, timeout: float) -> dict:
@@ -35,14 +46,20 @@ def _post_json(url: str, body: dict, headers: dict, timeout: float) -> dict:
                                           **headers})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
         retryable = exc.code in (408, 409, 425, 429) or exc.code >= 500
-        raise ProviderError(f"HTTP {exc.code}", retryable=retryable) from None
+        raise ProviderError(f"HTTP {exc.code}", retryable=retryable, retry_after=_retry_after(exc)) from None
     except TimeoutError as exc:
         raise ProviderError(f"timeout after {timeout}s") from exc
     except urllib.error.URLError as exc:
         raise ProviderError(redact(f"connection error: {exc.reason}")) from None
+    except (OSError, http.client.HTTPException) as exc:     # reset / truncated body / protocol error
+        raise ProviderError(f"transport error: {type(exc).__name__}") from None
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ProviderError(f"response body larger than {MAX_RESPONSE_BYTES} bytes", retryable=False)
+    try:
+        return json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise ProviderError(f"malformed response body: {type(exc).__name__}", retryable=False) from None
 

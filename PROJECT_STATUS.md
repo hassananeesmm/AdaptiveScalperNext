@@ -33,13 +33,22 @@ untrusted model narratives (Anthropic / Grok / OpenAI-compatible / local) behind
 strict validation; read-only dashboard view (GET `/api/ai-desk`); evaluator (forward checks, as-of replay outside the
 reserved OOS, pre-registered ablation vs the unchanged baseline). No trading code imports it; it imports no execution,
 gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md guarantees 29-30.
-- Measured on production data (read-only): a full cycle ~1.8-6 s; **the AI desk has not demonstrated an improvement over
+- Independent verification 2026-11-14 (same branch, local commit on top of `d73bd7e`): CLI smoke tests on the
+  production DB (read-only; DB and WAL sha256 identical before/after); dashboard view checked in Chromium; 4 cycles,
+  284 evidence citations, 0 unresolved; 0 model calls. Fixed: stale Market view described 56-day-old bars instead of the
+  newer runtime observer; launcher ran `serve` after a failed `doctor`; provider hardening (half-open breaker,
+  Retry-After, 1 MB body cap, transport/adapter errors cannot fail a cycle, rejected answers count toward the breaker,
+  per-cycle `narrative_budget_seconds`). Stale root cause: runtime down ~16.7 days AND the runtime never persists bars
+  (newest stored M5 ~56 days old); runtime-side bar persistence is a PROPOSAL needing operator approval (AI_DESK.md).
+  Suite: INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run, must be re-run before merge. AI desk modules run separately: 125 passed (test_ai_desk, test_ai_desk_safety, test_ai_desk_providers).
+- Measured on production data (read-only): cycle median 2.4-2.5 s uncontended (`scripts/ai_desk_benchmark.py`; the
+  earlier 16 s was a tracemalloc-instrumented run under suite load); **the AI desk has not demonstrated an improvement over
   the baseline** (DEMO n=506 baseline -0.038 R, CI spans zero; every filter config INSUFFICIENT SAMPLE or NOT
   DEMONSTRATED). Volatility statements beat a majority-class baseline (descriptive only, not an edge).
 - Status: IMPLEMENTED, CONNECTED (CLI, dashboard), TESTED-FAKE, TESTED-WINDOWS (suite 2379 passed / 9 skipped / 0 failed).
   Not merged, not deployed (needs operator approval). BLOCKED: external providers (no key/budget configured; tested
-  with fakes only); live market analysis needs the runtime running; `START AI DESK.bat` and the dashboard view are
-  verified statically / via the API client only.
+  with fakes and a local stub HTTP server only); live market analysis needs the runtime running; double-clicking
+  `START AI DESK.bat` in Explorer remains a manual step.
 
 ## Current branch (2026-10-09, `hardening/peak-equity-and-readiness`) — DEMO READINESS WORK, NOT DEPLOYED, ENTRIES STAY BLOCKED
 

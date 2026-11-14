@@ -3395,3 +3395,33 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   Conclusion: the AI desk has not demonstrated an improvement over the baseline.
 - Not done / blocked: no real external model call (no key or budget configured); launcher and dashboard view not
   exercised interactively on the laptop; nothing merged, pushed or deployed.
+
+## 2026-11-14 -- AI desk independent verification and hardening (branch `feature/ai-trading-desk`, not pushed)
+
+- Git: branch at `d73bd7e` on `f892c5f` (= PR #12 head on GitHub, CI SUCCESS), which sits on `d46fb15` (PR #11) and
+  `488d575`; worktree clean before work. Not touched: main checkout (182 uncommitted files) and
+  `.worktrees/drawdown-safety` (3 uncommitted PR #12 follow-up files: daily_loss.py, demo.py, test).
+- CLI smoke on the production DB (read-only, scratch journal): doctor ok, agents/status, run-once x2 COMPLETED,
+  report, health, evaluate (trial #1 and #2; OOS replay REFUSED), serve refused while disabled. Trading DB and WAL
+  sha256 unchanged. No trading runtime, dashboard or MT5 terminal was running; none was started.
+- Dashboard (worktree code, port 8799, production DB read-only + scratch journal) in Chromium: five AI panels at
+  1366x768 and 911x512, no page-level horizontal scroll, POST/PUT/DELETE -> 405, no console errors.
+- Performance: in-process cycle median 2.4-2.5 s (min 1.8, max 2.9), Strategy/Learning ~1.0-1.1 s each, peak
+  working set ~108 MB; CLI run-once 8-9.5 s (3.8 s imports). The earlier 16 s reproduced only under tracemalloc
+  (7.6-13.8 s) with the suite running. Added `scripts/ai_desk_benchmark.py`.
+- Agents: 4 production cycles, 28 results, 284 evidence citations, 0 unresolved; every result deterministic, 0
+  provider calls, 0 model narratives.
+- Defects fixed: (1) STALE Market view used 56-day-old bars over the 16-day-old runtime observer and mixed bar
+  statistics into it - now the newest source is described and cited, with `data_freshness.state` and remediation;
+  (2) `START AI DESK.bat` ran `serve` after a failed `doctor`; (3) `serve` printed its polling banner before refusing;
+  (4) provider router: half-open breaker needed N failures to re-open, rejected answers never tripped the breaker,
+  Retry-After ignored, unbounded response bodies, a connection reset / adapter bug could fail the whole cycle, no
+  per-cycle cap on model-call time (`narrative_budget_seconds`, default 120). `doctor` now reports data ages.
+- Stale data root cause: runtime down since 2026-10-28 and the runtime never writes `bars` (only `history
+  bootstrap` does). Runtime-side bar persistence documented as a proposal (separate branch + approval); nothing
+  changed in the trading runtime.
+- Tests: new `tests/test_ai_desk_providers.py` (28: local stub HTTP server - success both wire formats, cache, 429 +
+  Retry-After and cap, min interval, 500 breaker, half-open, 4xx no retry, timeout bound, deadline, malformed /
+  wrong-shape / oversized / dropped body, rejected output, missing key, adapter bug, token and cost budgets, key never
+  journaled, full cycle; freshness states; launcher guard; serve refusal). Nothing removed or weakened.
+  Full suite: INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run, must be re-run before merge. AI desk modules run separately: 125 passed (test_ai_desk, test_ai_desk_safety, test_ai_desk_providers). Ruff 0.16.9: all checks passed (whole worktree).

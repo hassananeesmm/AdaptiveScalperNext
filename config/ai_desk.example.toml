@@ -9,6 +9,7 @@ symbols = ["XAUUSD", "BTCUSD", "GBPJPY"]
 market_resolution = "M5"
 poll_seconds = 15.0
 agent_timeout_seconds = 60.0
+narrative_budget_seconds = 120.0   # cap on all model calls in one cycle; later narratives are skipped
 stale_after_seconds = 1800
 runtime_state_stale_seconds = 120
 retention_days = 90

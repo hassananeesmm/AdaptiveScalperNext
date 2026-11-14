@@ -36,9 +36,13 @@ from adaptive_scalper.ai_desk.security import (
 class ProviderError(Exception):
     """A provider call failed (network, HTTP, timeout, malformed body)."""
 
-    def __init__(self, message: str, *, retryable: bool = True) -> None:
+    def __init__(self, message: str, *, retryable: bool = True, retry_after: float | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.retry_after = retry_after     # seconds the server asked us to wait (HTTP Retry-After), if any
+
+
+MAX_RETRY_AFTER_SECONDS = 60.0
 
 
 @dataclass
@@ -81,7 +85,7 @@ class _Breaker:
 @dataclass
 class NarrativeOutcome:
     status: str                    # OK / CACHED / NOT_PERMITTED / CATEGORY_NOT_PERMITTED / BUDGET_EXHAUSTED /
-    #                                CIRCUIT_OPEN / REJECTED / FAILED / DETERMINISTIC_ONLY
+    #                                CIRCUIT_OPEN / REJECTED / FAILED / DEADLINE_EXCEEDED / DETERMINISTIC_ONLY
     narrative: dict | None = None
     provider: str = "deterministic"
     model: str = "deterministic/1"
@@ -142,7 +146,8 @@ class ProviderRouter:
         if b is None or b.opened_at is None:
             return False
         if self.clock() - b.opened_at >= p.circuit_breaker_cooldown_seconds:
-            b.opened_at, b.failures = None, 0     # half-open: allow a new attempt
+            # Half-open: allow ONE trial call; a single further failure re-opens the circuit.
+            b.opened_at, b.failures = None, max(0, p.circuit_breaker_failures - 1)
             return False
         return True
 
@@ -167,7 +172,8 @@ class ProviderRouter:
 
     # --------------------------------------------------------------- narrate
     def narrate(self, *, agent: str, category: str, digest: dict, allowed_evidence_ids: frozenset[str],
-                run_id: str | None = None) -> NarrativeOutcome:
+                run_id: str | None = None, deadline: float | None = None) -> NarrativeOutcome:
+        """`deadline` is a value of `self.clock()` after which no new call or retry starts."""
         if agent not in self.config.llm_agents:
             return NarrativeOutcome("DETERMINISTIC_ONLY")
         if not self.config.external_calls_permitted():
@@ -186,6 +192,10 @@ class ProviderRouter:
             if p.kind == "deterministic":
                 attempts.append({"provider": p.name, "status": "DETERMINISTIC_FALLBACK"})
                 break
+            if deadline is not None and self.clock() >= deadline:
+                attempts.append({"provider": p.name, "status": "DEADLINE_EXCEEDED"})
+                final_status = "DEADLINE_EXCEEDED"
+                break
             if self._is_open(p):
                 attempts.append({"provider": p.name, "status": "CIRCUIT_OPEN"})
                 final_status = "CIRCUIT_OPEN"
@@ -196,7 +206,7 @@ class ProviderRouter:
                 self._log(run_id, p, agent, "BUDGET_EXHAUSTED", 0)
                 final_status = "BUDGET_EXHAUSTED"
                 continue
-            outcome = self._call_with_retries(p, messages, allowed_evidence_ids, agent, run_id)
+            outcome = self._call_with_retries(p, messages, allowed_evidence_ids, agent, run_id, deadline)
             attempts.append({"provider": p.name, "status": outcome.status})
             if outcome.status == "OK":
                 if self.journal is not None:
@@ -207,7 +217,8 @@ class ProviderRouter:
             final_status = outcome.status
         return NarrativeOutcome(final_status, attempts=attempts)
 
-    def _call_with_retries(self, p: ProviderConfig, messages, allowed_ids, agent, run_id) -> NarrativeOutcome:
+    def _call_with_retries(self, p: ProviderConfig, messages, allowed_ids, agent, run_id,
+                           deadline: float | None = None) -> NarrativeOutcome:
         provider = self.providers[p.name]
         sem = self._sems.setdefault(p.name, threading.Semaphore(1))
         for attempt in range(p.max_retries + 1):
@@ -215,20 +226,30 @@ class ProviderRouter:
                 wait = p.min_seconds_between_requests - (self.clock() - self._last_call.get(p.name, -1e9))
             if wait > 0:
                 self.sleep(wait)
+            if deadline is not None and self.clock() >= deadline:
+                return NarrativeOutcome("DEADLINE_EXCEEDED")
             if not sem.acquire(timeout=p.timeout_seconds):
+                self._log(run_id, p, agent, "CONCURRENCY_LIMIT", 0, error="no free request slot within the timeout")
                 return NarrativeOutcome("FAILED")
             started = self.clock()
             try:
                 with self._lock:
                     self._last_call[p.name] = self.clock()
                 resp = provider.complete(messages, max_tokens=p.max_output_tokens, timeout=p.timeout_seconds)
-            except ProviderError as exc:
+            except Exception as exc:  # noqa: BLE001 - an adapter bug must never fail the desk cycle
+                if not isinstance(exc, ProviderError):
+                    exc = ProviderError(f"adapter error: {type(exc).__name__}", retryable=False)
                 latency = int((self.clock() - started) * 1000)
                 self._log(run_id, p, agent, "ERROR", latency, error=redact(str(exc)))
                 self._record_failure(p)
                 if not exc.retryable or attempt == p.max_retries or self._is_open(p):
                     return NarrativeOutcome("FAILED")
-                self.sleep(p.backoff_seconds * (2 ** attempt))
+                delay = p.backoff_seconds * (2 ** attempt)
+                if exc.retry_after is not None:      # honour the server's rate-limit hint, bounded
+                    delay = max(delay, min(float(exc.retry_after), MAX_RETRY_AFTER_SECONDS))
+                if deadline is not None and self.clock() + delay >= deadline:
+                    return NarrativeOutcome("DEADLINE_EXCEEDED")
+                self.sleep(delay)
                 continue
             finally:
                 sem.release()
@@ -240,6 +261,7 @@ class ProviderRouter:
             except NarrativeRejected as exc:
                 self._log(run_id, p, agent, "REJECTED", latency, resp.input_tokens, resp.output_tokens, cost,
                           error=str(exc))
+                self._record_failure(p)     # repeated unusable output opens the breaker (each one costs tokens)
                 return NarrativeOutcome("REJECTED", provider=p.name, model=p.model)
             self._log(run_id, p, agent, "OK", latency, resp.input_tokens, resp.output_tokens, cost)
             self._record_success(p)

@@ -110,11 +110,16 @@ class DeskOrchestrator:
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
-    def _narrate(self, result: AgentResult, snapshot: Snapshot, run_id: str) -> AgentResult:
+    def _narrate(self, result: AgentResult, snapshot: Snapshot, run_id: str,
+                 deadline: float | None = None) -> AgentResult:
         if result.status == "FAILED":
             return result
-        outcome = self.router.narrate(agent=result.agent, category=CATEGORY_OF_AGENT.get(result.agent, ""),
-                                      digest=_digest(result), allowed_evidence_ids=snapshot.ids(), run_id=run_id)
+        try:
+            outcome = self.router.narrate(agent=result.agent, category=CATEGORY_OF_AGENT.get(result.agent, ""),
+                                          digest=_digest(result), allowed_evidence_ids=snapshot.ids(),
+                                          run_id=run_id, deadline=deadline)
+        except Exception as exc:  # noqa: BLE001 - the deterministic result never depends on a narrative
+            return result.model_copy(update={"llm_narrative_status": f"FAILED:{type(exc).__name__}"})
         if outcome.narrative is None:
             return result.model_copy(update={"llm_narrative_status": outcome.status})
         n = outcome.narrative
@@ -184,9 +189,10 @@ class DeskOrchestrator:
             review = review_summary(coordinator, skeptic)
 
             final: list[AgentResult] = []
+            deadline = self.router.clock() + self.config.narrative_budget_seconds
             for key in (*AGENT_ORDER, "skeptic", "coordinator"):
                 for r in ctx.results.get(key, []):
-                    final.append(self._narrate(r, snapshot, run_id))
+                    final.append(self._narrate(r, snapshot, run_id, deadline))
             for r in final:
                 if self.journal.record_result(run_id, r, as_of_epoch=as_of):
                     report.inserted += 1

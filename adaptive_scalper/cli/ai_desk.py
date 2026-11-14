@@ -53,6 +53,30 @@ def _orchestrator(desk, trading, journal):
     return DeskOrchestrator(desk, trading_db_path=trading.database.path, journal=journal, trading_config=trading)
 
 
+def _freshness_detail(conn, desk) -> str:
+    """Informational only (never fails doctor): how old the desk's market inputs are."""
+    import json as _json
+
+    now = int(time.time())
+    parts = []
+    row = conn.execute("SELECT value_json, updated_at_utc FROM runtime_state WHERE key='engine'").fetchone()
+    if row is None:
+        parts.append("runtime heartbeat: none")
+    else:
+        try:
+            hb = (_json.loads(row[0]) or {}).get("heartbeat_utc") or row[1]
+        except (TypeError, ValueError):
+            hb = row[1]
+        parts.append(f"runtime heartbeat age {now - int(hb)}s" if hb else "runtime heartbeat: unknown")
+    for sym in desk.symbols:
+        bar = conn.execute("SELECT MAX(ts_utc) FROM bars WHERE canonical_symbol=? AND resolution=?",
+                           (sym, desk.market_resolution)).fetchone()[0]
+        parts.append(f"{sym} {desk.market_resolution} bars age " + (f"{now - int(bar)}s" if bar else "n/a"))
+    stale = desk.stale_after_seconds
+    return ("; ".join(parts) + f" (STALE beyond {stale}s; the desk never opens MT5 - see docs/AI_DESK.md "
+            "'Market-data freshness')")
+
+
 def cmd_doctor(args) -> int:
     import os
     from pathlib import Path
@@ -78,6 +102,11 @@ def cmd_doctor(args) -> int:
             except Exception:  # noqa: BLE001 - expected: SQLite refuses writes on a read-only connection
                 write_refused = True
             check("trading_db_read_only", write_refused, trading.database.path)
+            try:
+                freshness = _freshness_detail(conn, desk)
+            except Exception as exc:  # noqa: BLE001 - informational; never masks the checks above
+                freshness = f"unavailable: {type(exc).__name__}"
+            check("market_data_freshness", True, freshness)
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001
@@ -155,6 +184,9 @@ def cmd_serve(args) -> int:
     from adaptive_scalper.ai_desk.scheduler import DeskDisabledError, DeskService
 
     desk, trading = _load(args)
+    if not desk.enabled:
+        raise CliError(f"the AI desk research service is disabled: set `enabled = true` in {args.ai_config} to run "
+                       "it (advisory only, no execution authority); `ai-desk run-once` works while disabled")
     j = _journal(desk, trading)
     try:
         service = DeskService(desk, trading_db_path=trading.database.path, journal=j, trading_config=trading)

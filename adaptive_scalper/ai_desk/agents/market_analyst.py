@@ -51,6 +51,42 @@ def range_percentile(bars: list[Bar], window: int = 20) -> tuple[float | None, f
     return current, pct, statistics.median(history)
 
 
+def quote_age_seconds(snapshot: Snapshot, sym: str) -> int | None:
+    """Age of the runtime's last published quote for `sym` (None if absent)."""
+    tel = snapshot.one("ACCOUNT_TELEMETRY")
+    quote = ((tel.payload.get("quotes") or {}) if tel else {}).get(sym) or {}
+    ts = quote.get("time_utc")
+    return None if not isinstance(ts, (int, float)) else age_seconds(snapshot, int(ts))
+
+
+def freshness_report(bar_age: int | None, observer_age: int | None, quote_age: int | None, stale_after: int,
+                     runtime_live: bool) -> dict:
+    """Classify where current market data could come from and what restores it.
+
+    The desk never connects to MT5 itself (the runtime is the only MT5 client),
+    so freshness can only be restored by the runtime or by an operator action.
+    """
+    def fresh(a):
+        return a is not None and 0 <= a <= stale_after
+
+    if fresh(bar_age):
+        state, fix = "FRESH_BARS", None
+    elif runtime_live and fresh(observer_age):
+        state = "RUNTIME_OBSERVER_ONLY"
+        fix = ("bars table is not updated by the runtime; closed-bar statistics (volatility percentile, VWAP) "
+               "need a bar refresh - see docs/AI_DESK.md 'Market-data freshness'")
+    elif runtime_live:
+        state = "RUNTIME_LIVE_NO_OBSERVER"
+        fix = "the runtime is live but has not yet published a microstructure observation for this symbol"
+    else:
+        state = "RUNTIME_DOWN"
+        fix = ("the trading runtime is not running: start it only through the normal operator procedure; "
+               "the desk never starts it and never opens MT5")
+    return {"state": state, "bars_age_seconds": bar_age, "runtime_observer_age_seconds": observer_age,
+            "quote_age_seconds": quote_age, "stale_after_seconds": stale_after, "runtime_live": runtime_live,
+            "remediation": fix}
+
+
 class MarketAnalyst(Agent):
     key = "market_analyst"
     version = "1.0.0"
@@ -73,10 +109,10 @@ class MarketAnalyst(Agent):
 
         bar_age = age_seconds(snapshot, bars_item.data_timestamp_utc) if bars_item else None
         rt_age = age_seconds(snapshot, rt_micro.data_timestamp_utc) if rt_micro else None
-        findings["data_freshness"] = {"bars_age_seconds": bar_age, "runtime_observer_age_seconds": rt_age,
-                                      "stale_after_seconds": stale_after}
+        quote_age = quote_age_seconds(snapshot, sym)
         bars_fresh = bar_age is not None and bar_age <= stale_after
         runtime_fresh = rt_age is not None and rt_age <= stale_after and snapshot.runtime_live
+        findings["data_freshness"] = freshness_report(bar_age, rt_age, quote_age, stale_after, snapshot.runtime_live)
 
         computed = None
         if bars_item is not None:
@@ -105,14 +141,26 @@ class MarketAnalyst(Agent):
                                "(no volatility percentile or VWAP from bars)")
         else:
             basis, status = "last_known", "STALE"
-            regime = (computed or {}).get("regime") or (runtime_view or {}).get("confirmed_regime") or "UNKNOWN"
-            adx = computed["adx14"] if computed else (runtime_view or {}).get("adx14")
-            trend = (computed or {}).get("trend", "UNKNOWN")
+            # Describe the MOST RECENT of the two stale sources, never an older one.
+            observer_newer = runtime_view is not None and (
+                computed is None or (rt_age is not None and (bar_age is None or rt_age < bar_age)))
+            if observer_newer:
+                findings["last_known_source"] = "runtime_observer"
+                regime = runtime_view["confirmed_regime"] or "UNKNOWN"
+                adx = runtime_view["adx14"]
+                trend = {"ABOVE": "UP_BIAS", "BELOW": "DOWN_BIAS"}.get(runtime_view["close_vs_ema20"], "UNKNOWN")
+            else:
+                findings["last_known_source"] = "stored_bars" if computed else None
+                regime = (computed or {}).get("regime") or "UNKNOWN"
+                adx = (computed or {}).get("adx14")
+                trend = (computed or {}).get("trend", "UNKNOWN")
             limitations.append(f"no fresh market data (bars age {bar_age}s, runtime observer age {rt_age}s, "
                                f"limit {stale_after}s): this is a LAST-KNOWN description, not current conditions")
 
         condition = CONDITION_OF_REGIME.get(regime, "UNCERTAIN")
-        vol_pct = (computed or {}).get("range_percentile") if basis != "runtime_observer" else None
+        # Bar-derived statistics only describe the view when the bars ARE the chosen source.
+        use_bars = basis == "closed_bars" or findings.get("last_known_source") == "stored_bars"
+        vol_pct = (computed or {}).get("range_percentile") if use_bars else None
         if vol_pct is not None and vol_pct >= 0.9 and condition not in ("HIGH_VOLATILITY", "BREAKOUT"):
             conflicts.append(f"regime says {regime} but the 20-bar mean range is at the {vol_pct:.0%} percentile")
             condition = "HIGH_VOLATILITY"
@@ -122,7 +170,7 @@ class MarketAnalyst(Agent):
             conflicts.append(f"ADX(14) {adx:.1f} indicates directional movement while the regime is {regime}")
         if adx is not None and adx < 20 and regime in ("TRENDING_UP", "TRENDING_DOWN"):
             conflicts.append(f"regime {regime} while ADX(14) {adx:.1f} is weak")
-        if computed:
+        if computed and use_bars:
             if computed["trend"] == "UP" and (computed["momentum"] or 0) < 0:
                 conflicts.append("EMA structure points up but 20-bar momentum is negative")
             if computed["trend"] == "DOWN" and (computed["momentum"] or 0) > 0:
@@ -169,10 +217,14 @@ class MarketAnalyst(Agent):
         adx_txt = "n/a" if adx is None else f"{adx:.1f}"
         assessment = (f"{sym}: condition {condition} (regime {regime}, trend {trend}, ADX(14) {adx_txt}, "
                       f"volatility {vol_bucket or 'n/a'}); basis {basis}"
+                      + (f" from {findings['last_known_source']}" if findings.get("last_known_source") else "")
+                      + f"; data {findings['data_freshness']['state']}"
                       + (f"; {len(conflicts)} indicator conflict(s)" if conflicts else "")
                       + ". Describes conditions only - not a price-direction forecast.")
+        from_observer = basis == "runtime_observer" or findings.get("last_known_source") == "runtime_observer"
+        cited = ([e.evidence_id for e in (rt_regime, rt_micro) if e is not None] if from_observer else evidence[:2])
         claims = [Claim(claim_id=f"market:{sym}:condition", kind="DESCRIPTIVE",
-                        statement=f"{sym} market condition is {condition}", evidence_ids=evidence[:2],
+                        statement=f"{sym} market condition is {condition}", evidence_ids=cited or evidence[:2],
                         conclusion_key=f"market:{sym}:{condition}")]
         if "forward_check" in findings:
             claims.append(Claim(claim_id=f"market:{sym}:volatility_persistence", kind="PREDICTIVE",
