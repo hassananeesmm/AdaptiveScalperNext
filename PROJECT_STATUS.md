@@ -40,12 +40,18 @@ gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md gu
   Retry-After, 1 MB body cap, transport/adapter errors cannot fail a cycle, rejected answers count toward the breaker,
   per-cycle `narrative_budget_seconds`). Stale root cause: runtime down ~16.7 days AND the runtime never persists bars
   (newest stored M5 ~56 days old); runtime-side bar persistence is a PROPOSAL needing operator approval (AI_DESK.md).
-  Suite: INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run, must be re-run before merge. AI desk modules run separately: 125 passed (test_ai_desk, test_ai_desk_safety, test_ai_desk_providers).
+  Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
+  Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
+  0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.
+  AI desk tests within it: 125 passed (test_ai_desk 36, test_ai_desk_providers 28, test_ai_desk_safety 61). pytest's own
+  exit code was not captured by the wrapper (blank); the summary line and the JUnit report both show zero failures. Peak
+  memory unavailable (the sampler measured the venv launcher stub); one spot reading of the pytest process: ~183 MB
+  working set / ~1.1 GB private.
 - Measured on production data (read-only): cycle median 2.4-2.5 s uncontended (`scripts/ai_desk_benchmark.py`; the
   earlier 16 s was a tracemalloc-instrumented run under suite load); **the AI desk has not demonstrated an improvement over
   the baseline** (DEMO n=506 baseline -0.038 R, CI spans zero; every filter config INSUFFICIENT SAMPLE or NOT
   DEMONSTRATED). Volatility statements beat a majority-class baseline (descriptive only, not an edge).
-- Status: IMPLEMENTED, CONNECTED (CLI, dashboard), TESTED-FAKE, TESTED-WINDOWS (suite 2379 passed / 9 skipped / 0 failed).
+- Status: IMPLEMENTED, CONNECTED (CLI, dashboard), TESTED-FAKE, TESTED-WINDOWS (suite at `d73bd7e`: 2379 passed / 9 skipped / 0 failed; at `f4ea04c`: 2407 / 9 / 0).
   Not merged, not deployed (needs operator approval). BLOCKED: external providers (no key/budget configured; tested
   with fakes and a local stub HTTP server only); live market analysis needs the runtime running; double-clicking
   `START AI DESK.bat` in Explorer remains a manual step.

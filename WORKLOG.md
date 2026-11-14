@@ -3425,3 +3425,19 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   wrong-shape / oversized / dropped body, rejected output, missing key, adapter bug, token and cost budgets, key never
   journaled, full cycle; freshness states; launcher guard; serve refusal). Nothing removed or weakened.
   Full suite: INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run, must be re-run before merge. AI desk modules run separately: 125 passed (test_ai_desk, test_ai_desk_safety, test_ai_desk_providers). Ruff 0.16.9: all checks passed (whole worktree).
+
+## 2026-11-14 - AI Trading Desk: complete regression re-run at f4ea04c
+
+- Full suite re-run sequentially (one pytest process, no xdist, `-p no:cacheprovider --durations=30`) at `f4ea04c`:
+  **2407 passed, 9 skipped, 0 failed, 2 warnings** in 1575.44 s (0:26:15). JUnit: tests=2416, failures=0, errors=0,
+  skipped=9 (test_mt5_gateway_live needs a live terminal; test_knowledge). Warnings: third-party starlette/httpx and
+  anyio deprecations only. The interrupted first run above is kept as history.
+- AI desk: 125 passed (test_ai_desk 36, test_ai_desk_providers 28, test_ai_desk_safety 61).
+- pytest's own exit code was NOT captured (the wrapper's `exit=` is blank); the pytest summary line and the JUnit report
+  both show zero failures. Peak memory is unavailable: the sampler followed the venv launcher stub (4 MB), not the child
+  interpreter; one spot reading of the pytest process at ~5 min: ~183 MB working set, ~1,117 MB private. No pytest
+  process remained afterwards. Slowest tests ~85-87 s each (three DEMO runtime scenarios).
+- Acceptance (read-only): dashboard panels list all 7 agents, every symbol STALE / RUNTIME_DOWN; trading DB and WAL
+  sha256 identical to the session baseline; no diff from `f892c5f` under config/, risk, execution, core, gateway or
+  runtime. Explorer double-click of `START AI DESK.bat` BLOCKED until the branch is in the main checkout (no .venv or
+  trading DB in the worktree).
