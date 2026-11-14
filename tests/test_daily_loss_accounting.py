@@ -18,7 +18,9 @@ from adaptive_scalper.core.kill_switch import get_state as get_kill_switch_state
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.gateway.types import HistoricalDeal, PositionSnapshot
 from adaptive_scalper.risk.daily_loss import (
+    CLOCK_SKEW_SECONDS,
     DAY_SECONDS,
+    DailyBaselineMismatch,
     DailyLossEvidenceError,
     check_baseline,
     collect,
@@ -133,6 +135,21 @@ def test_a_baseline_that_changes_within_the_day_means_history_was_missing_or_rev
         check_baseline(stored, vanished)
 
 
+def test_a_baseline_mismatch_keeps_the_more_conservative_higher_value():
+    stored = {"utc_day": NOW // DAY_SECONDS, "day_start_balance": 9900.0}  # pinned from incomplete history
+    complete, _ = loss_of([deal(1, profit=-100.0)], balance=9900.0)        # true day start 10000
+    with pytest.raises(DailyBaselineMismatch) as raised:
+        check_baseline(stored, complete)
+    assert raised.value.baseline["day_start_balance"] == 10000.0
+
+
+def test_a_deal_stamped_slightly_ahead_of_the_local_clock_still_counts():
+    loss, _ = loss_of([deal(1, profit=-250.0, at=NOW + CLOCK_SKEW_SECONDS)], balance=9750.0)
+    assert loss.project_realized == -250.0 and loss.day_start_balance == pytest.approx(10000.0)
+    with pytest.raises(DailyLossEvidenceError):
+        loss_of([deal(1, at=NOW + CLOCK_SKEW_SECONDS + 1)])
+
+
 def test_collect_reads_only_today_and_refuses_an_account_that_never_settles():
     class Gateway:
         ticks = 0
@@ -142,7 +159,7 @@ def test_collect_reads_only_today_and_refuses_an_account_that_never_settles():
             return replace(ACCOUNT, equity=10000.0 + Gateway.ticks)
 
         def history_deals_get(self, start, end):
-            assert start == utc_day_start(NOW) and end == NOW
+            assert start == utc_day_start(NOW) and end == NOW + CLOCK_SKEW_SECONDS
             return []
 
         def positions_get(self):
@@ -213,3 +230,15 @@ def test_runtime_baseline_is_persisted_and_detects_vanished_history_after_a_rest
         assert gateway.calls["order_send"] == 0
     finally:
         conn2.close()
+
+
+def test_runtime_breaker_fallback_counts_a_realized_loss_when_evidence_is_unusable(tmp_path):
+    clock, engine, conn, gateway = _started(tmp_path)
+    now = int(clock.now)
+    engine.demo._daily_loss_evidence(now)                                  # pins today's day-start balance 10000
+    loss_deal = _runtime_deal(9301, now, magic=engine.config.runtime.magic, position=92, profit=-300.0)
+    gateway._historical_deals += [loss_deal, loss_deal]                    # duplicated -> unusable evidence
+    gateway.set_account(demo_account(balance=9700.0, equity=9700.0))       # realized, no floating
+    step(engine, clock, seconds=3)
+    assert get_kill_switch_state(conn).status == KillSwitchStatus.ENGAGED  # equity vs the pinned baseline: 3 %
+    assert gateway.calls["order_send"] == 0

@@ -31,6 +31,9 @@ from dataclasses import dataclass
 
 DAY_SECONDS = 86400
 MONEY_TOLERANCE = 0.01
+# Broker deal times may run slightly ahead of the local clock; such a deal is
+# already in the balance, so leaving it out would understate today's loss.
+CLOCK_SKEW_SECONDS = 60
 DEAL_BALANCE = 2
 TRADE_DEAL_TYPES = (0, 1)
 BASELINE_STATE_KEY = "daily_loss_baseline"
@@ -38,6 +41,16 @@ BASELINE_STATE_KEY = "daily_loss_baseline"
 
 class DailyLossEvidenceError(ValueError):
     """Broker evidence cannot establish today's loss."""
+
+
+class DailyBaselineMismatch(DailyLossEvidenceError):
+    """Today's reconstructed day-start balance disagrees with the pinned one.
+    `baseline` is the more conservative (higher) of the two, to be persisted so
+    the circuit-breaker fallback still counts the whole loss."""
+
+    def __init__(self, message: str, baseline: dict):
+        super().__init__(message)
+        self.baseline = baseline
 
 
 @dataclass(frozen=True)
@@ -74,7 +87,7 @@ def compute(account, deals, positions, *, own_magic: int, own_position_ids, now:
         if deal.ticket in seen:
             raise DailyLossEvidenceError(f"duplicate broker deal {deal.ticket}")
         seen.add(deal.ticket)
-        if not day_start <= deal.time <= now:
+        if not day_start <= deal.time <= now + CLOCK_SKEW_SECONDS:
             raise DailyLossEvidenceError(f"broker deal {deal.ticket} outside the UTC day")
         amounts = (deal.profit, deal.commission, deal.swap, deal.fee)
         if not all(_finite(v) for v in amounts):
@@ -117,10 +130,12 @@ def check_baseline(stored: dict | None, loss: DailyLoss) -> dict:
     later different reconstruction means today's history was incomplete or
     revised. Returns the value to persist."""
     if stored and stored.get("utc_day") == loss.utc_day:
-        if abs(float(stored["day_start_balance"]) - loss.day_start_balance) > MONEY_TOLERANCE:
-            raise DailyLossEvidenceError(
+        pinned = float(stored["day_start_balance"])
+        if abs(pinned - loss.day_start_balance) > MONEY_TOLERANCE:
+            raise DailyBaselineMismatch(
                 f"today's broker history changed: day-start balance {loss.day_start_balance:.2f} vs "
-                f"{float(stored['day_start_balance']):.2f} first observed")
+                f"{pinned:.2f} first observed",
+                {"utc_day": loss.utc_day, "day_start_balance": max(pinned, loss.day_start_balance)})
         return stored
     return {"utc_day": loss.utc_day, "day_start_balance": loss.day_start_balance}
 
@@ -131,7 +146,7 @@ def collect(gateway, now: int, attempts: int = 3):
     day_start = utc_day_start(now)
     for _ in range(attempts):
         account = gateway.account_info()
-        deals = tuple(gateway.history_deals_get(day_start, now))
+        deals = tuple(gateway.history_deals_get(day_start, now + CLOCK_SKEW_SECONDS))
         positions = tuple(gateway.positions_get())
         after = gateway.account_info()
         if account is None or after is None:

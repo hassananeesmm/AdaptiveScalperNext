@@ -123,7 +123,11 @@ from adaptive_scalper.regimes.classifier import (
 from adaptive_scalper.risk.daily_loss import (
     BASELINE_STATE_KEY as DAILY_LOSS_BASELINE_KEY,
 )
-from adaptive_scalper.risk.daily_loss import DailyLoss, DailyLossEvidenceError
+from adaptive_scalper.risk.daily_loss import (
+    DailyBaselineMismatch,
+    DailyLoss,
+    DailyLossEvidenceError,
+)
 from adaptive_scalper.risk.daily_loss import check_baseline as check_daily_baseline
 from adaptive_scalper.risk.daily_loss import collect as collect_daily_evidence
 from adaptive_scalper.risk.daily_loss import compute as compute_daily_loss
@@ -343,7 +347,11 @@ class DemoRuntime:
             "SELECT broker_position_id FROM positions WHERE broker_position_id IS NOT NULL")]
         loss = compute_daily_loss(account, deals, positions, own_magic=self.config.runtime.magic,
                                   own_position_ids=own_ids, now=now)
-        baseline = check_daily_baseline(get_state(self.conn, DAILY_LOSS_BASELINE_KEY), loss)
+        try:
+            baseline = check_daily_baseline(get_state(self.conn, DAILY_LOSS_BASELINE_KEY), loss)
+        except DailyBaselineMismatch as exc:
+            put_state(self.conn, DAILY_LOSS_BASELINE_KEY, exc.baseline, now_utc=now)   # keep the higher baseline
+            raise
         put_state(self.conn, DAILY_LOSS_BASELINE_KEY, baseline, now_utc=now)
         return loss, account
 
@@ -378,9 +386,17 @@ class DemoRuntime:
             # trips on the broker's own equity drop so a real loss always flattens.
             record_event(self.conn, "WARNING", "risk", "DAILY_LOSS_EVIDENCE_UNAVAILABLE", str(exc),
                          dedup_key=f"daily_loss_evidence:{now // 300}", now_utc=now)
+            # Broker-only fallback: the larger of the floating drop and the drop of equity below the
+            # day-start balance pinned earlier today (which also covers losses already realized).
             realized, floating, day_start = 0.0, account.equity - account.balance, account.balance
             pct = effective_daily_loss_pct(realized_pnl=realized, floating_pnl=floating,
                                            day_start_equity=day_start, equity=account.equity)
+            pinned = get_state(self.conn, DAILY_LOSS_BASELINE_KEY) or {}
+            if pinned.get("utc_day") == now // 86400:
+                day_start = float(pinned["day_start_balance"])
+                realized, floating = account.equity - day_start, 0.0
+                pct = max(pct, effective_daily_loss_pct(realized_pnl=realized, floating_pnl=0.0,
+                                                        day_start_equity=day_start, equity=account.equity))
         if pct < self.risk_limits.max_daily_loss_pct:
             return False
         reason = (f"daily loss circuit breaker: {pct:.2f}% >= max_daily_loss_pct "
