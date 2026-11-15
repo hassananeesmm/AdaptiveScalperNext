@@ -231,6 +231,10 @@ const GROUPS = [
    "winning and losing strategies with recorded costs; DEMO, PAPER and BACKTEST kept separate; every trade traceable. "+
    "Review-only: no strategy activation, auto-promotion or risk change is exposed here.",
    panels:["strategy_registry","strategy_activity","strategy_performance","strategy_attribution"]},
+  {id:"ai_desk",label:"AI Trading Desk",desc:"Seven research agents (market, strategy, news, risk, skeptic, "+
+   "learning, coordinator). ADVISORY ONLY - no execution authority: the trading engine's deterministic gates decide. "+
+   "AI advice, engine decisions, DEMO outcomes, shadow simulations and unverified research are labelled separately.",
+   panels:["ai_overview","ai_market","ai_research","ai_learning","ai_health"]},
   {id:"all",label:"All panels",desc:"Every implemented dashboard panel.",
    panels:["overview","market","performance","components","symbols","positions","orders","decisions",
            "risk","news","events","costs","research","learning","memory","knowledge","history",
@@ -247,8 +251,30 @@ const FRIENDLY = {
   memory:"RAG memory",knowledge:"Knowledge bundle",history:"Historical coverage",
   strategy_registry:"Strategy overview",strategy_activity:"Live strategy activity",
   strategy_performance:"Performance comparison",strategy_attribution:"Broker-verified attribution",
-  multi_position:"MULTI-POSITION READINESS",microstructure:"Microstructure (observation only)"
+  multi_position:"MULTI-POSITION READINESS",microstructure:"Microstructure (observation only)",
+  ai_overview:"AI desk: agent overview",ai_market:"AI desk: market intelligence (advice)",
+  ai_research:"AI desk: trade research (advice vs engine)",ai_learning:"AI desk: learning & performance (research)",
+  ai_health:"AI desk: operational health"
 };
+const AI_PANELS=["ai_overview","ai_market","ai_research","ai_learning","ai_health"];
+AI_PANELS.forEach(n=>WIDE.add(n));
+let aiLast=0,aiLoading=false;
+async function aiLoad(){
+  if(aiLoading)return;aiLoading=true;
+  try{
+    const r=await fetch("/api/ai-desk",{cache:"no-store"});
+    const body=await r.json();
+    AI_PANELS.forEach(name=>{
+      const c=cards[name],val=(body.panels||{})[name];if(!c||!val)return;
+      c.body.replaceChildren(panelBody(name,val));
+      c.source.textContent=val.status==="NO_DATA"?"Awaiting desk data":val.status==="UNAVAILABLE"?"Unavailable":
+        "AI desk journal (read-only)";
+    });
+    aiLast=Date.now();
+  }catch(e){AI_PANELS.forEach(name=>{const c=cards[name];if(c)c.source.textContent="Unavailable";});}
+  finally{aiLoading=false;}
+}
+setInterval(()=>{if((current==="ai_desk"||current==="all")&&!document.hidden&&Date.now()-aiLast>10000)aiLoad();},3000);
 const el = (tag, text, cls) => {
   const n=document.createElement(tag);
   if(text!==undefined && text!==null)n.textContent=String(text);
@@ -685,7 +711,8 @@ const nav=document.getElementById("nav"),cards={},lastContent={};
 GROUPS.forEach(g=>{
   const b=el("button",g.label);b.type="button";b.dataset.view=g.id;
   b.addEventListener("click",()=>{current=g.id;document.getElementById("search").value="";showView();
-    if(g.id==="strategy_lab"){labRender();labLoad(true);}});
+    if(g.id==="strategy_lab"){labRender();labLoad(true);}
+    if(g.id==="ai_desk")aiLoad();});
   nav.appendChild(b);
 });
 const root=document.getElementById("panels");

@@ -15,6 +15,10 @@ Endpoints: `/` (page), `/api/health`, `/api/panels`, `/api/panels/{name}`
 and the `/ws` WebSocket, which pushes all panels every `push_seconds`;
 the page falls back to polling `/api/panels` when the socket drops.
 
+AI Trading Desk (`/api/ai-desk`, GET only) reads the desk's separate journal
+(`data/ai_desk.sqlite3`) read-only, on demand; it is advisory research with
+no execution authority.
+
 Strategy Lab (`/api/strategy-lab/...`, GET only) is computed on demand
 when that view asks for it -- never on the 2 s push -- from the same
 read-only connection (see `dashboard/strategy_lab.py`).
@@ -83,7 +87,8 @@ def _lab_query(request: Request) -> tuple[str, dict, dict]:
     return evidence, filters, params
 
 
-def create_app(db_path: str | Path, *, push_seconds: float = DEFAULT_PUSH_SECONDS) -> FastAPI:
+def create_app(db_path: str | Path, *, push_seconds: float = DEFAULT_PUSH_SECONDS,
+               ai_desk_journal_path: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="Adaptive Scalper Next - Dashboard (observer only)")
 
     def _all() -> dict:
@@ -191,6 +196,15 @@ def create_app(db_path: str | Path, *, push_seconds: float = DEFAULT_PUSH_SECOND
             writer.writerows(rows)
         return Response(buf.getvalue(), media_type="text/csv", headers={
             "Content-Disposition": f'attachment; filename="strategy-lab-{evidence.lower()}.csv"'})
+
+    @app.get("/api/ai-desk")
+    def ai_desk() -> dict:
+        """AI Trading Desk panels from the desk's own journal, opened read-only.
+        Advisory research only; computed on demand, never on the 2 s push."""
+        from adaptive_scalper.ai_desk.dashboard_panels import ai_desk_panels
+
+        journal = ai_desk_journal_path or Path(db_path).resolve().parent / "ai_desk.sqlite3"
+        return {"generated_at_utc": int(time.time()), "panels": ai_desk_panels(journal)}
 
     @app.websocket("/ws")
     async def feed(ws: WebSocket) -> None:

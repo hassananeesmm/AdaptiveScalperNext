@@ -23,6 +23,39 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
+## AI Trading Desk (2026-11-14, branch `feature/ai-trading-desk`, base `f892c5f` = PR #12) — ADVISORY ONLY, NOT DEPLOYED
+
+**Strategy status unchanged: NO VALIDATED NET EDGE — FLAT.** New subsystem `adaptive_scalper/ai_desk/` (docs/AI_DESK.md):
+seven deterministic agents (market, strategy, news, risk, skeptic, learning, coordinator) over immutable, as-of bounded,
+READ-ONLY snapshots of the trading DB; its own journal `data/ai_desk.sqlite3` (append-only results, idempotent keys,
+crash recovery, retention); event-driven service `ai-desk serve` in a separate process (disabled by default); optional
+untrusted model narratives (Anthropic / Grok / OpenAI-compatible / local) behind budgets, circuit breaker, cache and
+strict validation; read-only dashboard view (GET `/api/ai-desk`); evaluator (forward checks, as-of replay outside the
+reserved OOS, pre-registered ablation vs the unchanged baseline). No trading code imports it; it imports no execution,
+gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md guarantees 29-30.
+- Independent verification 2026-11-14 (same branch, local commit on top of `d73bd7e`): CLI smoke tests on the
+  production DB (read-only; DB and WAL sha256 identical before/after); dashboard view checked in Chromium; 4 cycles,
+  284 evidence citations, 0 unresolved; 0 model calls. Fixed: stale Market view described 56-day-old bars instead of the
+  newer runtime observer; launcher ran `serve` after a failed `doctor`; provider hardening (half-open breaker,
+  Retry-After, 1 MB body cap, transport/adapter errors cannot fail a cycle, rejected answers count toward the breaker,
+  per-cycle `narrative_budget_seconds`). Stale root cause: runtime down ~16.7 days AND the runtime never persists bars
+  (newest stored M5 ~56 days old); runtime-side bar persistence is a PROPOSAL needing operator approval (AI_DESK.md).
+  Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
+  Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
+  0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.
+  AI desk tests within it: 125 passed (test_ai_desk 36, test_ai_desk_providers 28, test_ai_desk_safety 61). pytest's own
+  exit code was not captured by the wrapper (blank); the summary line and the JUnit report both show zero failures. Peak
+  memory unavailable (the sampler measured the venv launcher stub); one spot reading of the pytest process: ~183 MB
+  working set / ~1.1 GB private.
+- Measured on production data (read-only): cycle median 2.4-2.5 s uncontended (`scripts/ai_desk_benchmark.py`; the
+  earlier 16 s was a tracemalloc-instrumented run under suite load); **the AI desk has not demonstrated an improvement over
+  the baseline** (DEMO n=506 baseline -0.038 R, CI spans zero; every filter config INSUFFICIENT SAMPLE or NOT
+  DEMONSTRATED). Volatility statements beat a majority-class baseline (descriptive only, not an edge).
+- Status: IMPLEMENTED, CONNECTED (CLI, dashboard), TESTED-FAKE, TESTED-WINDOWS (suite at `d73bd7e`: 2379 passed / 9 skipped / 0 failed; at `f4ea04c`: 2407 / 9 / 0).
+  Not merged, not deployed (needs operator approval). BLOCKED: external providers (no key/budget configured; tested
+  with fakes and a local stub HTTP server only); live market analysis needs the runtime running; double-clicking
+  `START AI DESK.bat` in Explorer remains a manual step.
+
 ## Current branch (2026-10-09, `hardening/peak-equity-and-readiness`) — DEMO READINESS WORK, NOT DEPLOYED, ENTRIES STAY BLOCKED
 
 **Strategy status unchanged: NO VALIDATED NET EDGE — FLAT.** DEMO new-entry activation was evaluated against the

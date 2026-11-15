@@ -47,6 +47,13 @@ Recovery sequence:
 - Kill switch UNINITIALIZED/ENGAGED/INVALID: only the human operator resolves it.
 - Dashboard offline: trading remains independent; restore localhost monitoring before DEMO.
 
+## AI Trading Desk (optional, advisory only)
+
+The research desk never trades and never touches the kill switch. `ai-desk doctor`, then
+`ai-desk run-once` / `ai-desk report`; the autonomous service needs `enabled = true` in
+`config/ai_desk.toml` and runs via `START AI DESK.bat`. Stopping or crashing it has no effect on
+trading. Full runbook: `docs/AI_DESK.md`.
+
 ## Restart and shutdown
 
 Ctrl+C stops the runtime without closing positions; broker-side stops remain. After a laptop

@@ -15,6 +15,8 @@ placeholder commands). Modules:
     knowledge  rag status/stats/similar/rebuild-index/verify-index/ingest,
                okf status/validate/search/benchmark
     dashboard  dashboard
+    ai_desk    ai-desk doctor/status/agents/run-once/serve/report/evaluate/health
+               (advisory research only; trading DB read-only; no execution path)
 
 REAL-MONEY EXECUTION IS DISABLED: every broker-facing command refuses a
 non-DEMO account, and no command can send an order except through the
@@ -27,6 +29,7 @@ import argparse
 import sys
 
 from adaptive_scalper.cli import (
+    ai_desk,
     dashboard,
     data,
     knowledge,
@@ -39,7 +42,7 @@ from adaptive_scalper.cli import (
 from adaptive_scalper.cli.common import DEFAULT_CONFIG_PATH, CliError
 from adaptive_scalper.config.loader import ConfigError
 
-_MODULES = (system, operator, data, runtime, research, learning, knowledge, dashboard)
+_MODULES = (system, operator, data, runtime, research, learning, knowledge, dashboard, ai_desk)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -14,6 +14,7 @@ __pycache__/
 # Config and secrets (never commit credentials)
 config/secrets.toml
 config/config.toml
+config/ai_desk.toml
 .env
 .env.*
 *.key

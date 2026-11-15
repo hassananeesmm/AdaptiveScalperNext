@@ -67,6 +67,7 @@ EXPECTED = {
     "walk-forward", "oos", "path-stress", "purged-validation", "models", "learning", "model-walk-forward", "rag",
     "okf", "dashboard", "order-check-probe", "preflight", "research-snapshot", "independent-research",
     "peak-equity", "forward-evidence",   # 2026-10-09: ASN-034 audited baseline, ASN-031 read-only evaluator
+    "ai-desk",                           # 2026-11-14: advisory-only AI research desk (no execution path)
 }
 
 

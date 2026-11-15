@@ -1,0 +1,62 @@
+# AI Trading Desk configuration (copy to config/ai_desk.toml to use).
+# ADVISORY ONLY: the desk has no execution authority. Disabled and offline by default.
+# Secrets are NEVER stored here - only the NAME of an environment variable that holds a key.
+
+enabled = false                     # set to true to let `ai-desk serve` / START AI DESK.bat run
+journal_path = "data/ai_desk.sqlite3"
+trading_config_path = "config/default.toml"
+symbols = ["XAUUSD", "BTCUSD", "GBPJPY"]
+market_resolution = "M5"
+poll_seconds = 15.0
+agent_timeout_seconds = 60.0
+narrative_budget_seconds = 120.0   # cap on all model calls in one cycle; later narratives are skipped
+stale_after_seconds = 1800
+runtime_state_stale_seconds = 120
+retention_days = 90
+cache_ttl_seconds = 3600
+
+provider = "deterministic"          # deterministic = real Python analysis, no network, no cost
+fallback_providers = []
+llm_agents = ["coordinator"]        # agents that may get an (untrusted) narrative when a model is configured
+allowed_external_data = []          # e.g. ["risk_summary", "market_features"]; empty = nothing leaves the machine
+
+[budget]
+daily_token_budget = 0              # 0 = no external tokens
+daily_cost_budget_usd = 0.0         # 0 = no paid calls
+
+[intervals]
+market_analyst = 300.0
+strategy_analyst = 3600.0
+news_analyst = 900.0
+risk_analyst = 120.0
+learning_analyst = 3600.0
+scheduled_report = 3600.0
+
+[[providers]]
+name = "deterministic"
+kind = "deterministic"
+
+# Optional external providers (uncomment, set provider/fallbacks above, a category and a budget):
+#
+# [[providers]]
+# name = "claude"
+# kind = "anthropic"
+# model = "claude-sonnet-5-5"
+# api_key_env = "ANTHROPIC_API_KEY"
+# timeout_seconds = 20.0
+# max_retries = 2
+# input_cost_per_1k_tokens_usd = 0.003
+# output_cost_per_1k_tokens_usd = 0.015
+#
+# [[providers]]
+# name = "grok"
+# kind = "grok"                     # xAI, OpenAI-compatible endpoint https://api.x.ai/v1
+# model = "grok-4"
+# api_key_env = "XAI_API_KEY"
+#
+# [[providers]]
+# name = "local"
+# kind = "openai_compatible"        # e.g. Ollama / LM Studio on this laptop (CPU is slow; keep timeouts generous)
+# model = "llama3.2:3b"
+# base_url = "http://127.0.0.1:11434/v1"
+# timeout_seconds = 120.0

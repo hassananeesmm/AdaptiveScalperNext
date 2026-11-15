@@ -3365,3 +3365,79 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   broker-side closes, simultaneous positions, unexplained drop, unusable evidence, midnight rollover, vanished
   history, unsettled snapshot, runtime breaker, restart). Helper scripts take explicit `--source/--out-dir` and
   `--source/--target` paths (no hardcoded worktree).
+
+## 2026-11-14 -- AI Trading Desk (branch `feature/ai-trading-desk`, base `f892c5f`, advisory only, not deployed)
+
+- Audit: deployed 0.2.9 (`2dfb171`, schema 32); dev stack readiness <= ruff-cleanup (PR #11) <= drawdown-safety
+  (PR #12, f892c5f). Main checkout has 182 uncommitted lint-style edits (operator's work) and was not touched; the desk
+  was built in a new worktree `.worktrees/ai-desk`. Constraints found: single-threaded runtime scheduler (desk must
+  run out of process), trading-config fingerprint (desk uses its own `config/ai_desk.toml`), stored bars end
+  2026-09-18 and the last months are the reserved OOS (fresh market state only in `runtime_state`).
+- Built `adaptive_scalper/ai_desk/` (contracts, security, read-only snapshot builder, metrics, seven agents,
+  provider router + Anthropic / Grok / OpenAI-compatible adapters, orchestration, event bus, scheduler service,
+  journal with own migrations, evaluator, health, dashboard panels), CLI `ai-desk`
+  (doctor/status/agents/run-once/serve/report/evaluate/health), dashboard view GET `/api/ai-desk`,
+  `START AI DESK.bat`, `config/ai_desk.example.toml` (local `config/ai_desk.toml` git-ignored), docs/AI_DESK.md,
+  SAFETY.md rows 29-30.
+- Existing audit `test_there_is_no_live_or_real_execution_mode` caught the desk's snapshot-mode literal "LIVE" and a
+  payload key "live": renamed to CURRENT / runtime_fresh (test unchanged).
+- Tests: `tests/test_ai_desk.py`, `tests/test_ai_desk_safety.py` (+ `tests/ai_desk_fixtures.py`); `test_cli_commands`
+  EXPECTED and `test_launchers` LAUNCHERS extended (nothing removed). Full suite on the laptop:
+  2379 passed, 9 skipped (live-MT5 module), 0 failed. Ruff 0.16.9 clean on all new/changed files.
+- Real run against the production trading DB (read-only; journal in a scratch directory): cycle COMPLETED, 9
+  validated results, retry idempotent (0 inserted / 9 duplicates); runtime not live (heartbeat ~16 days old) so
+  market = STALE, risk/coordinator = INCOMPLETE ASSESSMENT -- reported honestly. Latency ~1.8 s uncontended
+  (strategy/learning ~1 s each from bootstrap CIs), Python peak memory 46 MB.
+- Evaluation (pre-registered protocol ai-desk-eval/1, trial #1): DEMO n=506 baseline -0.038 R (CI -0.087..+0.015);
+  +Market+Risk / full desk kept 157, improvement CI -0.054..+0.100 -> NOT DEMONSTRATED; other configs INSUFFICIENT
+  SAMPLE; SHADOW n=180 all INSUFFICIENT SAMPLE. Market volatility statements (as-of replay, 60 days before OOS) hit
+  0.51-0.57 vs majority baseline ~0.35 (descriptive, not an edge). A replay overlapping the reserved OOS is refused.
+  Conclusion: the AI desk has not demonstrated an improvement over the baseline.
+- Not done / blocked: no real external model call (no key or budget configured); launcher and dashboard view not
+  exercised interactively on the laptop; nothing merged, pushed or deployed.
+
+## 2026-11-14 -- AI desk independent verification and hardening (branch `feature/ai-trading-desk`, not pushed)
+
+- Git: branch at `d73bd7e` on `f892c5f` (= PR #12 head on GitHub, CI SUCCESS), which sits on `d46fb15` (PR #11) and
+  `488d575`; worktree clean before work. Not touched: main checkout (182 uncommitted files) and
+  `.worktrees/drawdown-safety` (3 uncommitted PR #12 follow-up files: daily_loss.py, demo.py, test).
+- CLI smoke on the production DB (read-only, scratch journal): doctor ok, agents/status, run-once x2 COMPLETED,
+  report, health, evaluate (trial #1 and #2; OOS replay REFUSED), serve refused while disabled. Trading DB and WAL
+  sha256 unchanged. No trading runtime, dashboard or MT5 terminal was running; none was started.
+- Dashboard (worktree code, port 8799, production DB read-only + scratch journal) in Chromium: five AI panels at
+  1366x768 and 911x512, no page-level horizontal scroll, POST/PUT/DELETE -> 405, no console errors.
+- Performance: in-process cycle median 2.4-2.5 s (min 1.8, max 2.9), Strategy/Learning ~1.0-1.1 s each, peak
+  working set ~108 MB; CLI run-once 8-9.5 s (3.8 s imports). The earlier 16 s reproduced only under tracemalloc
+  (7.6-13.8 s) with the suite running. Added `scripts/ai_desk_benchmark.py`.
+- Agents: 4 production cycles, 28 results, 284 evidence citations, 0 unresolved; every result deterministic, 0
+  provider calls, 0 model narratives.
+- Defects fixed: (1) STALE Market view used 56-day-old bars over the 16-day-old runtime observer and mixed bar
+  statistics into it - now the newest source is described and cited, with `data_freshness.state` and remediation;
+  (2) `START AI DESK.bat` ran `serve` after a failed `doctor`; (3) `serve` printed its polling banner before refusing;
+  (4) provider router: half-open breaker needed N failures to re-open, rejected answers never tripped the breaker,
+  Retry-After ignored, unbounded response bodies, a connection reset / adapter bug could fail the whole cycle, no
+  per-cycle cap on model-call time (`narrative_budget_seconds`, default 120). `doctor` now reports data ages.
+- Stale data root cause: runtime down since 2026-10-28 and the runtime never writes `bars` (only `history
+  bootstrap` does). Runtime-side bar persistence documented as a proposal (separate branch + approval); nothing
+  changed in the trading runtime.
+- Tests: new `tests/test_ai_desk_providers.py` (28: local stub HTTP server - success both wire formats, cache, 429 +
+  Retry-After and cap, min interval, 500 breaker, half-open, 4xx no retry, timeout bound, deadline, malformed /
+  wrong-shape / oversized / dropped body, rejected output, missing key, adapter bug, token and cost budgets, key never
+  journaled, full cycle; freshness states; launcher guard; serve refusal). Nothing removed or weakened.
+  Full suite: INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run, must be re-run before merge. AI desk modules run separately: 125 passed (test_ai_desk, test_ai_desk_safety, test_ai_desk_providers). Ruff 0.16.9: all checks passed (whole worktree).
+
+## 2026-11-14 - AI Trading Desk: complete regression re-run at f4ea04c
+
+- Full suite re-run sequentially (one pytest process, no xdist, `-p no:cacheprovider --durations=30`) at `f4ea04c`:
+  **2407 passed, 9 skipped, 0 failed, 2 warnings** in 1575.44 s (0:26:15). JUnit: tests=2416, failures=0, errors=0,
+  skipped=9 (test_mt5_gateway_live needs a live terminal; test_knowledge). Warnings: third-party starlette/httpx and
+  anyio deprecations only. The interrupted first run above is kept as history.
+- AI desk: 125 passed (test_ai_desk 36, test_ai_desk_providers 28, test_ai_desk_safety 61).
+- pytest's own exit code was NOT captured (the wrapper's `exit=` is blank); the pytest summary line and the JUnit report
+  both show zero failures. Peak memory is unavailable: the sampler followed the venv launcher stub (4 MB), not the child
+  interpreter; one spot reading of the pytest process at ~5 min: ~183 MB working set, ~1,117 MB private. No pytest
+  process remained afterwards. Slowest tests ~85-87 s each (three DEMO runtime scenarios).
+- Acceptance (read-only): dashboard panels list all 7 agents, every symbol STALE / RUNTIME_DOWN; trading DB and WAL
+  sha256 identical to the session baseline; no diff from `f892c5f` under config/, risk, execution, core, gateway or
+  runtime. Explorer double-click of `START AI DESK.bat` BLOCKED until the branch is in the main checkout (no .venv or
+  trading DB in the worktree).
