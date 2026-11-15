@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import sqlite3
 import time
 
 from adaptive_scalper.backtest.types import BacktestResult
@@ -353,6 +354,53 @@ def _range_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def cmd_forward_evidence(args: argparse.Namespace) -> int:
+    """READ-ONLY (ASN-031 step 1): the preregistered forward-evidence protocol
+    applied to the DEMO shadow lifecycle outcomes. Never issues, signs or
+    stores a certificate; never changes what the runtime may do."""
+    from adaptive_scalper.config.loader import load_config
+    from adaptive_scalper.persistence.database import connect_readonly
+    from adaptive_scalper.research.independent import DSR_VARIANCE_MIN_OBSERVATIONS, _same_file
+    from adaptive_scalper.validation.forward_evidence import evaluate_database
+
+    cfg = load_config(args.config)
+    trial_count = variance = None
+    if args.research_db:
+        if _same_file(args.research_db, cfg.database.path):
+            raise CliError("--research-db is the production database; pass the research ledger copy")
+        ledger = connect_readonly(args.research_db)
+        trial_count = ledger.execute("SELECT COUNT(*) FROM research_trials").fetchone()[0]
+        sharpes = [r[0] for r in ledger.execute(
+            "SELECT sharpe FROM research_trials WHERE status = 'COMPLETED' AND sharpe IS NOT NULL "
+            "AND COALESCE(n_observations, 0) >= ?", (DSR_VARIANCE_MIN_OBSERVATIONS,))]
+        ledger.close()
+        if len(sharpes) >= 2:
+            import statistics
+            variance = statistics.variance(sharpes)
+    try:
+        conn = connect_readonly(cfg.database.path)
+    except sqlite3.OperationalError as exc:
+        raise CliError(f"cannot open {cfg.database.path!r} read-only: {exc}") from exc
+    try:
+        reports = evaluate_database(conn, ledger_trial_count=trial_count, trial_sharpe_variance=variance)
+    finally:
+        conn.close()
+    print_json({
+        "protocol": "docs/audits/FORWARD_EVIDENCE_PROTOCOL.md (preregistered 2026-10-03)",
+        "ledger_trial_count": trial_count,
+        "issues_certificates": False,
+        "groups": [{"group": r.group, "label": r.label, "raw_observations": r.raw_observations,
+                    "effective_observations": r.effective_observations,
+                    "chronological_blocks": r.chronological_blocks,
+                    "criteria": [{"n": c.number, "name": c.name, "status": c.status, "detail": c.detail}
+                                 for c in r.criteria],
+                    "statistics": r.statistics} for r in reports],
+        "note": "no group may trade on this report: an eligible label leads to human review and forward PAPER "
+                "(promotion ladder), and DEMO entries additionally need a signed certificate (ASN-031)",
+    })
+    return 0
+
+
 def register(sub) -> None:
     bt = sub.add_parser("backtest", help="causal backtest over stored history (recorded as VALIDATION)")
     _range_args(bt)
@@ -397,3 +445,8 @@ def register(sub) -> None:
     ind.add_argument("--tag")
     ind.add_argument("--out", help="write the full JSON report here")
     ind.set_defaults(func=cmd_independent_research)
+
+    fe = sub.add_parser("forward-evidence", help="READ-ONLY: preregistered forward-evidence protocol over the DEMO "
+                                                 "shadow lifecycle outcomes (never issues a certificate)")
+    fe.add_argument("--research-db", default=None, help="research ledger copy, for the DSR trial count/variance")
+    fe.set_defaults(func=cmd_forward_evidence)

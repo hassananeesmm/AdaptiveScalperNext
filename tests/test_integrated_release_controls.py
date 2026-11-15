@@ -86,19 +86,19 @@ def test_migration_31_to_32_on_a_populated_database(tmp_path, monkeypatch):
     monkeypatch.undo()
     conn = connect(db_path)
     migrate(conn)
-    assert max(database.applied_versions(conn)) == 32
+    assert max(database.applied_versions(conn)) == 33   # 0033 peak_equity_history (ASN-034) after 0032
     assert {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in before} == before
     assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert {"shadow_candidates", "shadow_outcomes", "shadow_lifecycle_outcomes"} <= _names(conn)
     migrate(conn)                                   # idempotent
-    assert max(database.applied_versions(conn)) == 32
+    assert max(database.applied_versions(conn)) == 33   # 0033 peak_equity_history (ASN-034) after 0032
 
 
 def test_a_fresh_database_migrates_to_32_with_append_only_shadow_tables(tmp_path):
     conn = connect(tmp_path / "fresh.sqlite3")
     migrate(conn)
-    assert max(database.applied_versions(conn)) == 32
+    assert max(database.applied_versions(conn)) == 33   # 0033 peak_equity_history (ASN-034) after 0032
     names = _names(conn)
     for trigger in ("trg_shadow_candidates_no_update", "trg_shadow_candidates_no_delete",
                     "trg_shadow_outcomes_no_update", "trg_shadow_outcomes_no_delete",

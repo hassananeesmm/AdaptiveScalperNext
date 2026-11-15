@@ -3235,3 +3235,72 @@ check or order send occurred.
   not authorized); merges of PR #10 then #9, release build, deployment with migration 0032, PR #7 superseded by #10,
   PR #5 (0.2.6, already deployed) stale.
 - Full suite after the audit changes (Windows, serial, 9 min 17 s): **2169 passed / 9 skipped / 0 failed / 2 warnings**.
+
+## 2026-10-09 -- release 0.2.9 MERGED and DEPLOYED to the IC Markets DEMO runtime (operator-approved)
+
+- Operator instruction: "merge all nd deploy". PR #10 (`hardening/flat-shadow-release` -> main) merged as `3d90c60`;
+  PR #9 retargeted to main and merged as `2dfb171` (merge commits, SHAs preserved). `main` tree == `a4636bf`
+  (full suite 2169 passed / 9 skipped / 0 failed). Tag `v0.2.9` (annotated) on `2dfb171`, pushed. PR #7 (superseded by
+  #10) and PR #5 (0.2.6, already deployed) left open for the operator to close.
+- Pre-deployment (read-only): broker ICMarketsSC-Demo (trade_mode DEMO) 0 positions / 0 orders, equity 9,252.63;
+  local 0 open positions, 0 unresolved close_requests, 0 unresolved execution incidents; kill switch DISENGAGED
+  (untouched); schema 31; requirements unchanged since v0.2.7. Entries were already blocked by BLOCK_RISK drawdown
+  5.19 % >= 5 % (since ~2 h before). The operator first restarted the old v0.2.7 checkout (no change), then stopped
+  the runtime and dashboard with Ctrl+C; both processes confirmed exited; broker re-confirmed flat.
+- Backup: `data/backups/pre_0_2_9_deploy_20261009T060023Z.sqlite3` (online backup from a read-only source
+  connection, WAL included): integrity_check ok, schema 31, 0 open positions, 275,210,240 bytes, sha256
+  8bf4fab36577dafb24f44feccb4cdcd3ab3bdae375865fc9e6294ea7f0507b99.
+- Deployment: root checkout `git checkout --detach v0.2.9` (clean, v0.2.7 `d9c1bd1` -> `2dfb171`); `START DEMO +
+  DASHBOARD.bat` launched 10:01 local / 06:01 UTC; doctor passed and applied migration 0032. The dashboard launched
+  alongside exited at start (most likely racing the 0032 migration); a foreground run was clean, and a relaunch of
+  `START DASHBOARD.bat` served HTTP 200 with all 23 panels OK (incl. `microstructure`).
+- Post-start gate (read-only): schema 32, quick_check ok; engine RUNNING (DEMO), no degraded components; reconciliation
+  CLEAN; broker_truth AVAILABLE; server clock VERIFIED (BTCUSD -1.4 s, XAUUSD -0.4 s); kill switch DISENGAGED; 0 open
+  positions; no new ERROR/CRITICAL events. Global block at 06:02 UTC: BLOCK_SESSION (outside [12:00, 20:00) UTC).
+  Loaded config: entry window (12, 20), min_adx 20.0, hard_stop {BTCUSD: 0.5}, news 30/30, spread caps XAUUSD 0.20 /
+  BTCUSD 15.0, risk 0.25 / 2.0 / 5.0 %. Microstructure live: BTCUSD VWAP 82,293.04 sigma 20.77 (10 M1 bars);
+  candles BTCUSD ADX14 29.6 / XAUUSD ADX14 53.4.
+- Rollback (not needed): stop the runtime, `git checkout --detach d9c1bd1`, restore the backup above (schema 31).
+
+## 2026-10-09 -- read-only runtime/risk audit, then DEMO readiness work (branch `hardening/peak-equity-and-readiness`)
+
+Audit (read-only; production DB opened with `mode=ro` only, no MT5 connection, no order):
+- Broker is IC Markets (`ICMarketsSC-Demo`, "Raw Trading Ltd"), DEMO; not Exness. Engine RUNNING (0.2.9), kill switch
+  DISENGAGED, reconciliation CLEAN, 0 positions, equity = balance = 9,252.63.
+- Drawdown 5.19 % = (9,759.63 - 9,252.63) / 9,759.63 against the unbound `runtime_state.peak_equity`. The "-7.5 % vs
+  10,000" figure uses a different baseline: the account received four deposits (200.00 on 09-09; 732.60, 84.08 and
+  10,000.00 on 09-16; total 11,016.68) and was traded by another expert (magic 770115, 2,197 deals, -4,731.72) and
+  manually (magic 0, 22 deals, +3,422.50) before this runtime existed (DB created 09-19, first runtime event 09-25).
+  Cash check: imported closed balance 9,707.46 (09-25 18:15Z) + runtime deals since (-455.22) = 9,252.24 vs broker
+  9,252.63 (residual 0.39, unexplained until the operator exports the broker history).
+- The drawdown block began 2026-10-06 05:25Z (5.01 %), 5.19 % since 10-06 10:09Z (the 0.2.9 deploy note "since ~2 h
+  before" understated it). The binding blocker is BLOCK_EDGE_UNVALIDATED (ASN-031); the drawdown is secondary.
+- Peak tracking defects found and fixed below (ASN-034); 612 PROPOSED orders investigated (ASN-035, by design).
+- The DEMO account login appears in public Git history (7a2d840, 4f7c762; redacted at HEAD since 5f59280/3a8df17).
+  No password, key or token anywhere in history. History not rewritten (operator decision).
+
+DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted):
+- ASN-034: migration 0033 `peak_equity_history` (append-only, per login + server), `risk/peak_equity.py`,
+  `core/peak_equity_reset.py` + CLI `peak-equity status|history|reset` (OperatorAuthority, kill switch ENGAGED, flat
+  book, reason >= 20 chars, evidence file SHA-256, `--acknowledge-lower`), DEMO position cycle observes the peak every
+  cycle, account change -> BLOCK_RISK until an operator records a baseline, `evaluate_risk_gate` blocks an
+  unknown/invalid peak (was: skipped the check when <= 0). Tests: tests/test_peak_equity.py; the session regression
+  test was negative-controlled (fails with the per-cycle observation removed).
+- Migration 0033 rehearsed on an online-backup COPY of the production DB (read-only source): schema 32 -> 33,
+  integrity ok, row counts unchanged; first observation = LEGACY_ADOPTED 9,759.63 for the running account, drawdown
+  still 5.19 % (block persists by design); second observation appends nothing. Copy deleted.
+- ASN-031 step 1: `validation/forward_evidence.py` + CLI `forward-evidence` (read-only, preregistered protocol only,
+  no interim performance disclosure, no issuance). Production result ~10:45 UTC: every group FORWARD EVIDENCE
+  INSUFFICIENT (independent observations of 300: microstructure_acceleration BTCUSD 23 / XAUUSD 19,
+  statistical_reversion BTCUSD 4 / XAUUSD 8). ASN-036 opened (cost-stress components not recorded).
+- ASN-035 closed as not-a-defect with tests/test_blocked_proposals_are_inert.py; production rows untouched.
+- CI: `.github/workflows/ci.yml` (push to main, every pull request, manual) -- full Windows Python 3.13 suite.
+- Docs: PROJECT_STATUS (this branch), BUG_BACKLOG (ASN-031 progress, ASN-034/035/036), docs/SAFETY.md row 5,
+  CLAUDE.md "Current state" (was stale: "pending kill-switch bootstrap").
+- DEMO activation: NOT activated. Criterion 5 fails (no strategy with genuine forward evidence, no certificate
+  pipeline); criterion 3 fails (drawdown 5.19 % >= 5 % without any baseline reset); criterion 1 open (broker
+  cash-history export). Entries stay blocked; the runtime keeps collecting shadow evidence.
+- Full suite on the committed branch tree (`f80c09d`, clean worktree, Windows, shared .venv, serial, 10 min 4 s):
+  **2228 passed / 9 skipped / 0 failed / 2 warnings**. (An earlier run before the CLI registry pin was updated: 2226
+  passed / 1 failed -- `test_every_directive_command_is_registered`, which pins the command list and correctly flagged
+  the two new commands.)

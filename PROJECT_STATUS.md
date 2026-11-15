@@ -23,7 +23,37 @@ DATA** (real terminal, real quotes/bars, no order sent), **VERIFIED ON DEMO** (a
 real DEMO order), **NOT VERIFIED**, **BLOCKED**. Cloud results (docs/QA_REPORT.md,
 "Cloud") never verified MT5 behaviour.
 
-## Current phase (2026-10-08, branch `hardening/risk-and-blackout-tightening`) — TIGHTENING ON THE HARDENED CANDIDATE, NOT DEPLOYED
+## Current branch (2026-10-09, `hardening/peak-equity-and-readiness`) — DEMO READINESS WORK, NOT DEPLOYED, ENTRIES STAY BLOCKED
+
+**Strategy status unchanged: NO VALIDATED NET EDGE — FLAT.** DEMO new-entry activation was evaluated against the
+operator's eight criteria and **NOT activated**: criterion 5 (a strategy with genuine forward evidence and a valid
+signed certificate) fails -- every forward-evidence group is FORWARD EVIDENCE INSUFFICIENT (23 / 19 / 4 / 8
+independent observations of 300) and no certificate pipeline exists (ASN-031); criterion 3 also fails (drawdown
+5.19 % >= 5 % against the adopted baseline) and criterion 1 is open (broker cash history after 2026-09-25 not yet
+exported by the operator). Changes on this branch (tighten-only; details WORKLOG 2026-10-09 "DEMO readiness"):
+- ASN-034 FIXED: account-bound, append-only drawdown baseline (migration **0033** `peak_equity_history`), observed on
+  every position cycle (was skipped during BLOCK_SESSION etc.), account change blocks, audited operator-only
+  `peak-equity reset` (kill switch ENGAGED, flat book, reason, evidence SHA-256), unknown peak = BLOCK_RISK.
+- ASN-031 step 1: read-only `forward-evidence` evaluator of the preregistered protocol (no issuance, no signing).
+- ASN-035 CLOSED (blocked PROPOSED orders are inert audit records, pinned by tests); ASN-036 OPEN (cost-stress
+  components not recorded, so protocol criterion 5 is not measurable).
+- CI: `.github/workflows/ci.yml` runs the full suite on pushes to main and on every pull request.
+Status: IMPLEMENTED, TESTED-FAKE, TESTED-WINDOWS (suite 2228 passed / 9 skipped / 0 failed). Not deployed: deploying needs operator
+approval, a verified backup, migration 0033 rehearsal on a production copy and a flat restart. On first start the
+pre-0033 value 9,759.63 is adopted (LEGACY_ADOPTED) for the running IC Markets DEMO account, so the 5.19 % drawdown
+block persists -- by design.
+
+## Deployed runtime (2026-10-09, release 0.2.9 DEPLOYED on DEMO)
+
+**Running: 0.2.9 (`2dfb171`, tag v0.2.9 = `main` after merging PR #10 then PR #9).** Operator-approved ("merge all and
+deploy"). Production schema **32** (migration 0032 applied at start). **Strategy status: NO VALIDATED NET EDGE --
+FLAT** (no certificate/key, ASN-031). New entries are additionally blocked by the drawdown limit (5.19 % >= 5 % at
+deployment) and outside [12:00, 20:00) UTC. Live: floating-loss daily breaker + same-UTC-day lock, spread caps, ADX(14)
+> 20 gate, BTCUSD 0.5 % hard cut-loss, observe-only microstructure + dashboard panel. Backup:
+`data/backups/pre_0_2_9_deploy_20261009T060023Z.sqlite3`. Rollback: checkout `d9c1bd1` (v0.2.7) and restore that
+backup (schema 31).
+
+## Previous phase (2026-10-08, branch `hardening/risk-and-blackout-tightening`) — TIGHTENING ON THE HARDENED CANDIDATE, merged in 0.2.9
 
 **Strategy status unchanged: NO VALIDATED NET EDGE — FLAT.** Tighten-only safety changes on top of `a073ec1`
 (details: WORKLOG 2026-10-06..08):
