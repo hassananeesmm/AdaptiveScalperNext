@@ -3483,3 +3483,29 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   the host at ~2% for low system memory (not a test failure; 0 failures up to then; no pytest process left). It must
   be re-run, and must pass, before this branch is pushed or reviewed for merge.
 - Not done: merge, push, deploy, enabling the flag. M1 persistence remains phase 2.
+
+## 2026-11-15 - Stack checkpoint, PR #12 follow-up pushed, readiness PR, PR #13 merge-result suite, bar-persistence checks
+
+- Stack verified (read-only git + gh): origin/main 2dfb171 -> readiness 488d575 -> #11 d46fb15 -> #12 f892c5f (+ local
+  cb16a11) -> #13 a7710e9 -> bar persistence f16c580 (local). All remote heads matched the checkpoint; nothing had moved.
+- PR #12: cb16a11 pushed as a plain fast-forward (f892c5f..cb16a11; diff only risk/daily_loss.py, runtime/demo.py,
+  tests/test_daily_loss_accounting.py). Remote head verified cb16a11.
+- Readiness: draft PR #14 opened, main <- hardening/peak-equity-and-readiness (488d575). No equivalent PR existed.
+- PR #13 kept in draft. Effective diff against the updated base: 47 files, no overlap with the cb16a11 files; merge-tree
+  clean. Full suite on the local test-merge commit a7f2d41 (tree = a7710e9 merged onto cb16a11; not pushed, not on any
+  branch): **2410 passed, 9 skipped, 0 failed, 2 warnings**, pytest exit code 0, JUnit 2419 tests / 0 failures / 0
+  errors, 1983 s. The 2,407 result stays tied to f4ea04c.
+- Bar persistence at f16c580: second full run stopped by the host low-memory safeguard at 79% (1,935 passed, 9 skipped,
+  0 failed so far; no JUnit). The 25 targeted and 83 related passes remain separate from full regression.
+- Lock-timing probe (scratch script; production DB byte copy and a synthetic DB; production DB never opened):
+  - A held external write lock makes each sink run take ~100 ms (max 120 ms).
+  - Position-cycle lag rose from max 4 ms to max 116 ms, once per sink run.
+  - Idempotent retry verified (see PROJECT_STATUS).
+  - The coverage refresh on 1.5 M rows holds the write lock ~100-160 ms every 10 min.
+- START AI DESK.bat acceptance in a disposable detached checkout of a7f2d41 (production DB copy, enabled deterministic
+  config, .venv junction):
+  - Doctor passed 8/8 and the service started and polled; it was stopped after 45 s.
+  - The journal recorded 1 run, 9 agent results and 0 provider calls; the trading DB copy stayed byte-identical.
+  - A config saved with a UTF-8 BOM makes doctor fail closed ("Invalid statement at line 1, column 1").
+- Production DB/WAL hashes BF0BD50D / E1568818 were unchanged throughout; the main checkout still has 182 dirty files
+  at 2dfb171; no MT5, no orders, no kill-switch change, no paid AI calls, no merge, no deploy.
