@@ -48,6 +48,19 @@ gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md gu
   idempotent with a watermark, a locked DB is skipped (50 ms busy timeout), it never raises, health is advisory, and
   BAR_GAP is reported beyond the ~25 h cache. 25 new tests in `tests/test_bar_persistence.py`. Full suite NOT yet
   completed on this branch (host stopped it at ~2% for low memory); it must pass before push/review.
+  2026-11-15 at `f16c580`:
+  - Second sequential run: also stopped by the host low-memory safeguard, at 79% (1,944 results: 1,935 passed,
+    9 skipped, 0 failed, 0 errors; no JUnit or exit code because the process was killed). Still NOT a full regression.
+  - Lock-timing probe (wall clock, single-threaded scheduler, external process holding the write lock):
+    - Each sink run under a held lock takes ~100 ms median, 120 ms max (Windows busy-handler granularity, not the
+      nominal 50 ms). That delays the next position cycle by the same amount (p95 lag 99.6 ms, max 116 ms vs ~2 ms
+      unlocked) once per sink run (60 s cadence).
+    - Retries are idempotent: no watermark advance on a skip; after release one run wrote the backlog; re-runs and a
+      restarted sink were IDLE; no duplicates, contiguous, no events.
+    - On a production-sized copy (1.50 M bar rows) the 10-minute coverage refresh holds the write lock ~100-160 ms,
+      and a cold 900-row first run 142 ms median / 441 ms max. Steady 3-row runs: < 1 ms.
+  - Cosmetic: `last_error` is not cleared after a later successful run.
+  - Status: NOT READY until a full suite completes. The lock-hold cost is a review decision for the operator.
   Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
   Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
   0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.
