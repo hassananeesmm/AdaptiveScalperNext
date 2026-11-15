@@ -221,7 +221,7 @@ class FakeGateway:
         self._open_positions[position_key] = PositionSnapshot(
             broker_position_id=position_key, symbol=request.symbol, direction=request.direction,
             volume=request.volume, price_open=fill_price, stop_loss=request.stop_loss or 0.0,
-            take_profit=request.take_profit or 0.0, profit=0.0, magic=request.magic, comment=request.comment,
+            take_profit=request.take_profit or 0.0, profit=0.0, magic=request.magic, comment=request.comment, swap=0.0,
         )
         self._historical_deals.append(HistoricalDeal(
             ticket=deal_ticket, order=order_ticket, time=0, type=0 if request.direction == "BUY" else 1,

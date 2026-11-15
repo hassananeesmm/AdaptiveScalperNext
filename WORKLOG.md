@@ -3326,3 +3326,42 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   2228 passed / 9 skipped / 0 failed; no config, migration or constants
   file changed; every numeric-constant change traces to an equivalent
   rewrite.
+
+## 2026-10-27 -- P0 project drawdown safety (branch `fix/project-drawdown-safety-20261027`, uncommitted)
+
+- Continued an interrupted Codex implementation in place (worktree `.worktrees/drawdown-safety`, base `d46fb15`):
+  migration 0034 `project_drawdown_events` / `project_drawdown_deals` (append-only, seeded with a LATCHED
+  BLOCKED row for the reported 5.19 % breach, no policy, no inferred peak), `risk/project_drawdown.py`
+  (project equity = approved flat anchor + attributable realized + floating; deposits and foreign-EA P&L
+  excluded from project equity; account drawdown stays an independent gate; any unknown attribution,
+  revised/duplicate/missing history, unreconciled cash, wrong identity or stale evidence latches),
+  `core/drawdown_recovery.py` (OperatorAuthority, signed approval bound to the exact policy, kill switch
+  ENGAGED, flat book; can never move the anchor or lower a peak; no runtime caller). Enforced at the
+  global entry block, final permission and the pre-send evidence rebuild (`_risk_gate_peak` -> NaN).
+- Codex's full-suite log (4 failed / 2250 passed / 9 skipped) was stale: six files changed after that
+  run started. Fixed in this session: (1) `collect()` compared the whole account snapshot (equity, margin)
+  and latched permanently on any tick during collection -- now compares identity, retries balance/equity
+  settlement, and an unsettled account blocks the cycle without latching; an identity change still
+  latches; (2) every observation appended an audit row (several per 4 s cycle) -- rows are now appended
+  only on an auditable change; (3) schema assertions 33 -> 34; (4) the DEMO global-block peak test now
+  asserts the 6 % drawdown, the 10,000 bound baseline and the NaN final-permission peak (a 6 % one-day
+  drop trips the daily-loss breaker first, so the global decision may be BLOCK_KILL_SWITCH).
+- New tests: partial fills and over-close, partially closed position still open, unsettled account
+  (no latch), identity change during collection (latch), no audit growth on repeated observations.
+- Migrations 0033 + 0034 rehearsed on an online-backup copy (scratchpad): applied [33, 34], integrity ok,
+  idempotent, existing table counts unchanged, 0034 latch present, no peak invented, runtime gate BLOCKED
+  without any broker call. Production DB (schema 32) byte-identical before/after; kill switch untouched.
+- Observed (read-only): six manual (magic 0) XAUUSD positions opened on the shared DEMO account at
+  13:45-13:46 server time without SL/TP -- not placed by this project.
+- Daily-loss masking fixed (`risk/daily_loss.py`, wired into `DemoRuntime`): `_daily_realized_pnl` summed every
+  deal of the UTC day, so a deposit or a foreign/manual profit offset real losses. Now: project realized
+  (profit + commission + swap + fee of every deal on a project position, whatever magic closed it) + project
+  floating (profit + swap) + foreign realized/floating and unknown charges only when negative; deposits and
+  withdrawals excluded both ways; floating capped by broker equity - balance. The day-start balance is
+  reconstructed from broker truth and pinned per UTC day in `runtime_state.daily_loss_baseline` (a later
+  disagreement = missing/revised history -> block). Unusable or unreconciled evidence blocks the global entry
+  gate and final permission (NaN -> governor +inf); the circuit breaker still trips on the broker's own equity
+  drop. Tests: `tests/test_daily_loss_accounting.py` (foreign profit, deposit, withdrawal, costs, partial and
+  broker-side closes, simultaneous positions, unexplained drop, unusable evidence, midnight rollover, vanished
+  history, unsettled snapshot, runtime breaker, restart). Helper scripts take explicit `--source/--out-dir` and
+  `--source/--target` paths (no hardcoded worktree).

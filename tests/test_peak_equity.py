@@ -22,6 +22,7 @@ from adaptive_scalper.core import peak_equity_reset as reset_mod
 from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.kill_switch import engage as engage_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
+from adaptive_scalper.gateway.types import HistoricalDeal
 from adaptive_scalper.persistence.database import connect, migrate
 from adaptive_scalper.risk import peak_equity as pe
 from adaptive_scalper.risk.entry_window import BLOCK_SESSION
@@ -31,6 +32,7 @@ from adaptive_scalper.risk.governor import (
     RiskLimits,
     evaluate_risk_gate,
 )
+from adaptive_scalper.runtime.demo import BLOCK_KILL_SWITCH
 from adaptive_scalper.runtime.state import get_state, put_state
 
 LOGIN, SERVER = 1234567, "Example-Demo"
@@ -330,9 +332,18 @@ def test_demo_global_block_reports_the_drawdown_against_the_bound_baseline(tmp_p
     clock, engine, _conn, gateway = _started(tmp_path)
     step(engine, clock, seconds=3)                                        # baseline 10000
     gateway.set_account(demo_account(balance=9400.0, equity=9400.0))
+    gateway._historical_deals.append(HistoricalDeal(
+        1, 0, int(clock.now), 2, 0, 0, 0, 0, 0, 0, 0, -600, 0, '', 'synthetic withdrawal', ''))
     step(engine, clock, seconds=3)
-    decision, reason = engine.demo.global_entry_block(int(clock.now))
-    assert decision == BLOCK_RISK and "drawdown 6.00% reached the limit" in reason
+    decision, _reason = engine.demo.global_entry_block(int(clock.now))
+    # A 6 % drop inside one UTC day also trips the 2 % daily-loss breaker, which
+    # engages the kill switch and so blocks ahead of the drawdown gate.
+    assert decision in (BLOCK_KILL_SWITCH, BLOCK_RISK)
+    project = engine.demo._project_drawdown()
+    assert project.blocked and "account drawdown 6.000000%" in project.reason
+    assert pe.current_peak(_conn, gateway.account_info().login, gateway.account_info().server)["peak_equity"] == 10000.0
+    assert math.isnan(engine.demo._risk_gate_peak(gateway.account_info(), int(clock.now)))
+    assert gateway.calls["order_send"] == 0
 
 
 def test_demo_blocks_entries_after_an_account_change(tmp_path):
@@ -341,7 +352,7 @@ def test_demo_blocks_entries_after_an_account_change(tmp_path):
     gateway.set_account(demo_account(login=987654, balance=20000.0, equity=20000.0))
     step(engine, clock, seconds=3)
     decision, reason = engine.demo.global_entry_block(int(clock.now))
-    assert decision == BLOCK_RISK and "drawdown baseline unavailable" in reason
+    assert decision == BLOCK_RISK and "account identity" in reason
     assert math.isnan(engine.demo._risk_gate_peak(gateway.account_info(), int(clock.now)))
     assert gateway.calls["order_send"] == 0
 
