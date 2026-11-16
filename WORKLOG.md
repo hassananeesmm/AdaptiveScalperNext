@@ -3531,3 +3531,12 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   8 new tests (prompt lock failure, unchanged progress on skip/failure, idempotent recovery with coverage equal to a full
   recount, health recovered vs active, engine health, bounded cold start, no scan + pending coverage).
   `tests/test_bar_persistence.py` 33 passed; related runtime/engine/scheduler/AI-desk tests 218 passed.
+- Batched regression coverage at **67113cd** (exact commit tested; tree clean): 2,449 test IDs collected first, split by
+  file into 10 sequential pytest processes (one per batch, memory released between batches), each with its own exit code
+  and JUnit report. **All 10 batches exit 0. Every collected ID reported exactly once: 2,440 passed, 9 skipped, 0 failed,
+  0 errors; 0 missing, 0 extra, 0 duplicates.** Total ~14 min. This is batched regression coverage, not one single-process
+  run. A first attempt had exited 4 in every batch (CRLF in the batch file lists: "file or directory not found"; no tests
+  ran). It was kept in `attempt0_crlf_usage_error/` and rerun after the lists were normalized. Evidence:
+  `C:\Users\pablo\.claude\jobs\587cee16\tmp\batched-67113cd\` (collected_ids.txt, batch_NN.{files,exit,junit.xml,stdout.txt},
+  accounting.json).
+- Production DB/WAL hashes BF0BD50D / E1568818 unchanged; MT5 not running; main checkout untouched (182 dirty entries).

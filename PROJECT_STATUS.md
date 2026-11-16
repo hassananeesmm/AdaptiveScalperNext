@@ -78,6 +78,9 @@ gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md gu
     run; recovery after lock release is idempotent (re-run and restarted sink IDLE; incremental coverage equals a full
     recount). Health keeps `active_error` (current) separate from `last_error` + `recovered_at` (history).
   - Tests: `tests/test_bar_persistence.py` 33 passed (8 new); runtime/engine/scheduler/AI-desk related 218 passed.
+  - Batched regression coverage at `67113cd` (10 sequential file batches, per-batch exit code + JUnit, every collected
+    ID accounted once): **2,440 passed, 9 skipped, 0 failed** of 2,449; all batches exit 0. Branch still local, flag OFF;
+    enabling it remains an operator decision. Residual WAL-checkpoint cost is documented above.
   Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
   Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
   0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.
