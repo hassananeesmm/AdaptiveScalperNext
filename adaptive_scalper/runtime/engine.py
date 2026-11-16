@@ -81,7 +81,10 @@ from adaptive_scalper.persistence.database import integrity_check
 from adaptive_scalper.rag.ingestion import ingest as ingest_rag_memories
 from adaptive_scalper.rag.service import RagService
 from adaptive_scalper.runtime.advisory import AdvisoryPanel
-from adaptive_scalper.runtime.bar_persistence import FAILED as BAR_SINK_FAILED
+from adaptive_scalper.runtime.bar_persistence import (
+    HEALTH_DISABLED as BAR_SINK_DISABLED,
+)
+from adaptive_scalper.runtime.bar_persistence import HEALTH_ERROR as BAR_SINK_ERROR
 from adaptive_scalper.runtime.bar_persistence import LiveBarSink
 from adaptive_scalper.runtime.demo import BROKER_TRUTH_AVAILABLE, DemoRuntime
 from adaptive_scalper.runtime.news_monitor import NewsMonitor, default_live_providers
@@ -377,12 +380,19 @@ class RuntimeEngine:
         """Advisory: health is kept in memory only (published by the heartbeat);
         nothing here writes on failure, raises, or feeds a trading decision."""
         result = self.bar_sink.run()
-        status = result["status"]
-        healthy = status not in (BAR_SINK_FAILED, "DISABLED")
+        stats = self.bar_sink.stats
+        state = self.bar_sink.health_state()   # OK / RECOVERED / LOCK_CONTENDED / ERROR / DISABLED
+        healthy = state not in (BAR_SINK_ERROR, BAR_SINK_DISABLED)
+        detail = f"{state} last_run={result['status']}"
+        if stats.active_error:
+            detail += f" active_error={stats.active_error!r} consecutive={stats.consecutive_unsuccessful}"
+        elif stats.recovered_at is not None:
+            detail += f" recovered_at={stats.recovered_at} after last_error={stats.last_error!r}"
+        if stats.coverage_pending:
+            detail += f" coverage_pending={','.join(stats.coverage_pending)}"
         self._health("bar_persistence", "OK" if healthy else "DEGRADED",
-                     f"{status}: {result.get('error') or result.get('reason') or ''} "
-                     f"rows_total={self.bar_sink.stats.rows_written} "
-                     f"last_ms={result['duration_ms']} max_ms={round(self.bar_sink.stats.max_duration_ms, 3)}")
+                     f"{detail} rows_total={stats.rows_written} "
+                     f"last_ms={result['duration_ms']} max_ms={round(stats.max_duration_ms, 3)}")
 
     def admit_reopened_symbols(self) -> list[str]:
         """Re-validate symbols excluded at startup only for a closed market.

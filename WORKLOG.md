@@ -3509,3 +3509,25 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   - A config saved with a UTF-8 BOM makes doctor fail closed ("Invalid statement at line 1, column 1").
 - Production DB/WAL hashes BF0BD50D / E1568818 were unchanged throughout; the main checkout still has 182 dirty files
   at 2dfb171; no MT5, no orders, no kill-switch change, no paid AI calls, no merge, no deploy.
+
+## 2026-11-16 - Bar-persistence timing hardening (local; flag still OFF by default)
+
+- Reproduced on disposable byte copies of a production-DB copy (1.50 M bar rows; the production DB and WAL were never
+  opened). Probe: single-threaded `Scheduler`, position task 0.2 s, sink 0.5 s, 15 s per scenario; scripts and JSON in
+  `C:\Users\pablo\.claude\jobs\587cee16\tmp\timing-2026-11-16\`.
+- Before (cb38073) vs after, sink duration and position-cycle lag (median / p95 / max ms); feature-off baseline lag
+  0.43-0.5 / 0.85-0.94 / 1.2-2.1:
+  - Held lock: sink 105.8 / 112.3 / 118.3 -> 1.0 / 1.7 / 2.4; position lag p95 109.6 -> 0.9.
+  - Coverage refresh every run: sink 60.5 / 140.8 / 295.8 -> 0.7 / 4.1 / 177 (checkpoint); lag p95 33.2 -> 0.85.
+  - Cold first run, 5 trials: 169.8 median / 312 max (900 rows + recount) -> 3.9 median (300 rows, capped).
+  - The remaining single 170-360 ms runs are WAL auto-checkpoints: with `wal_autocheckpoint = 0`, none in 120 runs;
+    with the default, exactly one, on the commit that crossed 1000 pages. Pre-existing for every writer on the
+    trading connection; left unchanged (trading DB setting).
+- Changes: zero busy timeout on the sink's `BEGIN IMMEDIATE`; at most 100 bars per symbol per run; O(1) coverage update
+  (no recount on the scheduler; seeded exactly for an empty symbol, else `coverage_pending`); counters, watermarks and
+  the published snapshot applied only after COMMIT; health `active_error` vs `last_error`/`recovered_at`, state
+  OK / RECOVERED / LOCK_CONTENDED (<5 consecutive skips) / ERROR / DISABLED; the engine reports it.
+- Tests: two existing tests now drain the bounded catch-up over several runs (same assertions on final rows and gaps);
+  8 new tests (prompt lock failure, unchanged progress on skip/failure, idempotent recovery with coverage equal to a full
+  recount, health recovered vs active, engine health, bounded cold start, no scan + pending coverage).
+  `tests/test_bar_persistence.py` 33 passed; related runtime/engine/scheduler/AI-desk tests 218 passed.

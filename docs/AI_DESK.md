@@ -165,8 +165,10 @@ Safe ways to restore freshness (operator decisions, in order of preference):
   through the idempotent `history.store.insert_bars`, with zero extra MT5 calls. Bars must be
   closed on the local UTC clock, aligned, have sane prices, and not lie within one hour of a
   server-clock DST change. It uses a per-symbol watermark, one short `BEGIN IMMEDIATE`
-  transaction with a 50 ms busy timeout (a locked DB is skipped, never waited on), and
-  advisory in-memory health only. It never raises into the scheduler, and BAR_GAP is reported
+  transaction attempted with a zero busy timeout (a locked DB is skipped at once, never waited
+  on), at most 100 bars per symbol per run (a cold start catches up over a few runs),
+  O(1) coverage updates instead of a table recount, progress applied only on COMMIT, and
+  advisory in-memory health only (OK / RECOVERED / LOCK_CONTENDED / ERROR / DISABLED). It never raises into the scheduler, and BAR_GAP is reported
   when downtime exceeds the ~25 h cache. Duration and lag appear in the heartbeat's scheduler
   snapshot. Rows, coverage and DB bytes are in the `bar_persistence` state. Tests:
   `tests/test_bar_persistence.py`.

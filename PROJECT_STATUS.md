@@ -59,8 +59,25 @@ gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md gu
       restarted sink were IDLE; no duplicates, contiguous, no events.
     - On a production-sized copy (1.50 M bar rows) the 10-minute coverage refresh holds the write lock ~100-160 ms,
       and a cold 900-row first run 142 ms median / 441 ms max. Steady 3-row runs: < 1 ms.
-  - Cosmetic: `last_error` is not cleared after a later successful run.
+  - Cosmetic: `last_error` is not cleared after a later successful run. (Fixed 2026-11-16, below.)
   - Status: NOT READY until a full suite completes. The lock-hold cost is a review decision for the operator.
+  2026-11-16 timing hardening (local commit on this branch; flag still OFF by default):
+  - Lock acquisition: zero busy timeout, so a held lock is SKIPPED at once. Locked-run duration on a production-sized
+    disposable copy: 105.8 ms median / 118 ms max before, 1.0 ms median / 2.4 ms max after. Position-cycle p95 lag
+    under a held lock: 109.6 ms before, 0.9 ms after (feature-off baseline 0.85-0.94 ms).
+  - Coverage: no more MIN/MAX/COUNT recount on the scheduler; O(1) arithmetic update from the inserted rows (seeded
+    exactly for an empty symbol; otherwise left `coverage_pending` for `history bootstrap`). Coverage-every-run sink
+    duration: 60.5 ms median / 296 ms max before, 0.7 ms median after; position p95 lag 33.2 ms before, 0.85 ms after.
+  - Cold start: at most 100 bars per symbol per run. First run after a restart: 170 ms median / 312 ms max (900 rows +
+    recount) before, 3.9 ms median (300 rows) after.
+  - Residual: rare single runs of 170-360 ms are SQLite's WAL auto-checkpoint (1000 pages) landing on the commit that
+    crosses it; with `wal_autocheckpoint = 0` on a disposable copy there were none in 120 runs. Every writer on the
+    trading connection already pays this; the sink adds ~10 WAL pages per writing run (one per closed M5 bar), so
+    about one checkpoint share per ~8 h. Not changed here (trading-connection setting; operator decision).
+  - Saved progress (watermarks, counters, bars, coverage, published state, events) is unchanged by a skipped or failed
+    run; recovery after lock release is idempotent (re-run and restarted sink IDLE; incremental coverage equals a full
+    recount). Health keeps `active_error` (current) separate from `last_error` + `recovered_at` (history).
+  - Tests: `tests/test_bar_persistence.py` 33 passed (8 new); runtime/engine/scheduler/AI-desk related 218 passed.
   Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
   Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
   0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.

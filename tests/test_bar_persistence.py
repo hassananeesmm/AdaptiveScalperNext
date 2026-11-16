@@ -33,13 +33,20 @@ from adaptive_scalper.core.kill_switch import bootstrap as bootstrap_kill_switch
 from adaptive_scalper.core.operator_authority import OperatorAuthority
 from adaptive_scalper.gateway.server_time import RULE_UTC, RULE_UTC2_US_DST
 from adaptive_scalper.gateway.types import Bar
+from adaptive_scalper.history.coverage import refresh_bar_coverage
 from adaptive_scalper.history.store import insert_bars
 from adaptive_scalper.persistence import connect, migrate
 from adaptive_scalper.runtime import bar_persistence
 from adaptive_scalper.runtime.bar_persistence import (
     DISABLED,
     FAILED,
+    HEALTH_ERROR,
+    HEALTH_LOCK_CONTENDED,
+    HEALTH_OK,
+    HEALTH_RECOVERED,
     IDLE,
+    LOCK_SKIPS_DEGRADED,
+    MAX_ROWS_PER_SYMBOL,
     OK,
     SKIPPED,
     STATE_KEY,
@@ -71,6 +78,16 @@ def _sink(conn, bars_by_symbol, *, now, rule=RULE_UTC, **kw):
 def _stored(conn, symbol="XAUUSD"):
     return [r[0] for r in conn.execute(
         "SELECT ts_utc FROM bars WHERE canonical_symbol = ? AND resolution = 'M5' ORDER BY ts_utc", (symbol,))]
+
+
+def _drain(sink, limit=20):
+    """Run until a run writes nothing; returns the number of runs that wrote."""
+    for wrote in range(limit):
+        result = sink.run()
+        assert result["status"] in (OK, IDLE), result
+        if not result.get("rows"):
+            return wrote
+    raise AssertionError("sink did not catch up")
 
 
 def _events(conn, event):
@@ -306,13 +323,13 @@ def test_restart_within_the_cache_fills_the_gap_and_beyond_it_reports_one(tmp_pa
     bars = _closed(400)
     insert_bars(conn, "XAUUSD", "M5", bars[:100])
     covered, _ = _sink(conn, {"XAUUSD": bars[50:350]}, now=bars[349].time + STEP)   # cache reaches back
-    covered.run()
+    _drain(covered)                                         # bounded write: catches up over several runs
     assert len(_stored(conn)) == 350 and not _events(conn, "BAR_GAP")
 
     conn2 = _db(tmp_path, "gap.sqlite3")
     insert_bars(conn2, "XAUUSD", "M5", bars[:50])
     gapped, _ = _sink(conn2, {"XAUUSD": bars[100:400]}, now=bars[-1].time + STEP)   # down longer than cache
-    gapped.run()
+    _drain(gapped)
     gaps = _events(conn2, "BAR_GAP")
     assert len(gaps) == 1 and str(bars[49].time) in gaps[0]["detail"] and str(bars[99].time) in gaps[0]["detail"]
     assert len(_stored(conn2)) == 350                       # the gap stays a gap; nothing is invented
@@ -370,8 +387,10 @@ def test_scheduler_cost_and_database_growth_are_bounded(tmp_path):
     now = T0 + 300 * STEP
     sink, holder = _sink(conn, market, now=lambda: now, monotonic=time.monotonic)
     first = sink.run()
-    assert first["status"] == OK and first["rows"] == 900
-    assert first["duration_ms"] < 2000                      # cold start: 3 x 300 rows + coverage
+    assert first["status"] == OK and first["rows"] == 3 * MAX_ROWS_PER_SYMBOL   # cold start is bounded per run
+    assert first["duration_ms"] < 2000
+    assert 1 + _drain(sink) == 300 // MAX_ROWS_PER_SYMBOL   # caught up over 300 / MAX_ROWS_PER_SYMBOL runs
+    assert sink.stats.rows_written == 900
     assert sink.run()["duration_ms"] < 100                  # steady state with nothing new: no transaction
     grown = {s: [*bars, *trending_bars(1, start_price=bars[-1].close, step_price=0.1, start=bars[-1].time + STEP)]
              for s, bars in market.items()}
@@ -381,6 +400,175 @@ def test_scheduler_cost_and_database_growth_are_bounded(tmp_path):
     assert incremental["rows"] == 3 and incremental["duration_ms"] < 250
     assert sink.stats.db_bytes and sink.stats.db_bytes > 0
     assert get_state(conn, STATE_KEY)["rows_written"] == 903
+
+
+# ---------------------------------------------------------------------- timing hardening (2026-11-16)
+def _progress(conn, sink):
+    """Everything a run may change: in-memory progress + what is saved."""
+    stats = sink.stats
+    state = conn.execute("SELECT value_json, updated_at_utc FROM runtime_state WHERE key = ?", (STATE_KEY,)).fetchone()
+    return {
+        "watermarks": dict(sink.watermarks),
+        "counters": (stats.transactions, stats.rows_written, stats.last_rows, stats.rejected, stats.dst_skipped,
+                     stats.gaps_reported, stats.db_bytes, tuple(stats.coverage_pending)),
+        "bars": tuple(conn.execute("SELECT COUNT(*), MAX(ts_utc) FROM bars").fetchone()),
+        "coverage": [tuple(r) for r in conn.execute("SELECT * FROM historical_bar_coverage ORDER BY 1, 2")],
+        "state": tuple(state) if state else None,
+        "events": conn.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0],
+    }
+
+
+def test_lock_acquisition_fails_promptly_without_a_busy_wait(tmp_path):
+    conn = _db(tmp_path)
+    other = connect(tmp_path / "sink.sqlite3")
+    bars = _closed(20)
+    sink, _ = _sink(conn, {"XAUUSD": bars}, now=bars[-1].time + STEP)
+    assert sink.busy_timeout_ms == 0
+    other.execute("BEGIN IMMEDIATE")
+    elapsed = []
+    for _ in range(5):
+        started = time.monotonic()
+        assert sink.run()["status"] == SKIPPED
+        elapsed.append(time.monotonic() - started)
+    other.execute("ROLLBACK")
+    other.close()
+    # A 50 ms busy timeout measured ~100 ms per attempt on Windows; a zero timeout returns SQLITE_BUSY at once.
+    assert max(elapsed) < 0.05, elapsed
+
+
+@pytest.mark.parametrize("how", ["locked", "failed"])
+def test_a_skipped_or_failed_write_leaves_saved_progress_unchanged(tmp_path, monkeypatch, how):
+    conn = _db(tmp_path)
+    bars = _closed(60)
+    holder_now = {"now": bars[29].time + STEP}
+    sink, holder = _sink(conn, {"XAUUSD": bars[:30]}, now=lambda: holder_now["now"])
+    assert sink.run()["status"] == OK                      # saved progress exists before the bad run
+    holder["bars"] = {"XAUUSD": bars}
+    holder_now["now"] = bars[-1].time + STEP
+    before = _progress(conn, sink)
+    other = connect(tmp_path / "sink.sqlite3")
+    if how == "locked":
+        other.execute("BEGIN IMMEDIATE")
+    else:
+        def broken(*_a, **_k):
+            raise ValueError("disk full (simulated)")
+        monkeypatch.setattr(bar_persistence, "put_state", broken)   # fails after the inserts, before COMMIT
+    result = sink.run()
+    assert result["status"] == (SKIPPED if how == "locked" else FAILED)
+    if how == "locked":
+        other.execute("ROLLBACK")
+    else:
+        monkeypatch.undo()
+    other.close()
+    assert not conn.in_transaction
+    assert _progress(conn, sink) == before                 # nothing in memory or on disk moved
+
+
+def test_recovery_after_lock_release_is_idempotent(tmp_path):
+    conn = _db(tmp_path)
+    bars = _closed(400)
+    insert_bars(conn, "XAUUSD", "M5", bars[:100])
+    conn.execute("BEGIN IMMEDIATE")
+    refresh_bar_coverage(conn, "XAUUSD", "M5")
+    conn.execute("COMMIT")
+    other = connect(tmp_path / "sink.sqlite3")
+    sink, _ = _sink(conn, {"XAUUSD": bars[50:350]}, now=bars[349].time + STEP)
+    other.execute("BEGIN IMMEDIATE")
+    for _ in range(3):
+        assert sink.run()["status"] == SKIPPED
+    other.execute("ROLLBACK")
+    other.close()
+    _drain(sink)
+    assert sink.run()["status"] == IDLE                    # a retry after catching up writes nothing
+    restarted, _ = _sink(conn, {"XAUUSD": bars[50:350]}, now=bars[349].time + STEP)
+    assert restarted.run()["status"] == IDLE               # a restarted process re-seeds and writes nothing
+    assert _stored(conn) == [b.time for b in bars[:350]]   # no duplicates, no holes, nothing invented
+    coverage = conn.execute("SELECT * FROM historical_bar_coverage WHERE canonical_symbol = 'XAUUSD'").fetchone()
+    conn.execute("BEGIN IMMEDIATE")
+    full = refresh_bar_coverage(conn, "XAUUSD", "M5")      # the full recount agrees with the O(1) updates
+    conn.execute("ROLLBACK")
+    assert (coverage["earliest_utc"], coverage["latest_utc"], coverage["bar_count"], coverage["expected_bar_count"],
+            coverage["gap_count"]) == (full.earliest_utc, full.latest_utc, full.bar_count, full.expected_bar_count,
+                                       full.gap_count)
+    assert get_state(conn, STATE_KEY)["rows_written"] == 250 and sink.stats.lock_skips == 3
+
+
+def test_health_distinguishes_a_recovered_writer_from_an_active_error(tmp_path, monkeypatch):
+    conn = _db(tmp_path)
+    bars = _closed(40)
+    holder_now = {"now": bars[9].time + STEP}
+    sink, holder = _sink(conn, {"XAUUSD": bars[:10]}, now=lambda: holder_now["now"])
+    assert sink.run()["status"] == OK and sink.health_state() == HEALTH_OK
+    # transient lock contention: reported, not yet an error
+    holder["bars"], holder_now["now"] = {"XAUUSD": bars[:20]}, bars[19].time + STEP
+    other = connect(tmp_path / "sink.sqlite3")
+    other.execute("BEGIN IMMEDIATE")
+    sink.run()
+    assert sink.health_state() == HEALTH_LOCK_CONTENDED and sink.stats.active_error
+    for _ in range(LOCK_SKIPS_DEGRADED):
+        sink.run()
+    assert sink.health_state() == HEALTH_ERROR             # persistent contention escalates
+    other.execute("ROLLBACK")
+    other.close()
+    assert sink.run()["status"] == OK
+    assert sink.health_state() == HEALTH_RECOVERED
+    assert sink.stats.active_error is None and "locked" in sink.stats.last_error
+    assert sink.stats.recovered_at == holder_now["now"] and sink.stats.consecutive_unsuccessful == 0
+    assert get_state(conn, STATE_KEY)["health"] == HEALTH_RECOVERED      # published with the commit
+    # a real failure is an ACTIVE error again, even though an older recovery exists
+    holder["bars"], holder_now["now"] = {"XAUUSD": bars[:30]}, bars[29].time + STEP
+
+    def broken(*_a, **_k):
+        raise ValueError("disk full (simulated)")
+    monkeypatch.setattr(bar_persistence, "insert_bars", broken)
+    assert sink.run()["status"] == FAILED
+    assert sink.health_state() == HEALTH_ERROR and sink.stats.recovered_at is None
+    assert sink.stats.active_error == "ValueError: disk full (simulated)"
+    monkeypatch.undo()
+    assert sink.run()["status"] == OK and sink.health_state() == HEALTH_RECOVERED
+
+
+def test_engine_health_reports_recovered_versus_active_error(tmp_path, monkeypatch):
+    clock, engine, _conn, _ = _started(tmp_path, "PAPER", persist_closed_bars=True)
+
+    def broken(*_a, **_k):
+        raise ValueError("disk full (simulated)")
+    monkeypatch.setattr(bar_persistence, "insert_bars", broken)
+    step(engine, clock, seconds=STEP, tick=2)
+    health = engine.component_health["bar_persistence"]
+    assert health["status"] == "DEGRADED" and "active_error=" in health["detail"]
+    monkeypatch.undo()
+    step(engine, clock, seconds=STEP, tick=2)
+    health = engine.component_health["bar_persistence"]
+    assert health["status"] == "OK" and health["detail"].startswith("RECOVERED")
+    assert "recovered_at=" in health["detail"] and "active_error" not in health["detail"]
+
+
+def test_cold_start_is_bounded_per_run_without_a_false_gap(tmp_path):
+    conn = _db(tmp_path)
+    bars = _closed(300)
+    sink, _ = _sink(conn, {"XAUUSD": bars}, now=bars[-1].time + STEP, max_rows_per_symbol=100)
+    assert sink.run()["rows"] == 100 and sink.watermarks["XAUUSD"] == bars[99].time
+    assert sink.run()["rows"] == 100 and sink.run()["rows"] == 100
+    assert sink.run()["status"] == IDLE
+    assert _stored(conn) == [b.time for b in bars] and not _events(conn, "BAR_GAP")
+    with pytest.raises(ValueError):
+        LiveBarSink(conn, resolution="M5", server_time_rule=RULE_UTC, source=dict, max_rows_per_symbol=0)
+
+
+def test_coverage_is_advanced_without_a_table_scan_and_left_pending_when_unknown(tmp_path):
+    source = (REPO_ROOT / "adaptive_scalper" / "runtime" / "bar_persistence.py").read_text(encoding="utf-8")
+    assert "refresh_bar_coverage" not in source and "COUNT(" not in source and "MIN(ts_utc)" not in source
+    conn = _db(tmp_path)
+    bars = _closed(50)
+    insert_bars(conn, "XAUUSD", "M5", bars[:20])           # stored bars but no coverage row
+    sink, _ = _sink(conn, {"XAUUSD": bars, "GBPJPY": bars}, now=bars[-1].time + STEP)
+    _drain(sink)
+    assert sink.stats.coverage_pending == ["XAUUSD"]       # unknown base: never guessed, never recounted here
+    assert conn.execute("SELECT 1 FROM historical_bar_coverage WHERE canonical_symbol = 'XAUUSD'").fetchone() is None
+    gbp = conn.execute("SELECT * FROM historical_bar_coverage WHERE canonical_symbol = 'GBPJPY'").fetchone()
+    assert (gbp["earliest_utc"], gbp["latest_utc"], gbp["bar_count"], gbp["gap_count"]) == (
+        bars[0].time, bars[-1].time, 50, 0)                # empty symbol: seeded exactly
 
 
 # ---------------------------------------------------------------------- audit
