@@ -3540,3 +3540,19 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   `C:\Users\pablo\.claude\jobs\587cee16\tmp\batched-67113cd\` (collected_ids.txt, batch_NN.{files,exit,junit.xml,stdout.txt},
   accounting.json).
 - Production DB/WAL hashes BF0BD50D / E1568818 unchanged; MT5 not running; main checkout untouched (182 dirty entries).
+
+## 2026-11-20 - Isolated PAPER run: position-cycle delay during WAL checkpoints
+
+- A real `RuntimeEngine` in PAPER mode on a disposable byte copy of a production-DB copy, test FakeGateway (no MT5, no
+  broker), real-time scheduler, market clock 60x (an M5 bar every 5 s), sink every 5 s (60 s in production), 180 s per
+  run, flag off then on. In PAPER, `entry_cycle` is also the simulated position-management cycle. WAL checkpoints were
+  detected from the WAL header checkpoint sequence. Script and JSON:
+  `C:\Users\pablo\.claude\jobs\587cee16\tmp\timing-2026-11-16\paper_checkpoint_probe.py`, `paper_checkpoint2.json`.
+- Checkpoints: 1 (off) and 2 (on) WAL resets; the scheduler iterations containing them took 19.8 ms (off) and 27.4 /
+  10.0 ms (on). Sink: 468 bars written, max 43.6 ms per run.
+- entry_cycle lag: off median 1.5 / p95 14.0 / max 631 ms; on median 3.0 / p95 29.6 / max 1,833 ms. Every lag above
+  ~100 ms follows a `rag_ingest` run of 830 ms (off) or 1,815 ms (on): a pre-existing 60 s RAG task, present with the
+  flag off and unrelated to checkpoints or bar persistence. The checkpoint itself delayed the cycle by <= ~27 ms here.
+- Earlier single 170-360 ms checkpoint runs (probe on a 4 MB WAL already past 1000 pages) remain the worst observed
+  checkpoint cost. Proposal (not implemented): move `rag_ingest` off the trading scheduler or bound it; it is the
+  dominant source of position-cycle lag in PAPER on a production-sized DB.

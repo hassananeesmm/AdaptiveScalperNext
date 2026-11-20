@@ -81,6 +81,9 @@ gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md gu
   - Batched regression coverage at `67113cd` (10 sequential file batches, per-batch exit code + JUnit, every collected
     ID accounted once): **2,440 passed, 9 skipped, 0 failed** of 2,449; all batches exit 0. Branch still local, flag OFF;
     enabling it remains an operator decision. Residual WAL-checkpoint cost is documented above.
+  - 2026-11-20 isolated PAPER run (flag off vs on, production-sized copy, FakeGateway): checkpoint iterations 10-27 ms;
+    sink max 43.6 ms; entry/position-cycle lag outliers (0.6-1.8 s) are all caused by the pre-existing 60 s
+    `rag_ingest` task (830-1,815 ms runs), with the flag off as well. Proposal: move or bound `rag_ingest`.
   Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
   Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
   0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.
