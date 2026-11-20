@@ -158,10 +158,20 @@ observer). `ai-desk doctor` prints the heartbeat and bar ages (informational).
 Safe ways to restore freshness (operator decisions, in order of preference):
 - Run the trading runtime through the normal procedure; the desk then reads the fresh observer
   and quotes (`RUNTIME_OBSERVER_ONLY`).
-- PROPOSAL, not implemented (it changes the trading runtime, so it needs its own branch, review
-  and operator approval): a low-priority runtime task that stores the closed bars the runtime
-  already fetched through the existing idempotent `history.store.insert_bars`. One MT5 client
-  stays the only MT5 client; no new broker call; entries and gates unchanged.
+- IMPLEMENTED on branch `feature/runtime-bar-persistence` (review only; not merged, not
+  deployed; OFF by default): `[runtime] persist_closed_bars = true` adds the priority-3, 60 s
+  task `bar_persistence` (`adaptive_scalper/runtime/bar_persistence.py`). It stores the closed
+  M5 bars the runtime cycles already fetched (DEMO `shadow_bars`, PAPER `closed_bars_cache`)
+  through the idempotent `history.store.insert_bars`, with zero extra MT5 calls. Bars must be
+  closed on the local UTC clock, aligned, have sane prices, and not lie within one hour of a
+  server-clock DST change. It uses a per-symbol watermark, one short `BEGIN IMMEDIATE`
+  transaction attempted with a zero busy timeout (a locked DB is skipped at once, never waited
+  on), at most 100 bars per symbol per run (a cold start catches up over a few runs),
+  O(1) coverage updates instead of a table recount, progress applied only on COMMIT, and
+  advisory in-memory health only (OK / RECOVERED / LOCK_CONTENDED / ERROR / DISABLED). It never raises into the scheduler, and BAR_GAP is reported
+  when downtime exceeds the ~25 h cache. Duration and lag appear in the heartbeat's scheduler
+  snapshot. Rows, coverage and DB bytes are in the `bar_persistence` state. Tests:
+  `tests/test_bar_persistence.py`.
 - Interim, only while the runtime is STOPPED: the existing `history bootstrap` command refreshes
   `bars` (it is a broker-facing CLI command and must not run concurrently with the runtime).
   Bars after 2026-07-01 fall in the reserved OOS for research purposes; the desk's

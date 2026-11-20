@@ -40,6 +40,50 @@ gateway, runtime, governor, selector or operator code (AST audits). SAFETY.md gu
   Retry-After, 1 MB body cap, transport/adapter errors cannot fail a cycle, rejected answers count toward the breaker,
   per-cycle `narrative_budget_seconds`). Stale root cause: runtime down ~16.7 days AND the runtime never persists bars
   (newest stored M5 ~56 days old); runtime-side bar persistence is a PROPOSAL needing operator approval (AI_DESK.md).
+- Runtime bar persistence (branch `feature/runtime-bar-persistence`, stacked on the AI desk branch; 2026-11-14):
+  IMPLEMENTED, TESTED-FAKE, OFF by default (`[runtime] persist_closed_bars = false`; `config/default.toml` unchanged).
+  Approved direction, NOT merged, NOT deployed. It stores the closed M5 bars the cycles already fetched, with zero extra
+  MT5 calls (gateway call counts identical on/off), identical entry decisions on/off, and the PAPER fingerprint and
+  session key unchanged. Closed + UTC-aligned + sane-price bars only; bars within 1 h of a DST change are skipped. It is
+  idempotent with a watermark, a locked DB is skipped (50 ms busy timeout), it never raises, health is advisory, and
+  BAR_GAP is reported beyond the ~25 h cache. 25 new tests in `tests/test_bar_persistence.py`. Full suite NOT yet
+  completed on this branch (host stopped it at ~2% for low memory); it must pass before push/review.
+  2026-11-15 at `f16c580`:
+  - Second sequential run: also stopped by the host low-memory safeguard, at 79% (1,944 results: 1,935 passed,
+    9 skipped, 0 failed, 0 errors; no JUnit or exit code because the process was killed). Still NOT a full regression.
+  - Lock-timing probe (wall clock, single-threaded scheduler, external process holding the write lock):
+    - Each sink run under a held lock takes ~100 ms median, 120 ms max (Windows busy-handler granularity, not the
+      nominal 50 ms). That delays the next position cycle by the same amount (p95 lag 99.6 ms, max 116 ms vs ~2 ms
+      unlocked) once per sink run (60 s cadence).
+    - Retries are idempotent: no watermark advance on a skip; after release one run wrote the backlog; re-runs and a
+      restarted sink were IDLE; no duplicates, contiguous, no events.
+    - On a production-sized copy (1.50 M bar rows) the 10-minute coverage refresh holds the write lock ~100-160 ms,
+      and a cold 900-row first run 142 ms median / 441 ms max. Steady 3-row runs: < 1 ms.
+  - Cosmetic: `last_error` is not cleared after a later successful run. (Fixed 2026-11-16, below.)
+  - Status: NOT READY until a full suite completes. The lock-hold cost is a review decision for the operator.
+  2026-11-16 timing hardening (local commit on this branch; flag still OFF by default):
+  - Lock acquisition: zero busy timeout, so a held lock is SKIPPED at once. Locked-run duration on a production-sized
+    disposable copy: 105.8 ms median / 118 ms max before, 1.0 ms median / 2.4 ms max after. Position-cycle p95 lag
+    under a held lock: 109.6 ms before, 0.9 ms after (feature-off baseline 0.85-0.94 ms).
+  - Coverage: no more MIN/MAX/COUNT recount on the scheduler; O(1) arithmetic update from the inserted rows (seeded
+    exactly for an empty symbol; otherwise left `coverage_pending` for `history bootstrap`). Coverage-every-run sink
+    duration: 60.5 ms median / 296 ms max before, 0.7 ms median after; position p95 lag 33.2 ms before, 0.85 ms after.
+  - Cold start: at most 100 bars per symbol per run. First run after a restart: 170 ms median / 312 ms max (900 rows +
+    recount) before, 3.9 ms median (300 rows) after.
+  - Residual: rare single runs of 170-360 ms are SQLite's WAL auto-checkpoint (1000 pages) landing on the commit that
+    crosses it; with `wal_autocheckpoint = 0` on a disposable copy there were none in 120 runs. Every writer on the
+    trading connection already pays this; the sink adds ~10 WAL pages per writing run (one per closed M5 bar), so
+    about one checkpoint share per ~8 h. Not changed here (trading-connection setting; operator decision).
+  - Saved progress (watermarks, counters, bars, coverage, published state, events) is unchanged by a skipped or failed
+    run; recovery after lock release is idempotent (re-run and restarted sink IDLE; incremental coverage equals a full
+    recount). Health keeps `active_error` (current) separate from `last_error` + `recovered_at` (history).
+  - Tests: `tests/test_bar_persistence.py` 33 passed (8 new); runtime/engine/scheduler/AI-desk related 218 passed.
+  - Batched regression coverage at `67113cd` (10 sequential file batches, per-batch exit code + JUnit, every collected
+    ID accounted once): **2,440 passed, 9 skipped, 0 failed** of 2,449; all batches exit 0. Branch still local, flag OFF;
+    enabling it remains an operator decision. Residual WAL-checkpoint cost is documented above.
+  - 2026-11-20 isolated PAPER run (flag off vs on, production-sized copy, FakeGateway): checkpoint iterations 10-27 ms;
+    sink max 43.6 ms; entry/position-cycle lag outliers (0.6-1.8 s) are all caused by the pre-existing 60 s
+    `rag_ingest` task (830-1,815 ms runs), with the flag off as well. Proposal: move or bound `rag_ingest`.
   Suite, first run (history): INCOMPLETE - stopped by the host at 83% for low system memory (not a test failure): 2024 passed, 9 skipped, 0 failed; ~380 tests not run.
   Suite, complete sequential re-run at `f4ea04c` (2026-11-14, single pytest process, no xdist): **2407 passed, 9 skipped,
   0 failed, 2 warnings** (third-party starlette/anyio deprecations) in 1575 s; JUnit: 2416 tests, 0 failures, 0 errors.

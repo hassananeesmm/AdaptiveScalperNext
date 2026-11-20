@@ -356,6 +356,10 @@ class RuntimeConfig(BaseModel):
     paper_session_tag: str = "v1"
     magic: int = 240924
     log_dir: str = "logs"
+    # Copy the closed bars the runtime already fetched into the `bars` table
+    # (runtime/bar_persistence.py). No extra MT5 calls; advisory only; OFF by
+    # default. Not part of any PAPER session fingerprint.
+    persist_closed_bars: bool = False
 
     @field_validator("entry_resolution")
     @classmethod

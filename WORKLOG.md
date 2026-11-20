@@ -3441,3 +3441,118 @@ DEMO readiness work (tighten-only; nothing deployed, merged, pushed or restarted
   sha256 identical to the session baseline; no diff from `f892c5f` under config/, risk, execution, core, gateway or
   runtime. Explorer double-click of `START AI DESK.bat` BLOCKED until the branch is in the main checkout (no .venv or
   trading DB in the worktree).
+
+## 2026-11-14 - Runtime bar persistence (branch feature/runtime-bar-persistence, operator-approved direction)
+
+- Operator approved the direction (not deployment). Branch created from `feature/ai-trading-desk` (a7710e9) after
+  the stack was verified (origin/main -> readiness 488d575 -> #11 d46fb15 -> #12 f892c5f -> AI desk, linear).
+- New `adaptive_scalper/runtime/bar_persistence.py` (`LiveBarSink`). Engine registers task `bar_persistence`
+  (priority 3, 60 s) only when `[runtime] persist_closed_bars` is true. The default is false, and
+  `config/default.toml` is untouched. Sources: DEMO `DemoRuntime.shadow_bars` (already refreshed every entry cycle,
+  also under a global block) and PAPER `PaperRuntime.closed_bars_cache` (new field, assigned from the bars the cycle
+  already fetched; no decision reads it). No gateway call.
+- Write rules:
+  - Closed on the local UTC clock (a bar ahead of the clock stops that symbol and raises BAR_NOT_PERSISTED).
+  - Aligned to the resolution; finite positive prices; high/low bound open/close; non-negative volumes. Otherwise
+    BAR_REJECTED.
+  - Never within one hour of a server-clock DST change (repeated / skipped server hour), via BAR_DST_WINDOW_SKIPPED.
+  - `require_utc` must pass, or the sink disables itself.
+  - Watermark seeded from MAX(ts_utc), plus INSERT OR IGNORE; the first write wins.
+  - One `BEGIN IMMEDIATE` transaction per run with work, 50 ms busy timeout (previous timeout restored). Nothing new
+    means no transaction.
+  - It never raises. Failure means in-memory advisory health only; the failure path writes nothing.
+  - BAR_GAP when the cache no longer reaches the stored data.
+  - Coverage is refreshed at most every 10 min per symbol. The `bar_persistence` state records rows, durations,
+    lock skips and DB bytes.
+- Tests: `tests/test_bar_persistence.py`, 25 passed. They cover:
+  - Off by default, in code and in the shipped config; no task when off.
+  - PAPER fingerprint and session key identical on/off.
+  - DEMO and PAPER persist closed, aligned bars.
+  - Gateway call counts, entry decisions and other tasks' priorities/lag identical on/off.
+  - A failing sink: no TASK_FAILED, nothing safety-critical degraded, identical decisions.
+  - The AI desk reports FRESH_BARS with persistence on and not with it off.
+  - Forming bar, stale tick, invalid bar, non-UTC DB.
+  - DST start and end windows.
+  - Idempotent rerun and restart watermark; overlap with bootstrapped rows keeps the first write.
+  - Gap within the cache filled; beyond it, one BAR_GAP.
+  - Locked DB skipped in < 1 s with the busy timeout restored; write failure rolled back; no nested transaction.
+  - Cost: 900-row cold start < 2 s, idle < 100 ms, 3-row increment < 250 ms.
+  - AST audit: no MT5, execution, core or risk imports and no broker calls.
+- Ruff 0.16.9: all checks passed. Neighbouring tests (entry window, AI desk providers, broker-truth degradation)
+  pass (83 passed together with the new module). Full suite: NOT COMPLETED. The sequential run was stopped by
+  the host at ~2% for low system memory (not a test failure; 0 failures up to then; no pytest process left). It must
+  be re-run, and must pass, before this branch is pushed or reviewed for merge.
+- Not done: merge, push, deploy, enabling the flag. M1 persistence remains phase 2.
+
+## 2026-11-15 - Stack checkpoint, PR #12 follow-up pushed, readiness PR, PR #13 merge-result suite, bar-persistence checks
+
+- Stack verified (read-only git + gh): origin/main 2dfb171 -> readiness 488d575 -> #11 d46fb15 -> #12 f892c5f (+ local
+  cb16a11) -> #13 a7710e9 -> bar persistence f16c580 (local). All remote heads matched the checkpoint; nothing had moved.
+- PR #12: cb16a11 pushed as a plain fast-forward (f892c5f..cb16a11; diff only risk/daily_loss.py, runtime/demo.py,
+  tests/test_daily_loss_accounting.py). Remote head verified cb16a11.
+- Readiness: draft PR #14 opened, main <- hardening/peak-equity-and-readiness (488d575). No equivalent PR existed.
+- PR #13 kept in draft. Effective diff against the updated base: 47 files, no overlap with the cb16a11 files; merge-tree
+  clean. Full suite on the local test-merge commit a7f2d41 (tree = a7710e9 merged onto cb16a11; not pushed, not on any
+  branch): **2410 passed, 9 skipped, 0 failed, 2 warnings**, pytest exit code 0, JUnit 2419 tests / 0 failures / 0
+  errors, 1983 s. The 2,407 result stays tied to f4ea04c.
+- Bar persistence at f16c580: second full run stopped by the host low-memory safeguard at 79% (1,935 passed, 9 skipped,
+  0 failed so far; no JUnit). The 25 targeted and 83 related passes remain separate from full regression.
+- Lock-timing probe (scratch script; production DB byte copy and a synthetic DB; production DB never opened):
+  - A held external write lock makes each sink run take ~100 ms (max 120 ms).
+  - Position-cycle lag rose from max 4 ms to max 116 ms, once per sink run.
+  - Idempotent retry verified (see PROJECT_STATUS).
+  - The coverage refresh on 1.5 M rows holds the write lock ~100-160 ms every 10 min.
+- START AI DESK.bat acceptance in a disposable detached checkout of a7f2d41 (production DB copy, enabled deterministic
+  config, .venv junction):
+  - Doctor passed 8/8 and the service started and polled; it was stopped after 45 s.
+  - The journal recorded 1 run, 9 agent results and 0 provider calls; the trading DB copy stayed byte-identical.
+  - A config saved with a UTF-8 BOM makes doctor fail closed ("Invalid statement at line 1, column 1").
+- Production DB/WAL hashes BF0BD50D / E1568818 were unchanged throughout; the main checkout still has 182 dirty files
+  at 2dfb171; no MT5, no orders, no kill-switch change, no paid AI calls, no merge, no deploy.
+
+## 2026-11-16 - Bar-persistence timing hardening (local; flag still OFF by default)
+
+- Reproduced on disposable byte copies of a production-DB copy (1.50 M bar rows; the production DB and WAL were never
+  opened). Probe: single-threaded `Scheduler`, position task 0.2 s, sink 0.5 s, 15 s per scenario; scripts and JSON in
+  `C:\Users\pablo\.claude\jobs\587cee16\tmp\timing-2026-11-16\`.
+- Before (cb38073) vs after, sink duration and position-cycle lag (median / p95 / max ms); feature-off baseline lag
+  0.43-0.5 / 0.85-0.94 / 1.2-2.1:
+  - Held lock: sink 105.8 / 112.3 / 118.3 -> 1.0 / 1.7 / 2.4; position lag p95 109.6 -> 0.9.
+  - Coverage refresh every run: sink 60.5 / 140.8 / 295.8 -> 0.7 / 4.1 / 177 (checkpoint); lag p95 33.2 -> 0.85.
+  - Cold first run, 5 trials: 169.8 median / 312 max (900 rows + recount) -> 3.9 median (300 rows, capped).
+  - The remaining single 170-360 ms runs are WAL auto-checkpoints: with `wal_autocheckpoint = 0`, none in 120 runs;
+    with the default, exactly one, on the commit that crossed 1000 pages. Pre-existing for every writer on the
+    trading connection; left unchanged (trading DB setting).
+- Changes: zero busy timeout on the sink's `BEGIN IMMEDIATE`; at most 100 bars per symbol per run; O(1) coverage update
+  (no recount on the scheduler; seeded exactly for an empty symbol, else `coverage_pending`); counters, watermarks and
+  the published snapshot applied only after COMMIT; health `active_error` vs `last_error`/`recovered_at`, state
+  OK / RECOVERED / LOCK_CONTENDED (<5 consecutive skips) / ERROR / DISABLED; the engine reports it.
+- Tests: two existing tests now drain the bounded catch-up over several runs (same assertions on final rows and gaps);
+  8 new tests (prompt lock failure, unchanged progress on skip/failure, idempotent recovery with coverage equal to a full
+  recount, health recovered vs active, engine health, bounded cold start, no scan + pending coverage).
+  `tests/test_bar_persistence.py` 33 passed; related runtime/engine/scheduler/AI-desk tests 218 passed.
+- Batched regression coverage at **67113cd** (exact commit tested; tree clean): 2,449 test IDs collected first, split by
+  file into 10 sequential pytest processes (one per batch, memory released between batches), each with its own exit code
+  and JUnit report. **All 10 batches exit 0. Every collected ID reported exactly once: 2,440 passed, 9 skipped, 0 failed,
+  0 errors; 0 missing, 0 extra, 0 duplicates.** Total ~14 min. This is batched regression coverage, not one single-process
+  run. A first attempt had exited 4 in every batch (CRLF in the batch file lists: "file or directory not found"; no tests
+  ran). It was kept in `attempt0_crlf_usage_error/` and rerun after the lists were normalized. Evidence:
+  `C:\Users\pablo\.claude\jobs\587cee16\tmp\batched-67113cd\` (collected_ids.txt, batch_NN.{files,exit,junit.xml,stdout.txt},
+  accounting.json).
+- Production DB/WAL hashes BF0BD50D / E1568818 unchanged; MT5 not running; main checkout untouched (182 dirty entries).
+
+## 2026-11-20 - Isolated PAPER run: position-cycle delay during WAL checkpoints
+
+- A real `RuntimeEngine` in PAPER mode on a disposable byte copy of a production-DB copy, test FakeGateway (no MT5, no
+  broker), real-time scheduler, market clock 60x (an M5 bar every 5 s), sink every 5 s (60 s in production), 180 s per
+  run, flag off then on. In PAPER, `entry_cycle` is also the simulated position-management cycle. WAL checkpoints were
+  detected from the WAL header checkpoint sequence. Script and JSON:
+  `C:\Users\pablo\.claude\jobs\587cee16\tmp\timing-2026-11-16\paper_checkpoint_probe.py`, `paper_checkpoint2.json`.
+- Checkpoints: 1 (off) and 2 (on) WAL resets; the scheduler iterations containing them took 19.8 ms (off) and 27.4 /
+  10.0 ms (on). Sink: 468 bars written, max 43.6 ms per run.
+- entry_cycle lag: off median 1.5 / p95 14.0 / max 631 ms; on median 3.0 / p95 29.6 / max 1,833 ms. Every lag above
+  ~100 ms follows a `rag_ingest` run of 830 ms (off) or 1,815 ms (on): a pre-existing 60 s RAG task, present with the
+  flag off and unrelated to checkpoints or bar persistence. The checkpoint itself delayed the cycle by <= ~27 ms here.
+- Earlier single 170-360 ms checkpoint runs (probe on a 4 MB WAL already past 1000 pages) remain the worst observed
+  checkpoint cost. Proposal (not implemented): move `rag_ingest` off the trading scheduler or bound it; it is the
+  dominant source of position-cycle lag in PAPER on a production-sized DB.

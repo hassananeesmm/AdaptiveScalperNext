@@ -103,6 +103,9 @@ class PaperRuntime:
     # Expected-edge evidence (issue #6): the default has none, so PAPER
     # proposes nothing (FLAT); the legacy V1 replay provider is refused.
     edge_evidence: EdgeEvidenceProvider = NO_VALIDATED_EDGE_EVIDENCE
+    # The closed bars the last cycle fetched, per symbol -- read only by the
+    # optional bar-persistence task; no decision reads it.
+    closed_bars_cache: dict[str, list] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         require_executable_provider(self.edge_evidence, "PAPER runtime")
@@ -153,6 +156,7 @@ class PaperRuntime:
                 self.gateway, broker, self.config.runtime.entry_resolution, now_utc=now,
                 count=self.config.runtime.bar_history_count, tick=tick,
             )
+            self.closed_bars_cache[canonical] = bars_by_symbol[canonical]
             specs[canonical] = spec
         correlation = compute_correlation_matrix(
             {c: log_returns(b) for c, b in bars_by_symbol.items()},
